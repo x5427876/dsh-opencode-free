@@ -18,7 +18,7 @@ Use OpenCode Zen free models from DeepSeek Harness without installing OpenCode. 
 No API key is required. Add the plugin to a profile:
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.1.1
+dsh plugin --profile web add dsh-opencode-free@0.1.2
 ```
 
 The plugin adds the `opencode-zen-free` provider. Select any free model from the model picker to start using it.

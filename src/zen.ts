@@ -29,7 +29,7 @@ export const ZEN_ANONYMOUS_KEY = 'public'
 /**
  * OpenCode CLI identity Zen gates anonymous requests on.
  */
-export const OPENCODE_USER_AGENT = 'opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.1.1'
+export const OPENCODE_USER_AGENT = 'opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.1.2'
 
 /**
  * OpenCode client name.

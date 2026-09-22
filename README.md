@@ -18,7 +18,7 @@
 不需要 API key。直接安裝到指定 profile：
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.1.1
+dsh plugin --profile web add dsh-opencode-free@0.1.2
 ```
 
 插件會加入 `opencode-zen-free` provider。從模型選單選擇任一免費模型即可使用。
