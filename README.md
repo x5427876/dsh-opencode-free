@@ -1,5 +1,10 @@
 # dsh-opencode-free
 
+[![npm version](https://img.shields.io/npm/v/dsh-opencode-free.svg)](https://www.npmjs.com/package/dsh-opencode-free)
+[![npm downloads](https://img.shields.io/npm/dw/dsh-opencode-free.svg)](https://www.npmjs.com/package/dsh-opencode-free)
+[![CI](https://github.com/x5427876/dsh-opencode-free/actions/workflows/ci.yml/badge.svg)](https://github.com/x5427876/dsh-opencode-free/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/dsh-opencode-free.svg)](LICENSE)
+
 [English](README.en.md) | 中文
 
 讓 DeepSeek Harness 直接使用 OpenCode Zen 的免費模型，不需要安裝 OpenCode。插件預設使用匿名免費額度，也可從 `OPENCODE_API_KEY` 讀取 Zen API key。
@@ -8,19 +13,35 @@
 
 > OpenCode Zen 的免費模型可能有用量限制、限時供應或資料使用條款。請勿傳送機密資料，並先閱讀 [OpenCode Zen 隱私說明](https://opencode.ai/docs/zen#privacy)。
 
-## 相容版本
+## 快速開始
 
-首版支援 DeepSeek Harness `0.1.7-alpha.1`。
-
-## 安裝
-
-套件發布後，可安裝到指定 profile：
+不需要 API key。直接安裝到指定 profile：
 
 ```sh
 dsh plugin --profile web add dsh-opencode-free@0.1.1
 ```
 
-插件會加入 `opencode-zen-free` provider。預設模型清單只顯示目前 catalog 中成本為零的 OpenCode 模型。
+插件會加入 `opencode-zen-free` provider。從模型選單選擇任一免費模型即可使用。
+
+## 免費模型
+
+目前 catalog 包含：
+
+| 模型 | Model ID | 輸入 |
+|---|---|---|
+| Big Pickle | `big-pickle` | 文字 |
+| Ling 3.0 Flash Fin Free | `ling-3.0-flash-fin-free` | 文字 |
+| MiMo V2.5 Free | `mimo-v2.5-free` | 文字、圖片 |
+| Nemotron 3 Ultra Free | `nemotron-3-ultra-free` | 文字 |
+| Nemotron 3.5 Lightning Free | `nemotron-3.5-lightning-free` | 文字 |
+| Muse Spark 1.2 Free | `muse-spark-1.2-contributor-free` | 文字、圖片 |
+| Muse Spark 1.3 Free | `muse-spark-1.3-contributor-free` | 文字、圖片 |
+
+預設清單來自已安裝的 `pi-ai` catalog，只顯示成本為零的模型。OpenCode 可能隨時調整供應項目。
+
+## 相容版本
+
+支援 DeepSeek Harness `0.1.7-alpha.1`。
 
 ## 設定
 
