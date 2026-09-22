@@ -1,0 +1,111 @@
+{
+  "name": "dsh-opencode-free",
+  "version": "0.1.1",
+  "packageManager": "pnpm@11.19.0",
+  "description": "Use OpenCode Zen free models in DeepSeek Harness with anonymous access or an optional API key",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x5427876/dsh-opencode-free.git"
+  },
+  "homepage": "https://github.com/x5427876/dsh-opencode-free#readme",
+  "bugs": "https://github.com/x5427876/dsh-opencode-free/issues",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "vitest run",
+    "prepack": "pnpm run build",
+    "check": "pnpm run typecheck && pnpm run test && pnpm run build && publint"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "opencode",
+    "opencode-zen",
+    "llm",
+    "free-models"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
+    "@deepseek-ai/dsh-attachment": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-brand": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-credentials": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-fs": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-launch-environment": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-settings": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-timeout": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-util-values": "0.1.7-alpha.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@earendil-works/pi-ai": "^0.85.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/cordis-plugin-loader": { "optional": true },
+    "@deepseek-ai/dsh-attachment": { "optional": true },
+    "@deepseek-ai/dsh-brand": { "optional": true },
+    "@deepseek-ai/dsh-credentials": { "optional": true },
+    "@deepseek-ai/dsh-fs": { "optional": true },
+    "@deepseek-ai/dsh-launch-environment": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-settings": { "optional": true },
+    "@deepseek-ai/dsh-timeout": { "optional": true },
+    "@deepseek-ai/dsh-util-values": { "optional": true },
+    "@deepseek-ai/schemastery": { "optional": true },
+    "@earendil-works/pi-ai": { "optional": true }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.5",
+    "@deepseek-ai/dsh-attachment": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-attachment-local": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-brand": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-credentials": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-credentials-local": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-fs": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-launch-environment": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-settings": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-timeout": "0.1.7-alpha.1",
+    "@deepseek-ai/dsh-util-values": "0.1.7-alpha.1",
+    "@deepseek-ai/schemastery": "^3.18.4",
+    "@earendil-works/pi-ai": "^0.85.1",
+    "@types/node": "^24.10.0",
+    "publint": "^0.3.15",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  }
+}
