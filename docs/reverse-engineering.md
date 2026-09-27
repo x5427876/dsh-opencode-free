@@ -177,7 +177,7 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
    網域）與 `node:http/https`（`patchNodeHttpForZen`，給 axios 風格呼叫）。
 
 三層都 reload-safe（pristine-original stash，不疊包裝）。我們三層全移植，
-僅把 debug env 改名 `DSH_OPENCODE_DIRECT_DEBUG`、stash key 加 `dsh` 前綴。
+僅把 debug env 改名 `DSH_OPENCODE_FREE_DEBUG`、stash key 加 `dsh` 前綴。
 
 ### 8. 工具名稱閘門：必須有 `read` 與 `bash`
 

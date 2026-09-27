@@ -164,7 +164,7 @@ type CompatApiEntry = ReturnType<typeof getApiProvider>;
 type SessionGetter = () => string | undefined;
 
 /** Pristine compat entries, stashed on globalThis so reloads re-wrap the original. */
-const COMPAT_ORIGINALS_KEY = "__dshOpenCodeDirectCompatOriginals";
+const COMPAT_ORIGINALS_KEY = "__dshOpenCodeFreeCompatOriginals";
 function compatOriginals(): Map<string, NonNullable<CompatApiEntry>> {
   const g = globalThis as Record<string, unknown>;
   const existing = g[COMPAT_ORIGINALS_KEY];
@@ -410,13 +410,13 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
  * Models wrapper and the compat patch. Scoped strictly to BASE_URL; all other
  * hosts pass through untouched.
  */
-const FETCH_GUARD_ORIGINAL_KEY = "__dshOpenCodeDirectFetchOriginal";
+const FETCH_GUARD_ORIGINAL_KEY = "__dshOpenCodeFreeFetchOriginal";
 const ZEN_SESSION_PATTERN = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 
-/** Set DSH_OPENCODE_DIRECT_DEBUG=1 to log Zen-bound request identity to stderr. */
+/** Set DSH_OPENCODE_FREE_DEBUG=1 to log Zen-bound request identity to stderr. */
 function debugLog(message: string): void {
   try {
-    if (typeof process !== "undefined" && process.env?.DSH_OPENCODE_DIRECT_DEBUG === "1") {
+    if (typeof process !== "undefined" && process.env?.DSH_OPENCODE_FREE_DEBUG === "1") {
       console.error(`[dsh-opencode-free] ${message}`);
     }
   } catch {
@@ -613,7 +613,7 @@ export function isZenNodeRequestOptions(options: Record<string, unknown>): boole
   return host === "opencode.ai" && String(options.path ?? "/").startsWith("/zen/v1");
 }
 
-const NODE_HTTP_ORIGINALS_KEY = "__dshOpenCodeDirectNodeHttpOriginals";
+const NODE_HTTP_ORIGINALS_KEY = "__dshOpenCodeFreeNodeHttpOriginals";
 
 type NodeHttpModule = Record<string, (...args: never[]) => unknown>;
 

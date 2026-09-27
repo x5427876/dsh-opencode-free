@@ -1,4 +1,4 @@
-# DSH OpenCode Direct
+# DSH OpenCode Free
 
 在 DeepSeek Harness 中直接使用 OpenCode Zen 的免費模型，不需要安裝
 OpenCode、不需要登入、不需要 API Key、不需要額外伺服器。
@@ -90,7 +90,7 @@ OPENCODE_API_KEY=<你的 Zen key> ./scripts/reverify.sh  # 只看 ③號燈
 匿名壓縮會額外送 OpenCode 原文一致的 compaction system prompt（Zen
 匿名免費層會閘 developer 內容）；有 key 的 request 永遠不改寫。
 
-除錯可用 `DSH_OPENCODE_DIRECT_DEBUG=1` 印出 outbound 身份（只印形狀，
+除錯可用 `DSH_OPENCODE_FREE_DEBUG=1` 印出 outbound 身份（只印形狀，
 不印內容）。
 
 ## 開發
