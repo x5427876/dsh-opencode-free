@@ -1,0 +1,85 @@
+{
+  "name": "dsh-opencode-direct",
+  "version": "0.1.3",
+  "packageManager": "pnpm@11.19.0",
+  "description": "Free OpenCode Zen models in DeepSeek Harness through native HTTP requests. No OpenCode installation, login, API key, server, container, or LiteLLM is required.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/x5427876/dsh-opencode-direct.git"
+  },
+  "homepage": "https://github.com/x5427876/dsh-opencode-direct",
+  "bugs": "https://github.com/x5427876/dsh-opencode-direct/issues",
+  "type": "module",
+  "main": "./lib/index.js",
+  "types": "./lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/*.js",
+    "lib/types/**/*.d.ts",
+    "cordis.patch.yml",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "pretest": "pnpm run build",
+    "prepack": "pnpm run build",
+    "test": "tsx --test tests/*.test.mjs",
+    "check": "pnpm run typecheck && pnpm run test && pnpm pack --pack-destination .artifacts"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "opencode",
+    "zen",
+    "free"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "0.1.7-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.1.7-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.3",
+    "@earendil-works/pi-ai": "^0.85.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm-pi-ai": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "@earendil-works/pi-ai": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
