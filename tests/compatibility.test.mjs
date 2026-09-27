@@ -23,7 +23,7 @@ const { PiAiAdapter } = await import('@deepseek-ai/dsh-llm-pi-ai')
 const { resolveRetryPolicy } = await import('@deepseek-ai/dsh-llm')
 
 test('targets the DSH 0.1.7-rc.2 contracts', () => {
-  assert.equal(pkg.version, '0.1.3')
+  assert.equal(pkg.version, '0.1.4')
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.7-rc.2', name)
     assert.equal(pkg.peerDependenciesMeta[name]?.optional, true, name)

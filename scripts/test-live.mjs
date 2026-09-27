@@ -20,7 +20,7 @@ for (const model of models) {
     }, {
       apiKey: 'public',
       maxRetries: 0,
-      maxTokens: 64,
+      maxTokens: 512, // reasoning models can spend 64+ tokens thinking before any text
       signal: AbortSignal.timeout(30000),
       fetch: async (...args) => {
         const response = await fetch(...args)

@@ -53,7 +53,7 @@ export function freeModels(): Model<Api>[] {
 }
 
 export const OPENCODE_USER_AGENT =
-  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.1.3";
+  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.1.4";
 export const OPENCODE_CLIENT = "cli";
 export const OPENCODE_PROJECT = "global";
 
@@ -786,7 +786,7 @@ export function zenProvider(
       const signal = ctx.signal;
       const response = await fetch(`${BASE_URL}/models`, {
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-        headers: { "User-Agent": "dsh-opencode-free/0.1.3" },
+        headers: { "User-Agent": "dsh-opencode-free/0.1.4" },
       });
       if (!response.ok) throw new Error(`Zen model catalogue: HTTP ${response.status}`);
       const body = (await response.json()) as { data?: { id?: unknown }[] };

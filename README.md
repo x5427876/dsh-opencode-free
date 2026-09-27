@@ -10,7 +10,7 @@ Chat Completions），用串流處理文字、思考、工具呼叫、用量、�
 
 ## 準備 DSH
 
-本插件 `0.1.3` 僅適配 DeepSeek Harness `0.1.7-rc.2`。
+本插件 `0.1.4` 僅適配 DeepSeek Harness `0.1.7-rc.2`。
 安裝前請先確認版本：
 
 ```sh
@@ -22,7 +22,7 @@ dsh --version
 ## 安裝
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.1.3
+dsh plugin --profile web add dsh-opencode-free@0.1.4
 dsh plugin --profile web list dsh-opencode-free --depth 0
 dsh --profile web --dump-config
 ```

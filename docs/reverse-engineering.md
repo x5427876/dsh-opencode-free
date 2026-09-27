@@ -88,7 +88,7 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 （[opencode#42500](https://github.com/anomalyco/opencode/issues/42500)），
 `x-opencode-client`/session headers 解不了 UA 這道鎖。
 
-> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.1.3`，Pi 版是
+> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.1.4`，Pi 版是
 > `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-free`
 > 尾段的請求已匿名 200，所以這個尾段目前可以通過；尚未測試其他尾段字串。
 > 之前寫的「匿名全死、無法差分」是 §8 的誤判，現在可以用重播做 A/B。
