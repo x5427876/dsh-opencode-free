@@ -53,7 +53,7 @@ export {
   zenProvider,
 } from "./zen-provider.js";
 
-export const name = "opencode-direct";
+export const name = "opencode-free";
 export const inject: readonly string[] = ["llm"];
 
 /** Plugin configuration: only the optional Zen key. Everything else is automatic. */
@@ -140,7 +140,7 @@ export function apply(ctx: HostContext, config?: Config): void {
     maxRequestImageBytes: 20 * 1024 * 1024,
     requestImagePixelBudget: 2048 * 2048,
     requestImageMaxBytes: 1024 * 1024,
-    retryPolicy: resolveRetryPolicy(undefined, "opencode-direct retryPolicy"),
+    retryPolicy: resolveRetryPolicy(undefined, "opencode-free retryPolicy"),
     cacheRetention: "short" as const,
     transport: "sse" as const,
   });

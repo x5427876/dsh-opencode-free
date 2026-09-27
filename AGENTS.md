@@ -1,7 +1,7 @@
 # Agent installation guide
 
 Use this guide when a user asks an Agent to install, update, verify, or remove
-`dsh-opencode-direct`.
+`dsh-opencode-free`.
 
 ## Safety
 
@@ -27,14 +27,14 @@ When `dsh`, Node.js, and pnpm are already available, install the pinned npm
 package directly:
 
 ```sh
-dsh plugin --profile web add dsh-opencode-direct@0.1.3
+dsh plugin --profile web add dsh-opencode-free@0.1.3
 ```
 
-Update with `dsh plugin --profile web update dsh-opencode-direct`.
+Update with `dsh plugin --profile web update dsh-opencode-free`.
 Uninstall the current package with:
 
 ```sh
-dsh plugin --profile web remove dsh-opencode-direct
+dsh plugin --profile web remove dsh-opencode-free
 ```
 
 ## Desktop profile install (DSH Desktop)
@@ -44,8 +44,8 @@ profile (`desktop`, `web`):
 
 1. `pnpm pack` the plugin into a tarball (or download the pinned release tarball).
 2. Copy the tarball into the profile directory.
-3. Add `"dsh-opencode-direct": "file:./dsh-opencode-direct-0.1.3.tgz"` to
-   the profile's `package.json` `dependencies` and add `dsh-opencode-direct`
+3. Add `"dsh-opencode-free": "file:./dsh-opencode-free-0.1.3.tgz"` to
+   the profile's `package.json` `dependencies` and add `dsh-opencode-free`
    to its `dsh.profile.bundles` array.
 4. Run `pnpm install` in the profile directory.
 5. The user must restart DSH once for the plugin to load.
@@ -60,14 +60,14 @@ the plugin runs.
 For the existing CLI path, run:
 
 ```sh
-dsh plugin --profile web list dsh-opencode-direct --depth 0
+dsh plugin --profile web list dsh-opencode-free --depth 0
 dsh --profile web --dump-config
 ```
 
 Success requires:
 
 1. The requested package version appears once.
-2. `opencode-direct` appears once in the composed config after install
+2. `opencode-free` appears once in the composed config after install
    or update, and is absent after uninstall.
 3. No unrelated profile or plugin changed.
 4. A running DSH process was not restarted by the operation.

@@ -1,4 +1,4 @@
-# dsh-opencode-direct
+# dsh-opencode-free
 
 本插件仿冒 OpenCode CLI 身份使用 Zen keyless 層。術語以此為準
 （技術段落不用「模仿」，立場段落用「bypass」）。

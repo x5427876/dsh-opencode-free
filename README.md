@@ -22,19 +22,19 @@ dsh --version
 ## 安裝
 
 ```sh
-dsh plugin --profile web add dsh-opencode-direct@0.1.3
-dsh plugin --profile web list dsh-opencode-direct --depth 0
+dsh plugin --profile web add dsh-opencode-free@0.1.3
+dsh plugin --profile web list dsh-opencode-free --depth 0
 dsh --profile web --dump-config
 ```
 
-成功條件：套件只出現一次，composed config 出現 `opencode-direct`，
+成功條件：套件只出現一次，composed config 出現 `opencode-free`，
 不相關的 profile 與插件沒有變動，不需要重啟正在跑的 DSH（除非要立即使用）。
 
 更新與移除：
 
 ```sh
-dsh plugin --profile web update dsh-opencode-direct
-dsh plugin --profile web remove dsh-opencode-direct
+dsh plugin --profile web update dsh-opencode-free
+dsh plugin --profile web remove dsh-opencode-free
 ```
 
 ## 使用
@@ -73,8 +73,8 @@ DSH Desktop（無 shell 環境）走第 1 路：在該 profile 的 `cordis.patch
 覆寫本插件行：
 
 ```yaml
-- id: opencode-direct
-  name: dsh-opencode-direct
+- id: opencode-free
+  name: dsh-opencode-free
   config:
     apiKey: <你的 Zen key>
 ```

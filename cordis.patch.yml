@@ -1,5 +1,5 @@
 # One plugin owns the OpenCode Zen free provider route. It leaves DSH's
 # model and persistent web configuration untouched.
 - insert:
-    - id: opencode-direct
-      name: 'dsh-opencode-direct'
+    - id: opencode-free
+      name: 'dsh-opencode-free'

@@ -53,7 +53,7 @@ export function freeModels(): Model<Api>[] {
 }
 
 export const OPENCODE_USER_AGENT =
-  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-direct/0.1.3";
+  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.1.3";
 export const OPENCODE_CLIENT = "cli";
 export const OPENCODE_PROJECT = "global";
 
@@ -399,7 +399,7 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           return gate.restoreShell ? withGuidance(out as object, true) : out;
         }) as never,
       },
-      "dsh-opencode-direct",
+      "dsh-opencode-free",
     );
   }
 }
@@ -417,7 +417,7 @@ const ZEN_SESSION_PATTERN = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 function debugLog(message: string): void {
   try {
     if (typeof process !== "undefined" && process.env?.DSH_OPENCODE_DIRECT_DEBUG === "1") {
-      console.error(`[dsh-opencode-direct] ${message}`);
+      console.error(`[dsh-opencode-free] ${message}`);
     }
   } catch {
     // Logging must never break requests.
@@ -786,7 +786,7 @@ export function zenProvider(
       const signal = ctx.signal;
       const response = await fetch(`${BASE_URL}/models`, {
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-        headers: { "User-Agent": "dsh-opencode-direct/0.1.3" },
+        headers: { "User-Agent": "dsh-opencode-free/0.1.3" },
       });
       if (!response.ok) throw new Error(`Zen model catalogue: HTTP ${response.status}`);
       const body = (await response.json()) as { data?: { id?: unknown }[] };

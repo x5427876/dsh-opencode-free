@@ -1,7 +1,7 @@
 # Pi 插件作者如何仿冒 OpenCode CLI 身份：逆向考據
 
 本文件考據 `pi-opencode-direct` 作者是怎麼把 OpenCode CLI 的行為
-逆向出來、再逐一仿冒的，以及每一項仿冒在 `dsh-opencode-direct`
+逆向出來、再逐一仿冒的，以及每一項仿冒在 `dsh-opencode-free`
 的對應位置。所有斷言都對著第一手來源驗過（見文末）。
 
 術語：技術段落一律用「仿冒 CLI 身份」，立場段落用「bypass」；
@@ -88,8 +88,8 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 （[opencode#42500](https://github.com/anomalyco/opencode/issues/42500)），
 `x-opencode-client`/session headers 解不了 UA 這道鎖。
 
-> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-direct/0.1.3`，Pi 版是
-> `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-direct`
+> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.1.3`，Pi 版是
+> `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-free`
 > 尾段的請求已匿名 200，所以這個尾段目前可以通過；尚未測試其他尾段字串。
 > 之前寫的「匿名全死、無法差分」是 §8 的誤判，現在可以用重播做 A/B。
 
