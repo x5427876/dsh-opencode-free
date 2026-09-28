@@ -22,10 +22,10 @@ const plugin = await import('../lib/index.js')
 const { PiAiAdapter } = await import('@deepseek-ai/dsh-llm-pi-ai')
 const { resolveRetryPolicy } = await import('@deepseek-ai/dsh-llm')
 
-test('targets the DSH 0.1.7-rc.2 contracts', () => {
-  assert.equal(pkg.version, '0.1.4')
+test('targets the DSH 0.2.0-rc.1 contracts', () => {
+  assert.equal(pkg.version, '0.2.0')
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.1.7-rc.2', name)
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.0-rc.1', name)
     assert.equal(pkg.peerDependenciesMeta[name]?.optional, true, name)
   }
   assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^0.85.1')

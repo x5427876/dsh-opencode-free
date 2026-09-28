@@ -88,7 +88,7 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 （[opencode#42500](https://github.com/anomalyco/opencode/issues/42500)），
 `x-opencode-client`/session headers 解不了 UA 這道鎖。
 
-> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.1.4`，Pi 版是
+> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.2.0`，Pi 版是
 > `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-free`
 > 尾段的請求已匿名 200，所以這個尾段目前可以通過；尚未測試其他尾段字串。
 > 之前寫的「匿名全死、無法差分」是 §8 的誤判，現在可以用重播做 A/B。
@@ -222,6 +222,13 @@ DSH 在 Windows 用 `dsh-base` 的 `tool-pwsh` 取代 `tool-bash`，送出的是
 2026-09-27 DSH rc.2（Windows、`web` profile、無 key）實測：7 個免費模型都能對話；
 `pwsh` 與 `read` 工具往返都完成（軌跡記錄顯示 DSH 收到 `pwsh`）；
 除錯記錄 18 個請求全部 `200`、全部 `Bearer public`。
+
+2026-09-28 DSH `0.2.0-rc.1`（同樣環境）重驗：`dsh-base` 在 Windows 仍以
+`tool-pwsh` 取代 `tool-bash`，工具名仍是 `read`／`pwsh`，對策不用改。
+6 個免費模型正常對話；`read` 與 `pwsh` 工具往返完成（`pwsh` 只花 6 秒）。
+Nemotron 3.5 Lightning 當時 10 秒後回 `200`，之後只送 `: keep-alive`、
+沒有內容；同時用 Pi 呼叫同一模型也一樣，所以是上游該模型卡住，不是閘門或插件問題。
+判斷方法：`200` 代表已通過閘門；之後沒資料，就用 Pi 對照，兩邊都卡就是上游。
 
 維護注意：
 
