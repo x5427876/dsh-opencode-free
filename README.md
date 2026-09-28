@@ -1,112 +1,195 @@
-# DSH OpenCode Free
+# dsh-opencode-free
 
-在 DeepSeek Harness 中直接使用 OpenCode Zen 的免費模型，不需要安裝
-OpenCode、不需要登入、不需要 API Key、不需要額外伺服器。
+**English** | [繁體中文](README.zh-TW.md)
 
-思路與 Pi 的 [`pi-opencode-direct`](https://github.com/Aymendje/pi-opencode-direct)
-相同：走 pi-ai 原生傳輸（Muse Spark 用 Responses，其餘免費模型用
-Chat Completions），用串流處理文字、思考、工具呼叫、用量、中斷與
-工具結果重播，工具在 DSH 內執行。
+[![npm](https://img.shields.io/npm/v/dsh-opencode-free)](https://www.npmjs.com/package/dsh-opencode-free)
+[![CI](https://github.com/x5427876/dsh-opencode-free/actions/workflows/ci.yml/badge.svg)](https://github.com/x5427876/dsh-opencode-free/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-## 準備 DSH
+Use the free [OpenCode Zen](https://opencode.ai/docs/providers) models in
+DeepSeek Harness (DSH). You do not need to
+install OpenCode, log in, get an API key, or run a separate server.
 
-本插件 `0.2.0` 僅適配 DeepSeek Harness `0.2.0-rc.1`。
-安裝前請先確認版本：
+> [!WARNING]
+> This is an unofficial community plugin. It is not affiliated with OpenCode or
+> DeepSeek. It reaches the keyless free tier by sending the OpenCode CLI
+> identity. The upstream has no third-party contract, so it can stop working at
+> any time. See [How it works](#how-it-works).
+
+## Features
+
+- Seven free Zen models in the DSH model picker, under the `opencode-zen-free` provider.
+- Anonymous by default. A Zen API key is optional.
+- Native streaming through pi-ai: text, reasoning, tool calls, usage, and abort.
+- Tools run inside DSH. The Windows `pwsh` shell works too.
+- Clear error messages when the upstream rejects a request.
+
+## Requirements
+
+| Requirement | Version |
+|---|---|
+| DeepSeek Harness | `0.2.0-rc.1` (exact) |
+| Node.js | `^22.19.0` or `>=24.0.0` |
+
+Each plugin release pins one exact DSH version. Check yours first:
 
 ```sh
 dsh --version
 ```
 
-不要忽略 peer dependency 警告。
+| Plugin | DSH |
+|---|---|
+| `0.2.x` | `0.2.0-rc.1` |
+| `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
 
-## 安裝
+Do not ignore peer dependency warnings.
+
+## Install
+
+The examples use the `web` profile. Replace it with your target profile.
 
 ```sh
 dsh plugin --profile web add dsh-opencode-free@0.2.0
+```
+
+Check the install:
+
+```sh
 dsh plugin --profile web list dsh-opencode-free --depth 0
 dsh --profile web --dump-config
 ```
 
-成功條件：套件只出現一次，composed config 出現 `opencode-free`，
-不相關的 profile 與插件沒有變動，不需要重啟正在跑的 DSH（除非要立即使用）。
+The install is correct when the package appears once and `opencode-free`
+appears in the composed config. Other profiles and plugins do not change.
 
-更新與移除：
+Update or remove:
 
 ```sh
 dsh plugin --profile web update dsh-opencode-free
 dsh plugin --profile web remove dsh-opencode-free
 ```
 
-## 使用
+## Usage
 
-重啟 DSH（或 HMR 重載）後，在模型選單選擇 `opencode-zen-free`
-provider 下的模型即可。Muse Spark 支援原生圖片、推理與工具呼叫；
-DSH 的思考強度選擇會透傳，沒選時 Muse Spark 預設 `xhigh`。
+Restart DSH (or let HMR reload it). Open the model picker and select a model
+under **OpenCode Zen Free**.
 
-上游匿名層要求請求帶有名為 `read` 與 `bash` 的工具。DSH 在 Windows
-只提供 `pwsh`，所以插件在匿名請求中把 `pwsh` 送成 `bash`，回傳時再改回
-`pwsh`；不帶工具的請求（標題、壓縮）會補上不可用的空工具。帶 key 時不改寫。
+| Model | ID | Input | Context |
+|---|---|---|---|
+| Muse Spark 1.3 Free | `muse-spark-1.3-contributor-free` | text, image | 1M |
+| Muse Spark 1.2 Free | `muse-spark-1.2-contributor-free` | text, image | 1M |
+| MiMo V2.5 Free | `mimo-v2.5-free` | text, image | 200K |
+| Nemotron 3 Ultra Free | `nemotron-3-ultra-free` | text | 1M |
+| Nemotron 3.5 Lightning Free | `nemotron-3.5-lightning-free` | text | 262K |
+| Ling 3.0 Flash Fin Free | `ling-3.0-flash-fin-free` | text | 262K |
+| Big Pickle | `big-pickle` | text | 200K |
 
-若仍出現 `403 FreeTierError`，請執行 `scripts/reverify.sh`：②號燈黃燈表示
-上游閘門條件又變了，不是設定問題。
+All models support reasoning and tool calls. DSH passes your reasoning level
+through. If you do not choose one, Muse Spark uses `xhigh`.
 
-> 定位：本插件仿冒 CLI 身份使用 keyless 層，上游無第三方合約，
-> 隨時可能再被閘。實測紀錄見 `docs/reverse-engineering.md`。
+The list is a baseline that ships with the package. The plugin does not
+refresh it in the background. When the upstream removes a model, you get a
+"model unavailable" error.
 
-## 模型目錄新鮮度
+## Configuration
 
-模型清單是打包時的基線，不在背景自動刷新（避免副作用與額度成本）。
-上游下架的模型會回模型不可用而非通用錯誤；新鮮度以
-`scripts/reverify.sh` ①號燈為信號，紅燈先查網路。
+### Zen API key (optional)
 
-## Zen key（可選）
+Without a key, the plugin sends `Authorization: Bearer public` and no personal
+credentials. If the anonymous tier rejects you, the plugin reports the error.
+It never asks for a key or switches to a paid model on its own.
 
-與原專案相同，Zen key 不是必要設定。不設 key 時送 `Bearer public`，
-不送個人憑證。匿名被拒時會回報錯誤，不會強制要求 key 或自動切換付費模型。
-若你有 Zen key，可選擇設定後重測：
+To use a key, choose one:
 
-1. 在該插件行的 `config` 加 `apiKey`（重載即生效，不需重啟），或
-2. 設環境變數 `OPENCODE_API_KEY`。
+1. Add `apiKey` to the plugin's `config`. This takes effect on reload.
+2. Set the `OPENCODE_API_KEY` environment variable.
 
-優先順序：插件 `apiKey` config → `OPENCODE_API_KEY` → 匿名 `public`。
-DSH Desktop（無 shell 環境）走第 1 路：在該 profile 的 `cordis.patch.yml`
-覆寫本插件行：
+Priority: `apiKey` config, then `OPENCODE_API_KEY`, then anonymous `public`.
+
+DSH Desktop has no shell environment, so use option 1. Override the plugin
+entry in the profile's `cordis.patch.yml`:
 
 ```yaml
 - id: opencode-free
   name: dsh-opencode-free
   config:
-    apiKey: <你的 Zen key>
+    apiKey: <your Zen key>
 ```
 
-改 key 存檔即 HMR 重載生效。設完先驗 key（一次 16 token 的極小請求，
-不是正式對話；key 無法離線驗，必須打一次上游）：
+Verify the key before you chat. This sends one 16-token request:
 
 ```sh
-OPENCODE_API_KEY=<你的 Zen key> ./scripts/reverify.sh  # 只看 ③號燈
+OPENCODE_API_KEY=<your Zen key> ./scripts/reverify.sh
 ```
 
-③號綠燈＝key 有效；紅燈＝key 無效或上游異常，先別開聊。
-匿名壓縮會額外送 OpenCode 原文一致的 compaction system prompt（Zen
-匿名免費層會閘 developer 內容）；有 key 的 request 永遠不改寫。
+Check lamp ③. Green means the key works. Red means the key is invalid or the
+upstream has a problem.
 
-除錯可用 `DSH_OPENCODE_FREE_DEBUG=1` 印出 outbound 身份（只印形狀，
-不印內容）。
+## How it works
 
-## 開發
+The plugin registers the `opencode-zen-free` provider through DSH's
+`PiAiAdapter`. It sends requests straight to `https://opencode.ai/zen/v1` with
+pi-ai's own transports: Responses for Muse Spark, Chat Completions for the
+other models. The approach follows Pi's
+[`pi-opencode-direct`](https://github.com/Aymendje/pi-opencode-direct).
 
-改 `src/*.ts`，不要直接改 `lib/`（發佈產物，由 `tsc` 產生）：
+The anonymous tier accepts a request only when it looks like the OpenCode CLI:
+
+- the OpenCode `User-Agent` and `x-opencode-*` headers, with a valid `ses_` session ID;
+- `stream: true`;
+- tools named exactly `read` and `bash`.
+
+On Windows, DSH ships `pwsh` instead of `bash`. For anonymous requests, the
+plugin sends `pwsh` as `bash` and renames the returned calls back to `pwsh`.
+Requests without tools (titles, compaction) get inert placeholder tools.
+Requests with an API key are never rewritten.
+
+The full investigation, with replay results and pitfalls, is in
+[`docs/reverse-engineering.md`](docs/reverse-engineering.md).
+
+## Troubleshooting
+
+**`403 FreeTierError ... only be used from within OpenCode`**
+Run `./scripts/reverify.sh`. Lamp ② sends a request that meets every known
+gate condition. If lamp ② is yellow, the upstream gate changed. This is not a
+configuration problem.
+
+**HTTP 200, but no reply**
+A `200` means the request passed the gate. If no content follows, that model
+is stalled upstream. Try another model, or test it directly:
+
+```sh
+pnpm run build
+node scripts/test-live.mjs nemotron-3.5-lightning-free
+```
+
+**Debug logs**
+Set `DSH_OPENCODE_FREE_DEBUG=1` before you start DSH. The plugin logs the
+outbound identity and request shape to stderr. It never logs content or keys.
+
+## Development
+
+Edit `src/*.ts`. Do not edit `lib/`: `tsc` generates it.
 
 ```sh
 pnpm install
-pnpm run typecheck  # tsc 嚴格型別檢查
-pnpm run build      # tsc（host：lib/*.js + lib/types/**）
-pnpm run test       # 會先自動 build，以 tsx 跑測試（無網路）
-pnpm run check      # typecheck → build → tests → pack
+pnpm run typecheck  # strict type check
+pnpm run build      # emit lib/
+pnpm run test       # build, then run offline tests
+pnpm run check      # typecheck, test, and pack
 ```
 
-測試用純記憶體 fixture，不打網路、不耗免費額度。
+The unit tests use in-memory fixtures. They do not use the network or free
+quota. These scripts send real requests:
 
-## 授權
+| Script | What it checks |
+|---|---|
+| `scripts/reverify.sh` | ① catalogue reachable, ② anonymous gate, ③ API key (only when `OPENCODE_API_KEY` is set) |
+| `node scripts/test-live.mjs [model-id ...]` | Every free model (or the ones you list) replies anonymously. Run `pnpm run build` first. |
 
-MIT。這是獨立擴充，與 OpenCode、DeepSeek 官方無關。
+For Agents that install or verify this plugin, see [`AGENTS.md`](AGENTS.md).
+
+## License
+
+[MIT](LICENSE). This is an independent extension. It is not affiliated with
+OpenCode or DeepSeek.
