@@ -21,14 +21,15 @@ const host = (await Promise.all(hostFiles.map((f) => readFile(new URL(f, libUrl)
 const plugin = await import('../lib/index.js')
 const { PiAiAdapter } = await import('@deepseek-ai/dsh-llm-pi-ai')
 const { resolveRetryPolicy } = await import('@deepseek-ai/dsh-llm')
+const { normalizeContext, getCurrentSystemPrompt } = await import('@earendil-works/pi-ai')
 
-test('targets the DSH 0.2.0-rc.1 contracts', () => {
-  assert.equal(pkg.version, '0.2.0')
+test('targets the DSH 0.2.0-rc.2 contracts', () => {
+  assert.equal(pkg.version, '0.2.1')
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.0-rc.1', name)
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.0-rc.2', name)
     assert.equal(pkg.peerDependenciesMeta[name]?.optional, true, name)
   }
-  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^0.85.1')
+  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^0.87.1')
   assert.equal(pkg.peerDependencies['react'], undefined)
   assert.deepEqual(pkg.dsh, { bundle: { patch: './cordis.patch.yml' } })
 })
@@ -95,6 +96,12 @@ test('compaction swap only rewrites short anonymous summarization prompts', asyn
   assert.ok(swapped.systemPrompt.includes('context summarization agent'))
   assert.equal(swapCompactionPrompt({ systemPrompt: piPrompt, messages: [] }, 'sk-live-key').systemPrompt, piPrompt)
   assert.equal(swapCompactionPrompt({ systemPrompt: 'ordinary chat', messages: [] }, 'public').systemPrompt, 'ordinary chat')
+  // pi-ai 0.87 providers receive a TranscriptContext: the prompt lives in system messages.
+  const user = { role: 'user', content: 'summarize', timestamp: 1 }
+  const t = swapCompactionPrompt(normalizeContext({ systemPrompt: piPrompt, messages: [user] }), 'public')
+  assert.match(getCurrentSystemPrompt(t.messages), /context summarization agent/)
+  const chat = normalizeContext({ systemPrompt: 'ordinary chat', messages: [user] })
+  assert.equal(swapCompactionPrompt(chat, 'public'), chat)
   assert.equal((await resolveZenApiKey({ env: async () => undefined, configKey: '  ' })).apiKey, 'public')
   assert.equal((await resolveZenApiKey({ env: async () => 'env-key', configKey: undefined })).apiKey, 'env-key')
   assert.equal((await resolveZenApiKey({ env: async () => undefined, configKey: 'cfg-key' })).apiKey, 'cfg-key')
@@ -240,7 +247,9 @@ test('anonymous requests satisfy the read+bash tool gate and map pwsh back', asy
   }
   const names = (body) => body.tools.map((t) => t.name).sort()
 
-  const anon = await run(ctx, 'public')
+  // DSH (Models.streamSimple) hands providers a normalized transcript; direct callers may pass a legacy Context.
+  for (const shape of [(c) => c, normalizeContext]) {
+  const anon = await run(shape(ctx), 'public')
   assert.deepEqual(names(anon.body), ['bash', 'read'])
   assert.ok(anon.body.input.some((i) => i.type === 'function_call' && i.name === 'bash'))
   assert.ok(!JSON.stringify(anon.body.input).includes('"pwsh"'))
@@ -249,11 +258,12 @@ test('anonymous requests satisfy the read+bash tool gate and map pwsh back', asy
   assert.equal(end.toolCall.name, 'pwsh')
   assert.equal(ctx.tools[1].name, 'pwsh', 'caller context must not be mutated')
 
-  const keyed = await run(ctx, 'sk-test-key')
+  const keyed = await run(shape(ctx), 'sk-test-key')
   assert.deepEqual(names(keyed.body), ['pwsh', 'read'])
 
-  const bare = await run({ messages: [{ role: 'user', content: 'title', timestamp: 1 }] }, 'public')
+  const bare = await run(shape({ messages: [{ role: 'user', content: 'title', timestamp: 1 }] }), 'public')
   assert.deepEqual(names(bare.body), ['bash', 'read'])
+  }
 })
 
 test('free catalogue is non-empty and host output carries the Zen identity', () => {

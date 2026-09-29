@@ -1,6 +1,6 @@
 /**
  * OpenCode Zen free-tier provider, ported from `pi-opencode-direct` to the
- * pi-ai `0.85.1` API that DSH `0.2.0-rc.1` uses.
+ * pi-ai `0.87.1` API that DSH `0.2.0-rc.2` uses.
  *
  * Same idea as the Pi extension: native HTTP through pi-ai's own
  * `openai-responses` / `openai-completions` transports, anonymous `public`
@@ -8,14 +8,20 @@
  * per-session routing affinity, encrypted-content retry, and the
  * byte-identical OpenCode compaction prompt for anonymous summarization.
  *
- * Deliberately legacy-`Context` only (`{ systemPrompt }`, pi-ai 0.85.1):
- * DSH's `PiAiAdapter` builds that shape via `toPiContext`, so no
- * `TranscriptContext` normalization (pi-ai 0.86+) is needed here.
+ * pi-ai 0.87 providers receive a `TranscriptContext`: `Models.streamSimple()`
+ * (what DSH's `PiAiAdapter` calls) folds `systemPrompt` and `tools` into a
+ * leading system message. Direct callers may still pass a legacy `Context`,
+ * so every entry point normalizes first and rewrites the transcript only.
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import {
+  createInitialSystemMessage,
   createProvider,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  normalizeContext,
+  type Context,
   type Api,
   type FetchFunction,
   type Model,
@@ -53,7 +59,7 @@ export function freeModels(): Model<Api>[] {
 }
 
 export const OPENCODE_USER_AGENT =
-  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.2.0";
+  "opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/0.2.1";
 export const OPENCODE_CLIENT = "cli";
 export const OPENCODE_PROJECT = "global";
 
@@ -188,20 +194,46 @@ export const OPENCODE_SUMMARIZATION_PROMPT =
 /** Marker identifying Pi's own compaction system prompt wording. */
 const PI_SUMMARIZATION_MARKER = "context summarization";
 
+type TranscriptMessage = Record<string, unknown> & { role?: unknown };
+
+/** Fold a legacy `Context` into the transcript pi-ai 0.87 providers read; transcripts pass through. */
+export function toTranscript<T>(context: T): T {
+  if (!context || typeof context !== "object") return context;
+  const legacy = context as { systemPrompt?: unknown; tools?: unknown };
+  if (legacy.systemPrompt === undefined && legacy.tools === undefined) return context;
+  return normalizeContext(context as unknown as Context) as unknown as T;
+}
+
 /**
  * Swap Pi's compaction system prompt for OpenCode's byte-identical one when
- * sending anonymously to Zen. Legacy `Context` shape only (`{ systemPrompt }`,
- * pi-ai 0.85.1). Only short standalone prompts containing the marker are
- * rewritten — never conversation content or keyed requests.
+ * sending anonymously to Zen. Handles the legacy `{ systemPrompt }` shape and
+ * the transcript shape (prompt in system messages). Only short standalone
+ * prompts containing the marker are rewritten — never conversation content,
+ * requests with tools, or keyed requests.
  */
 export function swapCompactionPrompt<T>(context: T, apiKey: unknown): T {
   const key = typeof apiKey === "string" && apiKey.trim() ? apiKey : "public";
   if (key !== "public") return context;
   if (!context || typeof context !== "object") return context;
   const sys = (context as { systemPrompt?: unknown }).systemPrompt;
-  if (typeof sys !== "string") return context;
-  if (sys.length > 2000 || !sys.toLowerCase().includes(PI_SUMMARIZATION_MARKER)) return context;
-  return { ...(context as Record<string, unknown>), systemPrompt: OPENCODE_SUMMARIZATION_PROMPT } as T;
+  if (typeof sys === "string") {
+    if (sys.length > 2000 || !sys.toLowerCase().includes(PI_SUMMARIZATION_MARKER)) return context;
+    return { ...(context as Record<string, unknown>), systemPrompt: OPENCODE_SUMMARIZATION_PROMPT } as T;
+  }
+  const msgs = (context as { messages?: unknown }).messages as TranscriptMessage[] | undefined;
+  if (!Array.isArray(msgs)) return context;
+  const transcript = msgs as Parameters<typeof getCurrentSystemPrompt>[0];
+  const prompt = getCurrentSystemPrompt(transcript);
+  if (!prompt || prompt.length > 2000 || !prompt.toLowerCase().includes(PI_SUMMARIZATION_MARKER)) return context;
+  if (getCurrentTools(transcript).length > 0) return context;
+  const nonSystem = msgs.filter((m) => m?.role !== "system");
+  if (nonSystem.length !== 1 || nonSystem[0]?.role !== "user") return context;
+  const messages = msgs.map((m) => {
+    if (m?.role !== "system") return m;
+    const { sections: _dropped, ...rest } = m;
+    return { ...rest, content: OPENCODE_SUMMARIZATION_PROMPT };
+  });
+  return { ...(context as Record<string, unknown>), messages } as T;
 }
 
 /**
@@ -209,7 +241,8 @@ export function swapCompactionPrompt<T>(context: T, apiKey: unknown): T {
  * tools named exactly `read` and `bash`; descriptions and schemas are ignored
  * (live replay 2026-09-27). DSH on Windows ships `pwsh` instead of `bash`, so
  * anonymous requests send `pwsh` as `bash` (history included) and map calls
- * back; tool-less requests (titles, compaction) get inert stubs.
+ * back; tool-less requests (titles, compaction) get inert stubs. Operates on
+ * the transcript: tools live in system messages' `toolsAdded`/`toolsRemoved`.
  */
 const GATE_TOOLS = ["read", "bash"];
 const SHELL_ALIAS = "pwsh";
@@ -217,31 +250,45 @@ const STUB_DESCRIPTION = "Unavailable in this request. Do not call.";
 
 export function applyAnonymousToolGate<T>(context: T, apiKey: unknown): { context: T; restoreShell: boolean } {
   const key = typeof apiKey === "string" && apiKey.trim() ? apiKey : "public";
-  if (key !== "public" || !context || typeof context !== "object") return { context, restoreShell: false };
-  const ctx = context as { tools?: { name: string }[]; messages?: unknown[] };
-  let tools = [...(ctx.tools ?? [])];
-  let messages = ctx.messages;
-  const has = (name: string) => tools.some((t) => t.name === name);
+  const msgs = (context as { messages?: unknown } | null)?.messages as TranscriptMessage[] | undefined;
+  if (key !== "public" || !Array.isArray(msgs)) return { context, restoreShell: false };
+  const current = getCurrentTools(msgs as Parameters<typeof getCurrentTools>[0]);
+  const has = (name: string) => current.some((t) => t.name === name);
   const restoreShell = !has("bash") && has(SHELL_ALIAS);
-  if (restoreShell) {
-    const rename = (name: unknown) => (name === SHELL_ALIAS ? "bash" : name);
-    tools = tools.map((t) => (t.name === SHELL_ALIAS ? { ...t, name: "bash" } : t));
-    messages = messages?.map((m) => {
-      const msg = m as { role?: unknown; content?: unknown; toolName?: unknown };
-      if (msg?.role === "toolResult") return { ...msg, toolName: rename(msg.toolName) };
-      if (msg?.role !== "assistant" || !Array.isArray(msg.content)) return m;
-      return {
-        ...msg,
-        content: msg.content.map((c: { type?: unknown; name?: unknown }) =>
-          c?.type === "toolCall" ? { ...c, name: rename(c.name) } : c,
-        ),
-      };
-    });
+  const rename = (name: unknown) => (name === SHELL_ALIAS ? "bash" : name);
+  const renameAll = (list: unknown) =>
+    Array.isArray(list) ? list.map((t: { name?: unknown }) => ({ ...t, name: rename(t.name) })) : list;
+  let messages = !restoreShell
+    ? msgs
+    : msgs.map((m) => {
+        if (m?.role === "system") {
+          const out: TranscriptMessage = { ...m };
+          if (m.toolsAdded) out.toolsAdded = renameAll(m.toolsAdded);
+          if (m.toolsRemoved) out.toolsRemoved = renameAll(m.toolsRemoved);
+          return out;
+        }
+        if (m?.role === "toolResult") return { ...m, toolName: rename(m.toolName) };
+        if (m?.role !== "assistant" || !Array.isArray(m.content)) return m;
+        return {
+          ...m,
+          content: m.content.map((c: { type?: unknown; name?: unknown }) =>
+            c?.type === "toolCall" ? { ...c, name: rename(c.name) } : c,
+          ),
+        };
+      });
+  const stubs = GATE_TOOLS.filter((name) => !has(name) && !(restoreShell && name === "bash")).map((name) => ({
+    name,
+    description: STUB_DESCRIPTION,
+    parameters: { type: "object", properties: {} },
+  }));
+  if (stubs.length) {
+    const first = messages[0];
+    messages =
+      first?.role === "system"
+        ? [{ ...first, toolsAdded: [...((first.toolsAdded as unknown[]) ?? []), ...stubs] }, ...messages.slice(1)]
+        : [createInitialSystemMessage(undefined, stubs as never) as unknown as TranscriptMessage, ...messages];
   }
-  for (const name of GATE_TOOLS) {
-    if (!has(name)) tools.push({ name, description: STUB_DESCRIPTION, parameters: { type: "object", properties: {} } } as never);
-  }
-  return { context: { ...(context as Record<string, unknown>), tools, messages } as T, restoreShell };
+  return { context: { ...(context as Record<string, unknown>), messages } as T, restoreShell };
 }
 
 /** Rename returned `bash` calls back to DSH's `pwsh` in place (events share `partial`). */
@@ -379,7 +426,7 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           if ((model as Model<Api>).provider !== PROVIDER_ID)
             return origStream(model as never, context as never, options as never);
           const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-          const gate = applyAnonymousToolGate(swapCompactionPrompt(context, key), key);
+          const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
           const ctx = gate.context;
           const processed = compatRequestOptions(options, getSessionId, fallbackSession);
           debugLog(`${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`);
@@ -391,7 +438,7 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
             return origStreamSimple(model as never, context as never, options as never);
           // No reasoning default here: compat omission means off.
           const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-          const gate = applyAnonymousToolGate(swapCompactionPrompt(context, key), key);
+          const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
           const ctx = gate.context;
           const processed = compatRequestOptions(options, getSessionId, fallbackSession);
           debugLog(`${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`);
@@ -445,7 +492,7 @@ function shapeSummary(context: unknown, options: unknown): string {
         if (chars > 10_000_000) break;
       }
     }
-    const tools = Array.isArray(ctx.tools) ? ctx.tools.length : 0;
+    const tools = Array.isArray(ctx.tools) ? ctx.tools.length : Array.isArray(ctx.messages) ? getCurrentTools(ctx.messages as Parameters<typeof getCurrentTools>[0]).length : 0;
     return `msgs=${Array.isArray(ctx.messages) ? ctx.messages.length : "?"} chars~${chars} tools=${tools} reasoning=${String(opt.reasoning ?? "(default)")}`;
   } catch {
     return "shape=(unavailable)";
@@ -786,7 +833,7 @@ export function zenProvider(
       const signal = ctx.signal;
       const response = await fetch(`${BASE_URL}/models`, {
         signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]),
-        headers: { "User-Agent": "dsh-opencode-free/0.2.0" },
+        headers: { "User-Agent": "dsh-opencode-free/0.2.1" },
       });
       if (!response.ok) throw new Error(`Zen model catalogue: HTTP ${response.status}`);
       const body = (await response.json()) as { data?: { id?: unknown }[] };
@@ -800,12 +847,12 @@ export function zenProvider(
     },
     stream(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-      const gate = applyAnonymousToolGate(swapCompactionPrompt(context, key), key);
+      const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
       return withGuidance(provider.stream(model, gate.context, requestOptions(options, gate.context)), gate.restoreShell);
     },
     streamSimple(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-      const gate = applyAnonymousToolGate(swapCompactionPrompt(context, key), key);
+      const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
       return withGuidance(provider.streamSimple(model, gate.context, {
         ...requestOptions(options, gate.context),
         reasoning: options?.reasoning ?? (model.id.startsWith("muse-spark-") ? "xhigh" : undefined),

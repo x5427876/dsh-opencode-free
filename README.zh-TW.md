@@ -26,7 +26,7 @@
 
 | 項目 | 版本 |
 |---|---|
-| DeepSeek Harness | `0.2.0-rc.1`（必須完全相同） |
+| DeepSeek Harness | `0.2.0-rc.2`（必須完全相同） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只對應一個 DSH 版本。請先確認你的版本：
@@ -37,7 +37,8 @@ dsh --version
 
 | 插件 | DSH |
 |---|---|
-| `0.2.x` | `0.2.0-rc.1` |
+| `0.2.1` | `0.2.0-rc.2` |
+| `0.2.0` | `0.2.0-rc.1` |
 | `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
 
 不要忽略 peer dependency 警告。
@@ -47,7 +48,7 @@ dsh --version
 範例使用 `web` profile，請換成你的目標 profile。
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.2.0
+dsh plugin --profile web add dsh-opencode-free@0.2.1
 ```
 
 檢查安裝結果：
@@ -75,7 +76,7 @@ dsh plugin --profile web remove dsh-opencode-free
 |---|---|---|---|
 | Muse Spark 1.3 Free | `muse-spark-1.3-contributor-free` | 文字、圖片 | 1M |
 | Muse Spark 1.2 Free | `muse-spark-1.2-contributor-free` | 文字、圖片 | 1M |
-| MiMo V2.5 Free | `mimo-v2.5-free` | 文字、圖片 | 200K |
+| MiMo-V2.6-Flash Free | `mimo-v2.6-flash-free` | 文字、圖片 | 200K |
 | Nemotron 3 Ultra Free | `nemotron-3-ultra-free` | 文字 | 1M |
 | Nemotron 3.5 Lightning Free | `nemotron-3.5-lightning-free` | 文字 | 262K |
 | Ling 3.0 Flash Fin Free | `ling-3.0-flash-fin-free` | 文字 | 262K |

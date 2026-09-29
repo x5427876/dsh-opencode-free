@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode-free",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "packageManager": "pnpm@11.19.0",
   "description": "Free OpenCode Zen models in DeepSeek Harness through native HTTP requests. No OpenCode installation, login, API key, server, container, or LiteLLM is required.",
   "repository": {
@@ -59,10 +59,10 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "0.2.0-rc.1",
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-llm": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.3",
-    "@earendil-works/pi-ai": "^0.85.1"
+    "@earendil-works/pi-ai": "^0.87.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-llm": {

@@ -8,7 +8,7 @@
 不用「模仿」（見 `CONTEXT.md`）。
 
 > ⏳ 時效：本文件初版是 2026-09-22 的快照，2026-09-27 補上工具名稱閘門
-> （§8）與踩雷紀錄。上游無第三方合約，行為隨時會變；
+> （§8）與踩雷紀錄，2026-09-29 補上 pi-ai 0.87 transcript（§9）。上游無第三方合約，行為隨時會變；
 > 若 `scripts/reverify.sh` 出現非預期燈號，先重跑腳本確認，仍異常則按
 > 「方法：MITM 錄封包 + 差分」重驗並更新本文件與 ADR。
 
@@ -64,6 +64,9 @@
   在一個平台上成功，不代表另一個平台也成功。
 - **不要把上游錯誤翻譯成確定的原因。** `FreeTierError ... within OpenCode`
   是上游對多種條件的同一個回應。錯誤指引只能寫「上游拒絕」，不能寫「IP 被閘」或「加 key 即解」。
+- **DSH 升版時，只改 peer 版本號不夠。** 先看 `dsh-llm-pi-ai` 依賴的 pi-ai 版本有沒有變。
+  pi-ai 換了 context 形狀時，插件的改寫會靜默失效（§9）。在舊依賴下測試照樣全綠，
+  要先把依賴裝成新版 DSH 的套件再跑測試，並在 DSH 真正的呼叫路徑（`Models.streamSimple()`）上驗證。
 
 ## 仿冒對照表
 
@@ -88,7 +91,7 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 （[opencode#42500](https://github.com/anomalyco/opencode/issues/42500)），
 `x-opencode-client`/session headers 解不了 UA 這道鎖。
 
-> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.2.0`，Pi 版是
+> ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.2.1`，Pi 版是
 > `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-free`
 > 尾段的請求已匿名 200，所以這個尾段目前可以通過；尚未測試其他尾段字串。
 > 之前寫的「匿名全死、無法差分」是 §8 的誤判，現在可以用重播做 A/B。
@@ -156,9 +159,9 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
 逐字一致（`You are a context summarization agent…` 開頭）。
 
 插件只在「短、獨立、匿名」的壓縮請求上替換，絕不碰對話內容與有 key
-請求：`swapCompactionPrompt()`（我們移植時去掉了 0.86 專屬的 transcript
-分支，只留 0.85.1 的 `{ systemPrompt }` 形狀——DSH 的 `PiAiAdapter`
-餵的就是這個形狀）。
+請求：`swapCompactionPrompt()`。它同時處理舊的 `{ systemPrompt }` 形狀與
+pi-ai 0.87 的 transcript 形狀（提示詞在 system 訊息裡；transcript 分支照抄
+Pi 0.1.7，請求帶工具時不替換）。見 §9。
 
 > ⚠️ 未重驗：2026-09-27 的重播顯示 system prompt 內容不影響閘門（§8）。
 > 「Pi 壓縮提示詞 403」可能其實是壓縮請求不帶 `read`／`bash` 工具造成的。
@@ -239,6 +242,51 @@ Nemotron 3.5 Lightning 當時 10 秒後回 `200`，之後只送 `: keep-alive`�
 - `pwsh` 在 DSH 裡執行 `Get-Date` 曾花 1 分 22 秒，這是 DSH PowerShell 沙盒的耗時，
   不是插件問題；插件在模型回傳工具呼叫時就已完成工作。
 
+### 9. pi-ai 0.87：provider 收到的是 transcript（DSH `0.2.0-rc.2` 起）
+
+DSH `0.2.0-rc.2` 的 `dsh-llm-pi-ai` 把 pi-ai 從 `0.85.1` 升到 `^0.87.1`。
+`PiAiAdapter` 仍組出舊的 `Context`（`systemPrompt` / `messages` / `tools`），
+但它呼叫 `Models.streamSimple()`，而這一層會先 `normalizeContext()`：把
+`systemPrompt` 與 `tools` 摺進開頭的 system 訊息（`toolsAdded`），再交給
+provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messages }`）。
+
+影響：插件原本改 `context.tools` 的閘門對策在 0.87 下完全失效——實測送出的
+請求連呼叫端自己的 `tools` 都不見了（provider 忽略舊欄位），Windows 匿名請求
+會再次 403。只改 peer 版本號不夠，必須改程式碼。
+
+對策（`0.2.1`）：
+
+- `toTranscript()`：入口若看到舊欄位（`systemPrompt`／`tools`）就先
+  `normalizeContext()`；已是 transcript 就原樣通過。DSH 與直接呼叫
+  （`test-live.mjs`、單元測試）因此走同一條路。
+- `applyAnonymousToolGate()` 改用 `getCurrentTools()` 判斷目前工具；
+  改名作用在 system 訊息的 `toolsAdded`／`toolsRemoved`、`toolCall.name`、
+  `toolResult.toolName`；缺的 `read`／`bash` 加進開頭 system 訊息的
+  `toolsAdded`（沒有 system 訊息時用 `createInitialSystemMessage()` 建一個）。
+- `swapCompactionPrompt()` 補 transcript 分支（見 §6）。
+- 單元測試對舊形狀與 `normalizeContext()` 後的形狀各跑一次。
+
+判斷方法：出現「HTTP 403 且工具看起來都有」時，先確認 provider 收到的是
+哪種形狀——`DSH_OPENCODE_FREE_DEBUG=1` 的 `tools=` 數字由 `getCurrentTools()`
+算出；在 fixture `fetch` 裡印 `body.tools` 可直接看到送出的工具。
+
+2026-09-29 DSH `0.2.0-rc.2` 驗證：npm 上的 DSH rc.2 當時裝不起來（依賴
+`@deepseek-ai/dsh-client-ui-settings-account@0.2.0-rc.2` 未發布），改用本機
+`deepseek-harness` 原始碼（`dsh-v0.2.0-rc.2`）。在 scratchpad 建獨立
+`DSH_HOME`，用 `dsh plugin --profile headless add file:<tgz>` 裝打包好的插件，
+以 `--patch` overlay 逐一指定模型跑 headless（無 key）：
+
+- `0.2.0`（peer 釘 rc.1）：DSH 啟動時直接略過插件（peer 版本不符）。
+- `0.2.1`：6 個免費模型正常回覆；`read` + `pwsh` 工具往返完成；請求全部
+  `Bearer public`、`200`，標題請求補上 2 個佔位工具。Ling 3.0 回
+  `400 Upstream request failed: Endpoint is unavailable`，curl 最小請求相同，
+  屬上游問題。
+- web UI 未驗證：harness 的 `build:web` 在本機因 esbuild 無法刪除 `%TEMP%`
+  的大型暫存檔（`Access is denied`，疑似防毒鎖檔）而失敗；headless 走同一條
+  `PiAiAdapter` → 插件路徑。
+- pi-ai 0.87 的內建 `opencode` 目錄把 `mimo-v2.5-free` 換成
+  `mimo-v2.6-flash-free`，插件的免費清單隨之改變（上游兩者當時都還在）。
+
 ## 我們相對 Pi 版的改編（非仿冒部分）
 
 - **DSH 化**：Pi 的 `pi.registerProvider()` → DSH 的
@@ -246,7 +294,9 @@ Nemotron 3.5 Lightning 當時 10 秒後回 `200`，之後只送 `: keep-alive`�
  （`src/index.ts`），profile 欄位抄 `dsh-claude-subscription`。
 - **key 優先順序**：Pi 版是 stored credential → `OPENCODE_API_KEY` →
   匿名；v1 無持久登入，改為 `config.apiKey` → `OPENCODE_API_KEY` → 匿名。
-- **pi-ai 0.85.1**：DSH 鎖版，不用 0.86 的 transcript API（見上 §6）。
+- **pi-ai 版本跟 DSH**：插件的 pi-ai peer 必須和 DSH `dsh-llm-pi-ai` 用的
+  版本一致（DSH `0.2.0-rc.1` 以前是 `0.85.1`，`0.2.0-rc.2` 起是 `^0.87.1`），
+  否則會裝出兩份 pi-ai。0.87 起走 transcript API（見上 §9）。
 
 ## 上游閘門現況（實測 + 第三方佐證）
 

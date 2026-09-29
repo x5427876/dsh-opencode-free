@@ -4,7 +4,7 @@
  *
  * Mirrors `pi-opencode-direct` (same Zen identity, same optional-key
  * priority, same encrypted-content retry, same compaction-prompt swap) but
- * expressed as a DSH bundle for `0.2.0-rc.1`: no OpenCode install, no
+ * expressed as a DSH bundle for `0.2.0-rc.2`: no OpenCode install, no
  * separate server, native pi-ai transports, tools execute through DSH.
  */
 import { LlmError, resolveRetryPolicy } from "@deepseek-ai/dsh-llm";

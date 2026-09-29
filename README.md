@@ -28,7 +28,7 @@ install OpenCode, log in, get an API key, or run a separate server.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.0-rc.1` (exact) |
+| DeepSeek Harness | `0.2.0-rc.2` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each plugin release pins one exact DSH version. Check yours first:
@@ -39,7 +39,8 @@ dsh --version
 
 | Plugin | DSH |
 |---|---|
-| `0.2.x` | `0.2.0-rc.1` |
+| `0.2.1` | `0.2.0-rc.2` |
+| `0.2.0` | `0.2.0-rc.1` |
 | `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
 
 Do not ignore peer dependency warnings.
@@ -49,7 +50,7 @@ Do not ignore peer dependency warnings.
 The examples use the `web` profile. Replace it with your target profile.
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.2.0
+dsh plugin --profile web add dsh-opencode-free@0.2.1
 ```
 
 Check the install:
@@ -78,7 +79,7 @@ under **OpenCode Zen Free**.
 |---|---|---|---|
 | Muse Spark 1.3 Free | `muse-spark-1.3-contributor-free` | text, image | 1M |
 | Muse Spark 1.2 Free | `muse-spark-1.2-contributor-free` | text, image | 1M |
-| MiMo V2.5 Free | `mimo-v2.5-free` | text, image | 200K |
+| MiMo-V2.6-Flash Free | `mimo-v2.6-flash-free` | text, image | 200K |
 | Nemotron 3 Ultra Free | `nemotron-3-ultra-free` | text | 1M |
 | Nemotron 3.5 Lightning Free | `nemotron-3.5-lightning-free` | text | 262K |
 | Ling 3.0 Flash Fin Free | `ling-3.0-flash-fin-free` | text | 262K |
