@@ -117,7 +117,7 @@ export function freeModels(): Model<Api>[] {
  * `zen-provider` does not import `catalog` at runtime (only its type), so
  * reading it the other way round introduces no cycle.
  */
-export const PLUGIN_VERSION = "0.2.1";
+export const PLUGIN_VERSION = "0.3.0";
 
 /** Derived, not written out: a second hardcoded copy is a second thing to forget. */
 export const OPENCODE_USER_AGENT = `opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/${PLUGIN_VERSION}`;
