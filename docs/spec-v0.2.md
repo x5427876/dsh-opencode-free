@@ -63,8 +63,16 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
   DSH 顯示訊息即指引，不另建 UI。
 - Key 設定維持雙路徑：plugin config（Desktop 可用）與環境變數（CLI 可用），
   優先順序不變；config 保持非 volatile（改 key 走 HMR 重載，現已成立）。
-- 目錄維持打包基線＋公開端點交集；不做背景自動刷新（副作用與額度成本），
+- ~~目錄維持打包基線＋公開端點交集~~；不做背景自動刷新（副作用與額度成本），
   新鮮度以重驗腳本①號燈為信號，文件載明。
+  **（已取代）** 「打包基線」改為執行時讀 models.dev 並快取，「公開端點交集」
+  仍保留為 Zen 可用性閘門。見
+  `docs/adr/0002-catalogue-source-of-truth.md`。
+  **「不做背景自動刷新」中的不耗額度一點已被
+  `docs/adr/0002-catalogue-source-of-truth.md` 顯式取代**：目錄同步仍不耗額度
+  （單次條件式 GET models.dev），但模型可見性現在由每日至多一輪、按順序發送
+  的最小探針決定，這一輪確實花匿名額度。取捨與防護（`inconclusive` 絕不改
+  可見性）寫在該 ADR，並在 README 披露。
 - 訊息用語遵守專案 glossary：共用 bucket 稱匿名額度；bypass 性質在 README
   揭露一次為限，不在每次錯誤重複。
 - 尊重 ADR-0001：本版本不動會話 id 方案；匿名行為變化時重審該 ADR。
@@ -82,13 +90,20 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
 ## Out of Scope
 
 - 設定頁／client UI、額度卡片、`/login` 持久登入、OAuth。
-- pi-ai 0.86 transcript 升級（被 DSH peer 鎖版擋住）。
+- ~~pi-ai 0.86 transcript 升級（被 DSH peer 鎖版擋住）~~ **（已取代，2026-09-30）**——
+  DSH `0.2.0-rc.2` 的 peer 已放行，插件已移植到 pi-ai `0.87.1` 的 transcript 模型。
+  見 `docs/reverse-engineering.md` §9。
 - 背景自動刷新目錄、多 key、按模型分流。
+  （背景「定時」刷新目錄仍不做；但每日一輪的可用性探針已由
+  `docs/adr/0002-catalogue-source-of-truth.md` 引入，見上。）
 - 匿名恢復後的自動切回（維持手動，行為可預測）。
 
 ## Further Notes
 
 - 本 repo 尚無 issue tracker（非 git repo、無 `.scratch`），本 spec 暫存於
   `docs/spec-v0.2.md`；tracker 就緒後需發布並掛 `ready-for-agent` 標籤。
+  （2026-09-30 更正：tracker 已就緒——本 repo 是 git repo，也有 `.scratch/`，issue
+  與 spec 都放 `.scratch/<feature>/`，約定見 `docs/agents/issue-tracker.md`。本 spec
+  仍留在 `docs/spec-v0.2.md`：它記錄的是已發布的決策，不隨 issue 搬家。）
 - 整個功能是 bypass 性質：Zen 一改報文用詞，分類映射即漂移；
   重驗腳本是唯一的漂移偵測器。

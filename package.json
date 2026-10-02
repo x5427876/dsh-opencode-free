@@ -18,20 +18,32 @@
       "default": "./lib/index.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./client": "./src/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/*.js",
     "lib/types/**/*.d.ts",
+    "src/client.js",
     "cordis.patch.yml",
     "README.md",
     "README.zh-TW.md",
+    "CHANGELOG.md",
     "AGENTS.md",
     "LICENSE"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
     }
   },
   "scripts": {
@@ -52,9 +64,6 @@
     "free"
   ],
   "license": "MIT",
-  "publishConfig": {
-    "access": "public"
-  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -63,6 +72,14 @@
     "@deepseek-ai/dsh-llm-pi-ai": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.3",
     "@earendil-works/pi-ai": "^0.87.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.6",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh-llm": {
@@ -77,10 +94,5 @@
     "@earendil-works/pi-ai": {
       "optional": true
     }
-  },
-  "devDependencies": {
-    "@types/node": "^24.13.6",
-    "tsx": "^4.23.15",
-    "typescript": "^5.9.3"
   }
 }
