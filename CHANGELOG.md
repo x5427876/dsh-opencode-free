@@ -4,7 +4,7 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-02
 
 The catalogue now follows models.dev, the availability check can be watched as it
 runs, and a panel on the plugin's details page controls which models you see.

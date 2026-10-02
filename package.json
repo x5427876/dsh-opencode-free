@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode-free",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "packageManager": "pnpm@11.19.0",
   "description": "Free OpenCode Zen models in DeepSeek Harness through native HTTP requests. No OpenCode installation, login, API key, server, container, or LiteLLM is required.",
   "repository": {

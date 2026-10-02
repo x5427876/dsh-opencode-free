@@ -41,6 +41,7 @@ dsh --version
 
 | 插件 | DSH |
 |---|---|
+| `0.3.0` | `0.2.0-rc.2` |
 | `0.2.1` | `0.2.0-rc.2` |
 | `0.2.0` | `0.2.0-rc.1` |
 | `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
@@ -53,7 +54,7 @@ dsh --version
 從 npm 安裝這個固定版本：
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.2.1
+dsh plugin --profile web add dsh-opencode-free@0.3.0
 ```
 
 範例使用 `web` profile，請換成你的目標 profile。
