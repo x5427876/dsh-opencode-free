@@ -116,6 +116,13 @@ profile, requested release, installation mode, what changed, cleanup status,
 and what remains unverified. Do not patch DSH, switch to another paid route,
 wipe credentials, delete a profile, or claim success from a partial check.
 
+## Engineering standards
+
+When changing code, reviewing contributions, or preparing a release, read
+[the engineering standards](docs/standards.md) and
+[the evidence-backed gaps](docs/standards-gap.md). Follow the applicable rule IDs;
+report verification limits and keep unrelated gap fixes out of scope.
+
 ## Agent skills
 
 ### Issue tracker

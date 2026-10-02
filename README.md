@@ -365,6 +365,9 @@ key is configured.
 
 ## Development
 
+For contributions and reviews, read the [engineering standards](docs/standards.md)
+and [known gaps](docs/standards-gap.md).
+
 Edit `src/*.ts`. Do not edit `lib/`: `tsc` generates it.
 
 ```sh

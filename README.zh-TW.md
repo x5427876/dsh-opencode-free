@@ -293,6 +293,8 @@ Zen 請求的狀態碼印到 stderr；探測被拒時，還會附上上游報文
 
 ## 開發
 
+貢獻與 review 前，請閱讀[工程標準](docs/standards.md)與[已知差距](docs/standards-gap.md)。
+
 請修改 `src/*.ts`。不要改 `lib/`，它由 `tsc` 產生。
 
 ```sh
