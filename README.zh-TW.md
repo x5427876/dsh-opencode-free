@@ -30,7 +30,7 @@
 
 | 項目 | 版本 |
 |---|---|
-| DeepSeek Harness | `0.2.0-rc.2`（必須完全相同） |
+| DeepSeek Harness | `0.2.1-alpha.1`（必須完全相同） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只對應一個 DSH 版本。請先確認你的版本：
@@ -41,6 +41,7 @@ dsh --version
 
 | 插件 | DSH |
 |---|---|
+| `0.3.1` | `0.2.1-alpha.1` |
 | `0.3.0` | `0.2.0-rc.2` |
 | `0.2.1` | `0.2.0-rc.2` |
 | `0.2.0` | `0.2.0-rc.1` |
@@ -54,7 +55,7 @@ dsh --version
 從 npm 安裝這個固定版本：
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.3.0
+dsh plugin --profile web add dsh-opencode-free@0.3.1
 ```
 
 範例使用 `web` profile，請換成你的目標 profile。

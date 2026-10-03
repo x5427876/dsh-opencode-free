@@ -4,6 +4,20 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-03
+
+Supports DeepSeek Harness `0.2.1-alpha.1`.
+
+### Changed
+
+- **Targets DeepSeek Harness `0.2.1-alpha.1`.** The peer pins move to
+  `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` `0.2.1-alpha.1` and
+  `@deepseek-ai/schemastery` `~3.18.5-alpha.1` (the old `^3.18.3` range excludes
+  that prerelease). The pin stays exact, so `0.2.0-rc.2` is no longer supported
+  by this release; stay on `0.3.0` for it. DSH `0.2.1-alpha.1` keeps `pi-ai`
+  `^0.87.1` and leaves `dsh-llm-pi-ai` unchanged; `dsh-llm` only drops its
+  internal `INVARIANT` error code, so the plugin's behaviour is unchanged.
+
 ## [0.3.0] - 2026-10-02
 
 The catalogue now follows models.dev, the availability check can be watched as it
