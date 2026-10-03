@@ -12,6 +12,11 @@
 > 這是非官方的社群插件，與 OpenCode 和 DeepSeek 無關。插件送出 OpenCode CLI
 > 的身份來使用免 key 的免費層。上游沒有第三方合約，隨時可能失效。
 > 請看〈[運作原理](#運作原理)〉。
+>
+> 和所有 DSH 插件一樣，它以 host 的權限執行；它也會為 Zen 請求包裝整個行程的
+> `fetch` 與 `node:http(s)`（見〈[它在你的行程裡修補什麼](#它在你的行程裡修補什麼)〉）。
+> 安裝第三方插件前，請先讀 DSH 的
+> [安全說明](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)。
 
 ## 功能
 
@@ -315,7 +320,95 @@ pnpm run check      # typecheck、測試、打包
 | `node scripts/test-live.mjs [model-id ...]` | 對每個免費模型（或你列出的模型）送一個極短的匿名請求。它不宣告任何工具，所以 `replied:false` 通常是閘門不給，不是模型沒了——它不是可用性檢查。請先執行 `pnpm run build`。 |
 | `pnpm compat --dsh <版本> [--tools] [--keep] [--out <目錄>]` | 相容性驗證：在暫存的 `DSH_HOME` 安裝該版 DSH 與本 repo 打包的插件，經真實的 headless DSH 逐一驗證 Zen 全部免費模型。退出碼 `0` 全部驗過、`1` 插件端錯誤、`2` 沒驗完（額度受限）、`3` 前置檢查不通過。支援新版 DSH 發版前必跑；不進 CI。見 [`docs/compat-run.md`](docs/compat-run.md)。 |
 
+### 它在你的行程裡修補什麼
+
+`apply()` 會包裝三個行程層級的入口，讓不是插件自己發出的請求也帶上 OpenCode
+身份：
+
+- `globalThis.fetch`
+- `node:http` 與 `node:https` 的 `request` 和 `get`
+
+範圍嚴格限定在 Zen 的 base URL `https://opencode.ai/zen/v1`。其他主機與路徑原封不動，
+參數逐位元組保留。重複載入不會重複包裝（原始函式存放在 `globalThis` 的
+`__dshOpenCodeFree*` 下），插件卸載時會還原。同一個行程裡若有其他擴充也呼叫這個
+base URL，它們的請求同樣會帶上這組身份 header。
+
 安裝或驗證此插件的 Agent，請看 [`AGENTS.md`](AGENTS.md)。
+
+## 模型實際看到的內容（Model Experience）
+
+以下改動只作用在送往 Zen 的匿名請求。帶 Zen key 的請求原樣送到模型。
+
+### Windows 上的 shell 工具名稱
+
+#### 模型看到什麼
+
+請求提供 DSH 的 `pwsh` 工具、但沒有 `bash` 工具時，模型在工具清單與對話中先前的
+每一次工具呼叫和結果裡，看到的都是名為 `bash` 的同一個工具。模型回傳的 `bash`
+呼叫在 DSH 端還原為 `pwsh`。
+
+#### Token 影響
+
+只有名稱不同，描述與參數不變。
+
+#### KV Cache 影響
+
+前綴穩定：每次匿名請求都對整段歷史套用同樣的改名，連續請求共用同一前綴。同一個
+session 在帶 key 與匿名之間切換時，工具名稱改變，快取無法重用。
+
+### 准入用的佔位工具
+
+#### 模型看到什麼
+
+請求缺少名為 `read` 或 `bash` 的工具時（標題、compaction，或沒有這兩個工具的
+profile），每個缺少的工具都會補上一個無參數的定義，描述為：
+
+```markdown
+Unavailable in this request. Do not call.
+```
+
+#### Token 影響
+
+有條件：受影響的請求最多多兩個簡短的工具定義。
+
+#### KV Cache 影響
+
+在工具組合相同時前綴穩定；佔位工具每次都加在相同位置。
+
+### Compaction 提示
+
+#### 模型看到什麼
+
+請求沒有工具、只有一則使用者訊息，且系統提示不超過 2,000 字元並包含
+`context summarization`（host 的 compaction 提示）時，系統提示會換成 OpenCode 的版本：
+
+```markdown
+You are a context summarization agent. You are given a conversation between a user and an agent. Your goal is to produce a structured summary matching the format specified so another coding agent can continue the work.
+Always follow the exact output structure requested by the user prompt. Keep every section, preserve exact file paths and identifiers when known, and prefer terse bullets over paragraphs.
+Do not continue the conversation. Do not respond to any questions in the conversation. Only output the structured summary in the exact format requested by the user prompt. Respond in the same language as the conversation.
+```
+
+裝著對話內容的那則使用者訊息不會被改動。
+
+#### Token 影響
+
+取代：系統提示的 token 變成上面這段文字的 token。
+
+#### KV Cache 影響
+
+獨立：compaction 是一個單獨的模型請求，不和對話共用前綴。
+
+## 已知限制
+
+- **每個版本只支援一個 DSH 版本。** peer 釘選是精確版本；其他 DSH 版本會略過
+  這個插件（見〈[需求](#需求)〉）。
+- **非官方的存取方式。** 免 key 層沒有第三方合約，上游一改就可能在沒有通知的情況下
+  拒絕所有匿名請求。
+- **匿名額度共用。** 同一個出口 IP 後面的所有人共用免費額度，額度用完時看起來
+  可能像模型壞了。掛 Zen key 可避開。
+- **需要 `webServer`。** 插件為詳情頁的路由注入 DSH 的 `webServer`，所以在沒有
+  `webServer` 的 profile（例如內建的 `headless`）裡不會載入。
+- **沒有持久登入。** key 每次請求都從插件設定或 `OPENCODE_API_KEY` 讀取，沒有登入流程。
 
 ## 授權
 

@@ -15,6 +15,12 @@ install OpenCode, log in, get an API key, or run a separate server.
 > DeepSeek. It reaches the keyless free tier by sending the OpenCode CLI
 > identity. The upstream has no third-party contract, so it can stop working at
 > any time. See [How it works](#how-it-works).
+>
+> Like any DSH plugin it runs with the host's privileges; it also wraps the
+> process-wide `fetch` and `node:http(s)` for Zen requests (see
+> [What it patches in your process](#what-it-patches-in-your-process)). Read
+> DSH's [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)
+> before installing third-party plugins.
 
 ## Features
 
@@ -407,6 +413,90 @@ plugin is unloaded. If you run another extension in the same process that talks
 to that base URL, its requests will be given the same identity headers.
 
 For Agents that install or verify this plugin, see [`AGENTS.md`](AGENTS.md).
+
+## Model Experience
+
+Every change below applies only to anonymous requests to Zen. A request that
+carries a Zen key reaches the model unchanged.
+
+### Shell tool name on Windows
+
+#### What the model sees
+
+When the request offers DSH's `pwsh` tool and no `bash` tool, the model sees the
+same tool named `bash`, in the tool list and in every earlier tool call and
+result of the conversation. Calls the model returns as `bash` reach DSH as
+`pwsh`.
+
+#### Token effect
+
+None beyond the name itself: the description and parameters are unchanged.
+
+#### KV Cache effect
+
+Prefix-stable: the rename is applied to the whole history on every anonymous
+request, so consecutive requests share the same prefix. Switching a session
+between a key and anonymous changes the tool name and invalidates reuse.
+
+### Placeholder admission tools
+
+#### What the model sees
+
+When a request lacks a tool named `read` or `bash` (titles, compaction, or a
+profile without those tools), each missing one is added with no parameters and
+the description:
+
+```markdown
+Unavailable in this request. Do not call.
+```
+
+#### Token effect
+
+Conditional: up to two short tool definitions per affected request.
+
+#### KV Cache effect
+
+Prefix-stable for a given tool set; the placeholders are added at the same
+position on every affected request.
+
+### Compaction prompt
+
+#### What the model sees
+
+When a request has no tools and a single user turn, and its system prompt is at
+most 2,000 characters and contains `context summarization` (the host's
+compaction prompt), the system prompt is replaced by OpenCode's:
+
+```markdown
+You are a context summarization agent. You are given a conversation between a user and an agent. Your goal is to produce a structured summary matching the format specified so another coding agent can continue the work.
+Always follow the exact output structure requested by the user prompt. Keep every section, preserve exact file paths and identifiers when known, and prefer terse bullets over paragraphs.
+Do not continue the conversation. Do not respond to any questions in the conversation. Only output the structured summary in the exact format requested by the user prompt. Respond in the same language as the conversation.
+```
+
+The user turn that holds the conversation is not changed.
+
+#### Token effect
+
+Replaced: the system prompt's tokens become those of the text above.
+
+#### KV Cache effect
+
+Independent: a compaction request is its own model request and shares no
+prefix with the chat.
+
+## Known Limitations
+
+- **One DSH version per release.** The peer pins are exact; DSH skips the
+  plugin on any other version (see [Requirements](#requirements)).
+- **Unofficial access.** The keyless tier has no third-party contract; an
+  upstream change can refuse every anonymous request without notice.
+- **Shared anonymous quota.** The free tier is shared by everyone behind the same
+  egress IP, so a dry bucket can look like a broken model. A Zen key avoids it.
+- **`webServer` is required.** The plugin injects DSH's `webServer` for its
+  detail-page routes, so it does not load in a profile without one (for example
+  the built-in `headless` profile).
+- **No stored login.** The key comes from plugin config or `OPENCODE_API_KEY` on
+  every request; there is no sign-in flow.
 
 ## License
 
