@@ -3,6 +3,7 @@
 // flow is testable without DSH, Zen or a clock. CONTEXT.md: this is the
 // compat run, not the plugin's probe.
 
+import { join } from 'node:path'
 import { isFree, thinkingLevelMapFor } from '../lib/catalog.js'
 
 /** A precondition failed: nothing was installed and no request was sent. */
@@ -43,10 +44,11 @@ export async function runCompat(options, deps) {
     const report = {
       header,
       catalogue: { error: describe(error), onlyLive: [], onlyBuiltin: [] },
+      warmup: null,
       models: [],
       unverified: [],
     }
-    return { report, exitCode: 2 }
+    return await finish(report, 2, options, deps)
   }
   const models = live.zenIds
     .filter((id) => live.modelsDev[id] !== undefined && isFree(live.modelsDev[id]))
@@ -107,7 +109,76 @@ export async function runCompat(options, deps) {
     models: results,
     unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
   }
-  return { report, exitCode: warmup.ok ? exitCodeFor(results) : 1 }
+  return await finish(report, warmup.ok ? exitCodeFor(results) : 1, options, deps)
+}
+
+/**
+ * Write the report and hand it back. The JSON always lands in the temp
+ * directory; only an explicit --out puts anything (matrix and JSON) into the
+ * working tree.
+ */
+async function finish(report, exitCode, options, deps) {
+  const full = { ...report, exitCode }
+  const text = renderMatrix(full)
+  const json = `${JSON.stringify(full, null, 2)}\n`
+  const stem = `compat-${full.header.dshVersion}-${full.header.date.slice(0, 10)}`
+  const files = []
+  if (typeof options.out === 'string' && options.out !== '') {
+    files.push(join(options.out, `${stem}.md`))
+    await deps.writeFile(files.at(-1), text)
+    files.push(join(options.out, `${stem}.json`))
+    await deps.writeFile(files.at(-1), json)
+  } else {
+    files.push(join(deps.tmpDir, `${stem}.json`))
+    await deps.writeFile(files.at(-1), json)
+  }
+  return { report: full, exitCode, text, files }
+}
+
+const EXIT_MEANING = {
+  0: 'every model verified, no plugin-fault',
+  1: 'plugin-fault (or the setup/warmup failed): something on the plugin or DSH side needs fixing',
+  2: 'not broken, but not finished: rate-limited or unverified models remain, run again later',
+}
+
+/** The human-readable matrix. Same facts as the JSON, nothing more. */
+export function renderMatrix(report) {
+  const { header } = report
+  const lines = [
+    `# Compat run: DSH ${header.dshVersion} + dsh-opencode-free ${header.pluginVersion}`,
+    '',
+    `- Date: ${header.date}`,
+    `- OS: ${header.os}`,
+    `- Key: ${header.keyed ? 'yes (OPENCODE_API_KEY set; used only for comparison re-runs)' : 'no (anonymous only)'}`,
+    `- Tools (L2): ${header.tools ? 'on' : 'off'}`,
+    `- Path: ${header.path}`,
+    `- Result: exit code ${report.exitCode} — ${EXIT_MEANING[report.exitCode]}`,
+    '',
+  ]
+  if (report.catalogue.error !== null) {
+    lines.push(`Live catalogue unavailable, nothing was verified: ${report.catalogue.error}`, '')
+  } else {
+    lines.push(
+      `- Live only (not in the builtin list): ${report.catalogue.onlyLive.join(', ') || '(none)'}`,
+      `- Builtin only (not in the live list): ${report.catalogue.onlyBuiltin.join(', ') || '(none)'}`,
+    )
+  }
+  if (report.warmup !== null) {
+    lines.push(`- Warmup: ${report.warmup.ok ? 'ok' : `FAILED — ${report.warmup.error}`}`)
+  }
+  lines.push('', '| model | verdict | layer | effort | L0 probe | reason |', '| --- | --- | --- | --- | --- | --- |')
+  for (const model of report.models) {
+    const effort = model.effort ?? model.effortNote
+    const cells = [model.id, model.verdict, model.layer ?? '-', effort, model.l0?.probe ?? '-', model.reason || '-']
+    lines.push(`| ${cells.map(cell).join(' | ')} |`)
+  }
+  lines.push('', `Unverified: ${report.unverified.join(', ') || '(none)'}`, '')
+  return lines.join('\n')
+}
+
+/** A table cell: no pipes or line breaks from upstream text. */
+function cell(value) {
+  return String(value).replaceAll('|', '\\|').replace(/\s*\r?\n\s*/g, ' ')
 }
 
 /**

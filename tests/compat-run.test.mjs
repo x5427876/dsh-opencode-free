@@ -346,3 +346,55 @@ test('a failed setup is reported like a failed warmup', async () => {
   assert.equal(calls.some((c) => c.kind === 'run' || c.kind === 'warmup'), false)
   assert.equal(exitCode, 1)
 })
+
+test('without --out only the JSON is written, and only under the temp directory', async () => {
+  const { deps, writes } = world()
+  const { files } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(writes.length, 1)
+  assert.ok(writes[0].path.replaceAll('\\', '/').startsWith('/tmp/compat-xyz/'))
+  assert.ok(writes[0].path.endsWith('.json'))
+  assert.deepEqual(files, [writes[0].path])
+})
+
+test('--out writes the matrix and the JSON into the given directory', async () => {
+  const { deps, writes } = world()
+  await runCompat({ dsh: PIN, out: 'docs/compat' }, deps)
+  const paths = writes.map((w) => w.path.replaceAll('\\', '/'))
+  assert.equal(paths.filter((p) => p.startsWith('docs/compat/')).length, 2)
+  assert.ok(paths.some((p) => p.startsWith('docs/compat/') && p.endsWith('.md')))
+  assert.ok(paths.some((p) => p.startsWith('docs/compat/') && p.endsWith('.json')))
+})
+
+test('the JSON parses back to the report and the matrix carries the same header and rows', async () => {
+  const ids = ['ok-free', 'down-free', 'a-free', 'b-free', 'c-free', 'late-free']
+  const { deps, writes } = world({
+    zenIds: ids,
+    builtinIds: ids,
+    modelsDev: Object.fromEntries(ids.map((id) => [id, id === 'ok-free' ? free({ reasoning_options: [{ type: 'effort', values: ['low'] }] }) : free()])),
+    replies: {
+      'down-free': [failed('dsh: PROVIDER_ERROR: Endpoint is unavailable')],
+      'a-free': [RATE_LIMITED],
+      'b-free': [RATE_LIMITED],
+      'c-free': [RATE_LIMITED],
+    },
+  })
+  const { report, text } = await runCompat({ dsh: PIN, out: 'out' }, deps)
+  const json = JSON.parse(writes.find((w) => w.path.endsWith('.json')).text)
+  assert.deepEqual(json, report)
+  const md = writes.find((w) => w.path.endsWith('.md')).text
+  assert.equal(md, text)
+  for (const value of [PIN, '9.9.9', '2026-10-03T00:00:00.000Z', 'linux 6.0 x64', report.header.path]) {
+    assert.ok(md.includes(value), `matrix is missing ${value}`)
+  }
+  assert.match(md, /key: no/i)
+  for (const model of report.models) {
+    const row = md.split('\n').find((line) => line.startsWith(`| ${model.id} |`))
+    assert.ok(row, `no matrix row for ${model.id}`)
+    assert.ok(row.includes(model.verdict))
+    if (model.layer !== null) assert.ok(row.includes(model.layer))
+    if (model.reason !== '') assert.ok(row.includes(model.reason.slice(0, 20)))
+  }
+  assert.match(md.split('\n').find((line) => line.startsWith('| ok-free |')), /\| low \|/)
+  assert.match(md, /Unverified: late-free/)
+  assert.match(md, /exit code 2/i)
+})
