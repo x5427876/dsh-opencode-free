@@ -1,4 +1,4 @@
-Status: open
+Status: resolved
 Labels: ready-for-agent
 Blocked by: 01, 02, 04
 
@@ -29,3 +29,16 @@ Spec: `../spec.md`
 - [ ] 跨平台不依賴 bash 或 cygpath
 - [ ] 實機對一個模型跑出的結果（或被 429 擋下的紀錄）已記入本票的 `## Answer`
 - [ ] 失敗時的錯誤訊息不含 key 或請求內容
+
+## Answer
+
+`scripts/compat-run.mjs`（`pnpm compat --dsh <版本> [--tools] [--keep] [--out <dir>]`）接上真實依賴：Zen `/models` 與 models.dev（重用外掛的 `fetchZenModelIds`、`fetchSection`）、隔離 DSH 驅動器、真實計時。只用 `child_process.spawn` 呼叫 `node` 與 pnpm（經 `npm_execpath`），不經 shell，不依賴 bash 或 cygpath。前置檢查失敗（缺 `--dsh`、peer 不符、參數錯）以退出碼 3 結束，不安裝也不送請求。
+
+2026-10-03 實機（Windows 11、Node v24.13.0、DSH `0.2.1-alpha.1`、外掛 `0.3.1` 由目前 repo `pnpm pack`、匿名）：
+
+- 前置檢查：`pnpm compat` 與 `pnpm compat --dsh 0.2.0-rc.2` 都以 3 結束，系統暫存目錄沒有建立任何 `dsh-compat-*`。
+- 第一次完整執行：models.dev 暫時連不上（`fetch failed`；直接重試正常），流程停下並回報、以 2 結束，沒有退回內建清單。
+- 第二次：暖機正常；Zen 順序前 3 個模型（big-pickle、deepseek-v4-flash-free、muse-spark-1.3）退避 30s/60s 後仍 429，連續 429 規則中止，其餘 10 個標未驗證，退出 2。當時暖機剛看到另外 5 個模型正常回覆。因此加上「暖機回答 ok 的模型先驗」（spec 已同步，有測試）。
+- 第三次（13:38Z）：**退出碼 0**。11 個 `ok`（L1）；`deepseek-v4-flash-free` 為 `upstream-down`（`400 … Model is unavailable`）、`ling-3.0-flash-fin-free` 為 `upstream-down`（`Endpoint is unavailable`）；沒有 `plugin-fault`、沒有未驗證。暖機中標 429 的 8 個模型，間隔 3 秒逐一送出時都正常回覆。
+- 隔離：DSH 與外掛裝在 `%TEMP%\dsh-compat-*`，結束後已刪除（只留 `%TEMP%\dsh-compat-reports\` 的 JSON）；`~/.dsh` 在執行期間沒有任何檔案變動；沒有啟停既有 DSH。webServer 綁 `127.0.0.1`、埠由 OS 指派。
+- 錯誤訊息只含 stderr 的 `dsh: CODE: …` 行或步驟名稱與退出碼；key 由核心在分類前替換掉（#07 測試）。匿名請求的子進程環境會移除 `OPENCODE_API_KEY`。

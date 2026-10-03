@@ -69,9 +69,16 @@ export async function runCompat(options, deps) {
   let warmup
   try {
     warmup = await warmUp(deps)
+    // Measured 2026-10-03: the first three models in Zen's order stayed 429
+    // while the round had just seen five others answer, so the streak rule
+    // ended the run before asking any of those five. Models that answered go
+    // first, which spends what quota is left where an answer is likely. The
+    // streak rule still applies to the rest.
+    const answered = (model) => warmup.probe[model.id]?.status === 'ok'
+    const ordered = [...models.filter(answered), ...models.filter((model) => !answered(model))]
     let streak = 0
     let asked = false
-    for (const { id, effort } of models) {
+    for (const { id, effort } of ordered) {
       const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '', keyed: null, tools: null }
       if (!warmup.ok) {
         results.push({ ...base, verdict: 'unverified', layer: null, reason: 'not run: the warmup failed', l0: null })
@@ -349,6 +356,8 @@ const VERIFICATION_PATH =
 
 /** One headless run's output -> one verdict. Only the run's own words are read. */
 function classify(output) {
+  // A hang is the stream never ending, which is the plugin/DSH side's to explain.
+  if (output.timedOut === true) return { verdict: 'plugin-fault', reason: 'no answer within the driver timeout' }
   if (output.exitCode === 0 && output.stdout.trim() !== '') return { verdict: 'ok', reason: '' }
   const line = errorLine(output.stderr)
   if (output.exitCode === 0) return { verdict: 'plugin-fault', reason: 'empty reply' }

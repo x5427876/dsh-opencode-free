@@ -550,3 +550,36 @@ test('the matrix shows each tool step on its own', async () => {
   assert.match(text.split('\n').find((l) => l.startsWith('| alpha-free |')), /read pass, bash FAIL/)
   assert.match(text.split('\n').find((l) => l.startsWith('| beta-free |')), /read pass, bash pass/)
 })
+
+test('a run the driver had to kill for hanging is a plugin-fault that says so', async () => {
+  const { deps } = world({ replies: { 'alpha-free': [{ stdout: '', stderr: '', exitCode: null, timedOut: true }] } })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.models[0].verdict, 'plugin-fault')
+  assert.match(report.models[0].reason, /no answer within the driver timeout/)
+})
+
+test('models the warmup round saw answer are asked first, so a run of 429s cannot hide them', async () => {
+  const ids = ['a-free', 'b-free', 'c-free', 'd-free', 'e-free']
+  const limited = failed('dsh: RATE_LIMIT: 免費額度用完。（上游 HTTP 429）')
+  const { deps, runs } = world({
+    zenIds: ids,
+    builtinIds: ids,
+    replies: { 'a-free': [limited], 'b-free': [limited], 'c-free': [limited] },
+  })
+  const quota = { status: 'failed', code: 'quota-exhausted', http: 429, ms: 200 }
+  deps.driver.warmup = async () => ({
+    visible: ids,
+    probe: {
+      results: { 'a-free': quota, 'b-free': quota, 'c-free': quota, 'd-free': { status: 'ok', ms: 1 }, 'e-free': { status: 'ok', ms: 1 } },
+    },
+  })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual([...new Set(runs().map((r) => r.model))], ['d-free', 'e-free', 'a-free', 'b-free', 'c-free'])
+  assert.deepEqual(report.models.map((m) => [m.id, m.verdict]), [
+    ['d-free', 'ok'],
+    ['e-free', 'ok'],
+    ['a-free', 'rate-limited'],
+    ['b-free', 'rate-limited'],
+    ['c-free', 'rate-limited'],
+  ])
+})

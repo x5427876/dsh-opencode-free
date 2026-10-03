@@ -52,7 +52,8 @@
     "pretest": "pnpm run build",
     "prepack": "pnpm run build",
     "test": "tsx --test tests/*.test.mjs",
-    "check": "pnpm run typecheck && pnpm run test && pnpm pack --pack-destination .artifacts"
+    "check": "pnpm run typecheck && pnpm run test && pnpm pack --pack-destination .artifacts",
+    "compat": "pnpm run build && node scripts/compat-run.mjs"
   },
   "keywords": [
     "dsh-plugin",
