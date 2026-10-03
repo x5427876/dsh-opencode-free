@@ -60,18 +60,41 @@ export async function runCompat(options, deps) {
   }
 
   const results = []
-  await deps.driver.setup()
+  let warmup
   try {
+    warmup = await warmUp(deps)
     let streak = 0
-    for (const [index, { id, effort }] of models.entries()) {
+    let asked = false
+    for (const { id, effort } of models) {
       const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '' }
-      if (streak >= RATE_LIMIT_STREAK) {
-        results.push({ ...base, verdict: 'unverified', layer: null, reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
+      if (!warmup.ok) {
+        results.push({ ...base, verdict: 'unverified', layer: null, reason: 'not run: the warmup failed', l0: null })
         continue
       }
-      if (index > 0) await deps.sleep(MODEL_SPACING_MS)
+      const l0 = { inPicker: warmup.visible.includes(id), probe: probeRow(warmup.probe[id]) }
+      if (!l0.inPicker) {
+        // Zen lists it but the picker does not offer it. The plugin drops a
+        // model only on a `dead` probe verdict, which upstream has to earn.
+        const dead = warmup.probe[id]?.code === 'dead'
+        results.push({
+          ...base,
+          l0,
+          verdict: dead ? 'upstream-down' : 'plugin-fault',
+          layer: null,
+          reason: dead
+            ? `warmup probe judged it dead: ${l0.probe}`
+            : 'listed by Zen and free on models.dev, but missing from the DSH picker',
+        })
+        continue
+      }
+      if (streak >= RATE_LIMIT_STREAK) {
+        results.push({ ...base, l0, verdict: 'unverified', layer: 'L0', reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
+        continue
+      }
+      if (asked) await deps.sleep(MODEL_SPACING_MS)
+      asked = true
       const verdict = await attempt(deps, { model: id, effort, task: L1_TASK })
-      results.push({ ...base, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : null, reason: verdict.reason })
+      results.push({ ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason })
       streak = verdict.verdict === 'rate-limited' ? streak + 1 : 0
     }
   } finally {
@@ -80,10 +103,38 @@ export async function runCompat(options, deps) {
   const report = {
     header,
     catalogue,
+    warmup: { ok: warmup.ok, error: warmup.error, visible: warmup.visible },
     models: results,
     unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
   }
-  return { report, exitCode: exitCodeFor(results) }
+  return { report, exitCode: warmup.ok ? exitCodeFor(results) : 1 }
+}
+
+/**
+ * Install, then let the plugin's own probe round run exactly once. Its result
+ * is the L0 data, and because the plugin records the round, the per-model
+ * processes that follow do not start another one (one round per local day).
+ * A failure here is never a quiet pass: nothing is verified and the run fails.
+ */
+async function warmUp(deps) {
+  try {
+    await deps.driver.setup()
+  } catch (error) {
+    return { ok: false, error: `setup: ${describe(error)}`, visible: [], probe: {} }
+  }
+  try {
+    const round = await deps.driver.warmup()
+    return { ok: true, error: null, visible: [...round.visible], probe: { ...round.probe?.results } }
+  } catch (error) {
+    return { ok: false, error: `warmup: ${describe(error)}`, visible: [], probe: {} }
+  }
+}
+
+/** One probe-round row (the plugin's panel shape) as report text. */
+function probeRow(row) {
+  if (row === undefined) return 'not probed'
+  if (row.status === 'ok') return 'ok'
+  return `failed: ${row.code ?? 'unknown'}${row.http ? ` (HTTP ${row.http})` : ''}`
 }
 
 const L1_TASK = 'Reply with OK only.'

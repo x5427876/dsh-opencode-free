@@ -143,7 +143,7 @@ for (const [label, output, verdict] of [
     const { report } = await runCompat({ dsh: PIN }, deps)
     const alpha = report.models.find((m) => m.id === 'alpha-free')
     assert.equal(alpha.verdict, verdict)
-    assert.equal(alpha.layer, null)
+    assert.equal(alpha.layer, 'L0')
     assert.notEqual(alpha.reason, '')
   })
 }
@@ -274,4 +274,75 @@ test('a live catalogue that cannot be fetched stops the run and says so instead 
   assert.deepEqual(report.models, [])
   assert.deepEqual(calls, [])
   assert.equal(exitCode, 2)
+})
+
+test('the warmup runs once, before any model, and no model run repeats it', async () => {
+  const ids = ['a-free', 'b-free', 'c-free']
+  const { deps, calls } = world({ zenIds: ids, builtinIds: ids })
+  await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(calls.map((c) => (c.kind === 'run' ? `run:${c.model}` : c.kind)), [
+    'setup',
+    'warmup',
+    'run:a-free',
+    'run:b-free',
+    'run:c-free',
+    'dispose',
+  ])
+})
+
+test('the warmup round becomes each model\'s L0', async () => {
+  const { deps } = world()
+  deps.driver.warmup = async () => ({
+    visible: ['alpha-free', 'beta-free'],
+    probe: { results: { 'alpha-free': { status: 'ok', ms: 900 }, 'beta-free': { status: 'failed', code: 'quota-exhausted', http: 429, ms: 200 } } },
+  })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.warmup.ok, true)
+  assert.deepEqual(report.models.map((m) => [m.id, m.l0.inPicker, m.l0.probe]), [
+    ['alpha-free', true, 'ok'],
+    ['beta-free', true, 'failed: quota-exhausted (HTTP 429)'],
+  ])
+})
+
+test('a live model missing from the picker fails L0 and is not asked; a probe-dead one is upstream-down', async () => {
+  const ids = ['shown-free', 'dead-free', 'lost-free']
+  const { deps, runs } = world({ zenIds: ids, builtinIds: ids })
+  deps.driver.warmup = async () => ({
+    visible: ['shown-free'],
+    probe: { results: { 'dead-free': { status: 'failed', code: 'dead', http: 404, ms: 300 } } },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => [m.id, m.verdict, m.layer, m.l0.inPicker]), [
+    ['shown-free', 'ok', 'L1', true],
+    ['dead-free', 'upstream-down', null, false],
+    ['lost-free', 'plugin-fault', null, false],
+  ])
+  assert.deepEqual(runs().map((r) => r.model), ['shown-free'])
+  assert.equal(exitCode, 1)
+})
+
+test('a failed warmup is reported, verifies nothing and fails the run', async () => {
+  const { deps, runs, calls } = world()
+  deps.driver.warmup = async () => {
+    throw new Error('catalogue route never answered within 60s')
+  }
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.warmup.ok, false)
+  assert.match(report.warmup.error, /never answered/)
+  assert.deepEqual(report.models.map((m) => m.verdict), ['unverified', 'unverified'])
+  assert.equal(runs().length, 0)
+  assert.equal(calls.at(-1).kind, 'dispose')
+  assert.equal(exitCode, 1)
+})
+
+test('a failed setup is reported like a failed warmup', async () => {
+  const { deps, calls } = world()
+  deps.driver.setup = async () => {
+    throw new Error('pnpm add exited with code 1')
+  }
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.warmup.ok, false)
+  assert.match(report.warmup.error, /^setup: pnpm add/)
+  assert.equal(calls.some((c) => c.kind === 'run' || c.kind === 'warmup'), false)
+  assert.equal(exitCode, 1)
 })
