@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { runCompat } from '../scripts/compat-core.mjs'
 
@@ -459,4 +460,93 @@ test('the key never reaches the report, the JSON or the matrix, even when upstre
   assert.equal(everything.includes(FAKE_KEY), false)
   assert.equal(everything.includes(FAKE_KEY.slice(0, 12)), false)
   assert.equal(report.models.find((m) => m.id === 'gated-free').keyed.verdict, 'gate-refused')
+})
+
+/** A model that really uses its tools: it reads the nonce file and runs the hash command. */
+function toolUser({ read = true, shell = true } = {}) {
+  return (request) => {
+    const files = request.files ?? {}
+    if (files['compat-read.txt'] !== undefined) return ok(read ? `${files['compat-read.txt']}\n` : 'I read it: 0000\n')
+    if (files['compat-shell.txt'] !== undefined) {
+      const hash = createHash('sha256').update(files['compat-shell.txt']).digest('hex').slice(0, 16).toUpperCase()
+      return ok(shell ? `${hash}\n` : 'DEADBEEFDEADBEEF\n')
+    }
+    return ok()
+  }
+}
+
+test('without --tools no tool round-trip is run', async () => {
+  const { deps, runs } = world()
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(runs().some((r) => r.files !== undefined), false)
+  assert.equal(report.models.every((m) => m.tools === null), true)
+})
+
+test('--tools passes L2 only when the read and shell replies carry this run\'s nonce', async () => {
+  const { deps, runs } = world({ replies: { 'alpha-free': [toolUser()], 'beta-free': [toolUser()] } })
+  const { report, exitCode } = await runCompat({ dsh: PIN, tools: true }, deps)
+  assert.equal(report.header.tools, true)
+  assert.deepEqual(report.models.map((m) => [m.id, m.verdict, m.layer, m.tools.read.pass, m.tools.shell.pass]), [
+    ['alpha-free', 'ok', 'L2', true, true],
+    ['beta-free', 'ok', 'L2', true, true],
+  ])
+  const nonces = runs().flatMap((r) => Object.values(r.files ?? {}))
+  assert.equal(new Set(nonces).size, nonces.length, 'every step gets its own nonce')
+  assert.equal(exitCode, 0)
+})
+
+test('a made-up answer does not pass, and the report names the step that failed', async () => {
+  const { deps } = world({
+    replies: { 'alpha-free': [toolUser({ read: false })], 'beta-free': [toolUser({ shell: false })] },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN, tools: true }, deps)
+  const [alpha, beta] = report.models
+  assert.deepEqual([alpha.verdict, alpha.layer, alpha.tools.read.pass, alpha.tools.shell.pass], ['plugin-fault', 'L1', false, true])
+  assert.match(alpha.reason, /^read step/)
+  assert.deepEqual([beta.verdict, beta.layer, beta.tools.read.pass, beta.tools.shell.pass], ['plugin-fault', 'L1', true, false])
+  assert.match(beta.reason, /^shell step \(bash\)/)
+  assert.equal(exitCode, 1)
+})
+
+test('nonces differ between runs', async () => {
+  const first = world({ replies: { 'alpha-free': [toolUser()], 'beta-free': [toolUser()] } })
+  const second = world({ replies: { 'alpha-free': [toolUser()], 'beta-free': [toolUser()] } })
+  await runCompat({ dsh: PIN, tools: true }, first.deps)
+  await runCompat({ dsh: PIN, tools: true }, second.deps)
+  const nonces = (w) => w.runs().flatMap((r) => Object.values(r.files ?? {}))
+  assert.equal(nonces(first).some((n) => nonces(second).includes(n)), false)
+})
+
+test('the shell step asks for pwsh on Windows and bash elsewhere', async () => {
+  for (const [platform, tool, command] of [
+    ['win32', 'pwsh', /Get-FileHash/],
+    ['darwin', 'bash', /sha256sum|shasum/],
+  ]) {
+    const { deps, runs } = world({ replies: { 'alpha-free': [toolUser()], 'beta-free': [toolUser()] } })
+    deps.platform = platform
+    const { report } = await runCompat({ dsh: PIN, tools: true }, deps)
+    const shellRun = runs().find((r) => r.files?.['compat-shell.txt'] !== undefined)
+    assert.match(shellRun.task, new RegExp(`\\b${tool}\\b`))
+    assert.match(shellRun.task, command)
+    assert.equal(shellRun.task.includes(shellRun.files['compat-shell.txt']), false, 'the nonce is never in the prompt')
+    assert.equal(report.models[0].tools.shell.tool, tool)
+  }
+})
+
+test('a tool step that stays 429 is rate-limited, not a plugin-fault', async () => {
+  const limitedShell = (request) =>
+    request.files?.['compat-shell.txt'] !== undefined ? RATE_LIMITED : toolUser()(request)
+  const { deps, sleeps } = world({ replies: { 'alpha-free': [limitedShell], 'beta-free': [toolUser()] } })
+  const { report, exitCode } = await runCompat({ dsh: PIN, tools: true }, deps)
+  const alpha = report.models[0]
+  assert.deepEqual([alpha.verdict, alpha.layer, alpha.tools.read.pass, alpha.tools.shell.pass], ['rate-limited', 'L1', true, false])
+  assert.ok(sleeps.includes(30_000) && sleeps.includes(60_000))
+  assert.equal(exitCode, 2)
+})
+
+test('the matrix shows each tool step on its own', async () => {
+  const { deps } = world({ replies: { 'alpha-free': [toolUser({ shell: false })], 'beta-free': [toolUser()] } })
+  const { text } = await runCompat({ dsh: PIN, tools: true }, deps)
+  assert.match(text.split('\n').find((l) => l.startsWith('| alpha-free |')), /read pass, bash FAIL/)
+  assert.match(text.split('\n').find((l) => l.startsWith('| beta-free |')), /read pass, bash pass/)
 })

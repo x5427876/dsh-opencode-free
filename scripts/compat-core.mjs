@@ -3,6 +3,7 @@
 // flow is testable without DSH, Zen or a clock. CONTEXT.md: this is the
 // compat run, not the plugin's probe.
 
+import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import { isFree, thinkingLevelMapFor } from '../lib/catalog.js'
 
@@ -71,7 +72,7 @@ export async function runCompat(options, deps) {
     let streak = 0
     let asked = false
     for (const { id, effort } of models) {
-      const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '', keyed: null }
+      const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '', keyed: null, tools: null }
       if (!warmup.ok) {
         results.push({ ...base, verdict: 'unverified', layer: null, reason: 'not run: the warmup failed', l0: null })
         continue
@@ -106,8 +107,10 @@ export async function runCompat(options, deps) {
         key !== undefined && (verdict.verdict === 'rate-limited' || verdict.verdict === 'gate-refused')
           ? classify(await ask({ model: id, effort, task: L1_TASK, apiKey: key }))
           : null
-      results.push({ ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason, keyed })
-      streak = verdict.verdict === 'rate-limited' ? streak + 1 : 0
+      let result = { ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason, keyed, tools: null }
+      if (options.tools === true && verdict.verdict === 'ok') result = { ...result, ...(await toolRoundTrip(ask, deps, { model: id, effort })) }
+      results.push(result)
+      streak = result.verdict === 'rate-limited' ? streak + 1 : 0
     }
   } finally {
     await deps.driver.dispose()
@@ -176,11 +179,17 @@ export function renderMatrix(report) {
   if (report.warmup !== null) {
     lines.push(`- Warmup: ${report.warmup.ok ? 'ok' : `FAILED — ${report.warmup.error}`}`)
   }
-  lines.push('', '| model | verdict | layer | effort | L0 probe | with key | reason |', '| --- | --- | --- | --- | --- | --- | --- |')
+  lines.push(
+    '',
+    '| model | verdict | layer | effort | L0 probe | L2 tools | with key | reason |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- |',
+  )
   for (const model of report.models) {
     const effort = model.effort ?? model.effortNote
     const keyed = model.keyed === null ? '-' : model.keyed.reason ? `${model.keyed.verdict}: ${model.keyed.reason}` : model.keyed.verdict
-    const cells = [model.id, model.verdict, model.layer ?? '-', effort, model.l0?.probe ?? '-', keyed, model.reason || '-']
+    const step = (name, result) => `${name} ${result.pass ? 'pass' : 'FAIL'}`
+    const tools = model.tools === null ? '-' : `${step('read', model.tools.read)}, ${step(model.tools.shell.tool, model.tools.shell)}`
+    const cells = [model.id, model.verdict, model.layer ?? '-', effort, model.l0?.probe ?? '-', tools, keyed, model.reason || '-']
     lines.push(`| ${cells.map(cell).join(' | ')} |`)
   }
   lines.push('', `Unverified: ${report.unverified.join(', ') || '(none)'}`, '')
@@ -244,15 +253,75 @@ const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]
 /** This many rate-limited models in a row means the bucket is dry: stop spending. */
 const RATE_LIMIT_STREAK = 3
 
-/** One request with the 429 back-off applied; returns the final verdict. */
+/** One request with the 429 back-off applied; returns the final verdict and reply. */
 async function attempt(ask, sleep, request) {
-  let verdict = classify(await ask(request))
+  const once = async () => {
+    const output = await ask(request)
+    return { ...classify(output), stdout: output.stdout }
+  }
+  let verdict = await once()
   for (const wait of RATE_LIMIT_BACKOFF_MS) {
     if (verdict.verdict !== 'rate-limited') break
     await sleep(wait)
-    verdict = classify(await ask(request))
+    verdict = await once()
   }
   return verdict
+}
+
+const READ_FILE = 'compat-read.txt'
+const SHELL_FILE = 'compat-shell.txt'
+const READ_TASK = `Use the read tool to read the file ${READ_FILE} in the working directory, then reply with its exact contents only.`
+/**
+ * The shell step prints a hash of a nonce file, never the nonce itself: a
+ * nonce written into the prompt could be echoed without running anything.
+ */
+const SHELL_COMMANDS = {
+  pwsh: `(Get-FileHash -Algorithm SHA256 ${SHELL_FILE}).Hash.Substring(0,16)`,
+  bash: `sha256sum ${SHELL_FILE} | cut -c1-16`,
+  // macOS ships shasum, not sha256sum.
+  darwin: `shasum -a 256 ${SHELL_FILE} | cut -c1-16`,
+}
+
+/**
+ * L2: a `read` step and a shell step, judged separately so the report can say
+ * which one broke (file reading, or the shell tool-name mapping). Windows DSH
+ * only has `pwsh`, elsewhere `bash`. A step that stays 429 is rate-limited;
+ * any other miss is a plugin-fault.
+ */
+async function toolRoundTrip(ask, deps, base) {
+  const tool = deps.platform === 'win32' ? 'pwsh' : 'bash'
+  const command = deps.platform === 'darwin' ? SHELL_COMMANDS.darwin : SHELL_COMMANDS[tool]
+  const readNonce = nonce()
+  await deps.sleep(MODEL_SPACING_MS)
+  const read = await toolStep(ask, deps.sleep, { ...base, task: READ_TASK, files: { [READ_FILE]: readNonce } }, readNonce)
+  const shellNonce = nonce()
+  const expected = createHash('sha256').update(shellNonce).digest('hex').slice(0, 16)
+  const task = `Use the ${tool} tool to run this exact command, then reply with its output only: ${command}`
+  await deps.sleep(MODEL_SPACING_MS)
+  const shell = { tool, ...(await toolStep(ask, deps.sleep, { ...base, task, files: { [SHELL_FILE]: shellNonce } }, expected)) }
+  const tools = { read, shell }
+  if (read.pass && shell.pass) return { tools, verdict: 'ok', layer: 'L2', reason: '' }
+  const failures = [
+    ...(read.pass ? [] : [{ step: 'read step', ...read }]),
+    ...(shell.pass ? [] : [{ step: `shell step (${tool})`, ...shell }]),
+  ]
+  const verdict = failures.some((failure) => failure.verdict === 'plugin-fault') ? 'plugin-fault' : 'rate-limited'
+  const reason = failures.map((failure) => `${failure.step}: ${failure.reason}`).join('; ')
+  return { tools, verdict, layer: 'L1', reason }
+}
+
+async function toolStep(ask, sleep, request, expected) {
+  const result = await attempt(ask, sleep, request)
+  if (result.verdict === 'rate-limited') return { pass: false, verdict: 'rate-limited', reason: result.reason }
+  if (result.verdict !== 'ok') return { pass: false, verdict: 'plugin-fault', reason: result.reason }
+  if (!result.stdout.toLowerCase().includes(expected.toLowerCase())) {
+    return { pass: false, verdict: 'plugin-fault', reason: 'the reply did not contain this run\'s nonce' }
+  }
+  return { pass: true, verdict: 'ok', reason: '' }
+}
+
+function nonce() {
+  return randomBytes(8).toString('hex')
 }
 
 /**
