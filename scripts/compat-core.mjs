@@ -3,7 +3,7 @@
 // flow is testable without DSH, Zen or a clock. CONTEXT.md: this is the
 // compat run, not the plugin's probe.
 
-import { isFree } from '../lib/catalog.js'
+import { isFree, thinkingLevelMapFor } from '../lib/catalog.js'
 
 /** A precondition failed: nothing was installed and no request was sent. */
 export class CompatPreconditionError extends Error {}
@@ -34,21 +34,44 @@ export async function runCompat(options, deps) {
     tools: options.tools === true,
     path: VERIFICATION_PATH,
   }
-  const live = await deps.catalogue()
-  const models = live.zenIds.filter((id) => live.modelsDev[id] !== undefined && isFree(live.modelsDev[id]))
+  let live
+  try {
+    live = await deps.catalogue()
+  } catch (error) {
+    // No silent fallback to the builtin list: that would verify yesterday's
+    // models and call it today's answer. Nothing ran, so the run is unfinished.
+    const report = {
+      header,
+      catalogue: { error: describe(error), onlyLive: [], onlyBuiltin: [] },
+      models: [],
+      unverified: [],
+    }
+    return { report, exitCode: 2 }
+  }
+  const models = live.zenIds
+    .filter((id) => live.modelsDev[id] !== undefined && isFree(live.modelsDev[id]))
+    .map((id) => ({ id, effort: lowestEffort(live.modelsDev[id]) }))
+  const liveIds = new Set(models.map((model) => model.id))
+  const builtinIds = new Set(live.builtinIds)
+  const catalogue = {
+    error: null,
+    onlyLive: models.map((model) => model.id).filter((id) => !builtinIds.has(id)),
+    onlyBuiltin: live.builtinIds.filter((id) => !liveIds.has(id)),
+  }
 
   const results = []
   await deps.driver.setup()
   try {
     let streak = 0
-    for (const [index, id] of models.entries()) {
+    for (const [index, { id, effort }] of models.entries()) {
+      const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '' }
       if (streak >= RATE_LIMIT_STREAK) {
-        results.push({ id, verdict: 'unverified', layer: null, reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
+        results.push({ ...base, verdict: 'unverified', layer: null, reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
         continue
       }
       if (index > 0) await deps.sleep(MODEL_SPACING_MS)
-      const verdict = await attempt(deps, { model: id, task: L1_TASK })
-      results.push({ id, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : null, reason: verdict.reason })
+      const verdict = await attempt(deps, { model: id, effort, task: L1_TASK })
+      results.push({ ...base, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : null, reason: verdict.reason })
       streak = verdict.verdict === 'rate-limited' ? streak + 1 : 0
     }
   } finally {
@@ -56,6 +79,7 @@ export async function runCompat(options, deps) {
   }
   const report = {
     header,
+    catalogue,
     models: results,
     unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
   }
@@ -63,6 +87,24 @@ export async function runCompat(options, deps) {
 }
 
 const L1_TASK = 'Reply with OK only.'
+const NO_LEVELS = 'no published levels (無等級可選)'
+/** Lowest first; `off` is not a level, it sends no reasoning at all. */
+const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * The lowest effort models.dev publishes for this model, read through the
+ * plugin's own mapping so the run asks for exactly what the picker offers.
+ * `undefined` for a toggle model or one with no list: the default is used.
+ */
+function lowestEffort(record) {
+  const map = thinkingLevelMapFor(record)
+  if (map === undefined) return undefined
+  return EFFORT_ORDER.find((level) => typeof map[level] === 'string')
+}
+
+function describe(error) {
+  return error instanceof Error ? error.message : String(error)
+}
 const MODEL_SPACING_MS = 3_000
 /** Waits before each retry of a 429; one retry per entry. */
 const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]

@@ -222,3 +222,56 @@ test('a plugin-fault outranks an unfinished run: exit 1, not 2', async () => {
   assert.deepEqual(report.models.map((m) => m.verdict), ['rate-limited', 'plugin-fault'])
   assert.equal(exitCode, 1)
 })
+
+test('the models verified are Zen\'s list intersected with what models.dev calls free', async () => {
+  const { deps, runs } = world({
+    zenIds: ['alpha-free', 'paid-model', 'zen-only-free', 'new-free'],
+    modelsDev: {
+      'alpha-free': free(),
+      'paid-model': { cost: { input: 1, output: 2 } },
+      'new-free': free(),
+      'md-only-free': free(),
+    },
+    builtinIds: ['alpha-free', 'retired-free'],
+  })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => m.id), ['alpha-free', 'new-free'])
+  assert.deepEqual([...new Set(runs().map((r) => r.model))], ['alpha-free', 'new-free'])
+  assert.deepEqual(report.catalogue.onlyLive, ['new-free'])
+  assert.deepEqual(report.catalogue.onlyBuiltin, ['retired-free'])
+})
+
+test('each model is asked at its lowest published effort; a model without levels uses the default and says so', async () => {
+  const { deps, runs } = world({
+    zenIds: ['effort-free', 'toggle-free', 'bare-free'],
+    modelsDev: {
+      'effort-free': free({ reasoning_options: [{ type: 'effort', values: ['high', 'low', 'max'] }] }),
+      'toggle-free': free({ reasoning_options: [{ type: 'toggle' }] }),
+      'bare-free': free(),
+    },
+    builtinIds: [],
+  })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(runs().map((r) => [r.model, r.effort]), [
+    ['effort-free', 'low'],
+    ['toggle-free', undefined],
+    ['bare-free', undefined],
+  ])
+  assert.deepEqual(report.models.map((m) => [m.id, m.effort, m.effortNote]), [
+    ['effort-free', 'low', ''],
+    ['toggle-free', null, 'no published levels (無等級可選)'],
+    ['bare-free', null, 'no published levels (無等級可選)'],
+  ])
+})
+
+test('a live catalogue that cannot be fetched stops the run and says so instead of falling back to the builtin list', async () => {
+  const { deps, calls } = world()
+  deps.catalogue = async () => {
+    throw new Error('models.dev: HTTP 503')
+  }
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.match(report.catalogue.error, /models\.dev: HTTP 503/)
+  assert.deepEqual(report.models, [])
+  assert.deepEqual(calls, [])
+  assert.equal(exitCode, 2)
+})
