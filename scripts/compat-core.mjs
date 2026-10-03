@@ -40,19 +40,45 @@ export async function runCompat(options, deps) {
   const results = []
   await deps.driver.setup()
   try {
-    for (const id of models) {
-      const output = await deps.driver.run({ model: id, task: L1_TASK })
-      const verdict = classify(output)
+    let streak = 0
+    for (const [index, id] of models.entries()) {
+      if (streak >= RATE_LIMIT_STREAK) {
+        results.push({ id, verdict: 'unverified', layer: null, reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
+        continue
+      }
+      if (index > 0) await deps.sleep(MODEL_SPACING_MS)
+      const verdict = await attempt(deps, { model: id, task: L1_TASK })
       results.push({ id, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : null, reason: verdict.reason })
+      streak = verdict.verdict === 'rate-limited' ? streak + 1 : 0
     }
   } finally {
     await deps.driver.dispose()
   }
-  const report = { header, models: results }
+  const report = {
+    header,
+    models: results,
+    unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
+  }
   return { report, exitCode: exitCodeFor(results) }
 }
 
 const L1_TASK = 'Reply with OK only.'
+const MODEL_SPACING_MS = 3_000
+/** Waits before each retry of a 429; one retry per entry. */
+const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]
+/** This many rate-limited models in a row means the bucket is dry: stop spending. */
+const RATE_LIMIT_STREAK = 3
+
+/** One request with the 429 back-off applied; returns the final verdict. */
+async function attempt(deps, request) {
+  let verdict = classify(await deps.driver.run(request))
+  for (const wait of RATE_LIMIT_BACKOFF_MS) {
+    if (verdict.verdict !== 'rate-limited') break
+    await deps.sleep(wait)
+    verdict = classify(await deps.driver.run(request))
+  }
+  return verdict
+}
 
 /** Printed in every report so a headless pass is never read as a web UI pass. */
 const VERIFICATION_PATH =
@@ -64,7 +90,21 @@ function classify(output) {
   if (output.exitCode === 0 && output.stdout.trim() !== '') return { verdict: 'ok', reason: '' }
   const line = errorLine(output.stderr)
   if (output.exitCode === 0) return { verdict: 'plugin-fault', reason: 'empty reply' }
-  return { verdict: 'plugin-fault', reason: line || `exit code ${output.exitCode} with no error line` }
+  const reason = line || `exit code ${output.exitCode} with no error line`
+  const status = upstreamStatus(line)
+  if (status === 429 || /^dsh: RATE_LIMIT:/.test(line)) return { verdict: 'rate-limited', reason }
+  // Before the status checks: Ling's "Endpoint is unavailable" arrives as a 400.
+  if (UPSTREAM_DOWN_PATTERN.test(line) || (status !== null && status >= 500)) return { verdict: 'upstream-down', reason }
+  if (status === 401 || status === 403) return { verdict: 'gate-refused', reason }
+  return { verdict: 'plugin-fault', reason }
+}
+
+const UPSTREAM_DOWN_PATTERN = /\b(?:Model|Endpoint) is unavailable\b/i
+
+/** The upstream HTTP status the plugin's guidance appends, e.g. `（上游 HTTP 429）`. */
+function upstreamStatus(line) {
+  const match = /\bHTTP (\d{3})\b/.exec(line)
+  return match === null ? null : Number(match[1])
 }
 
 /** The last `dsh: CODE: message` line, which is where DSH reports a failed run. */
@@ -78,5 +118,7 @@ function errorLine(stderr) {
 
 function exitCodeFor(results) {
   if (results.some((result) => result.verdict === 'plugin-fault')) return 1
+  // "Not broken, but not finished: run again later" (ADR 0003).
+  if (results.some((result) => result.verdict === 'rate-limited' || result.verdict === 'unverified')) return 2
   return 0
 }

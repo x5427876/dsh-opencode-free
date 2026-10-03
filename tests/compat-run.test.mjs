@@ -127,3 +127,98 @@ for (const [label, output] of [
     assert.equal(exitCode, 1)
   })
 }
+
+const RATE_LIMITED = failed('dsh: RATE_LIMIT: 免費額度用完。等視窗重置。（上游 HTTP 429）')
+const GATED = failed('dsh: PROVIDER_ERROR: 上游拒絕免費層請求。（上游 HTTP 403）')
+
+for (const [label, output, verdict] of [
+  ['a 429', RATE_LIMITED, 'rate-limited'],
+  ['a gate 403', GATED, 'gate-refused'],
+  ['Endpoint is unavailable', failed('dsh: PROVIDER_ERROR: 400 Upstream request failed: Endpoint is unavailable'), 'upstream-down'],
+  ['Model is unavailable', failed('dsh: PROVIDER_ERROR: Model is unavailable'), 'upstream-down'],
+  ['an upstream 500', failed('dsh: PROVIDER_ERROR: 未知的上游錯誤。（上游 HTTP 500）'), 'upstream-down'],
+]) {
+  test(`${label} is classified ${verdict}`, async () => {
+    const { deps } = world({ replies: { 'alpha-free': [output] } })
+    const { report } = await runCompat({ dsh: PIN }, deps)
+    const alpha = report.models.find((m) => m.id === 'alpha-free')
+    assert.equal(alpha.verdict, verdict)
+    assert.equal(alpha.layer, null)
+    assert.notEqual(alpha.reason, '')
+  })
+}
+
+test('upstream-down and gate-refused are reported but leave the exit code at 0', async () => {
+  const { deps } = world({
+    replies: { 'alpha-free': [GATED], 'beta-free': [failed('dsh: PROVIDER_ERROR: Endpoint is unavailable')] },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => m.verdict), ['gate-refused', 'upstream-down'])
+  assert.equal(exitCode, 0)
+})
+
+test('a 429 backs off 30s and is ok when the retry answers', async () => {
+  const { deps, sleeps, runs } = world({ replies: { 'alpha-free': [RATE_LIMITED, ok()] } })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.models[0].verdict, 'ok')
+  assert.deepEqual(sleeps, [30_000, 3_000])
+  assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 2)
+  assert.equal(exitCode, 0)
+})
+
+test('still 429 after backing off 30s then 60s is rate-limited, and the exit code is 2', async () => {
+  const { deps, sleeps, runs } = world({ replies: { 'alpha-free': [RATE_LIMITED] } })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.models[0].verdict, 'rate-limited')
+  assert.deepEqual(sleeps, [30_000, 60_000, 3_000])
+  assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 3)
+  assert.equal(exitCode, 2)
+})
+
+test('models are spaced 3s apart', async () => {
+  const ids = ['a-free', 'b-free', 'c-free']
+  const { deps, sleeps } = world({ zenIds: ids, builtinIds: ids })
+  await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(sleeps, [3_000, 3_000])
+})
+
+test('three rate-limited models in a row end the run and the rest are listed as unverified', async () => {
+  const ids = ['a-free', 'b-free', 'c-free', 'd-free', 'e-free']
+  const { deps, runs } = world({
+    zenIds: ids,
+    builtinIds: ids,
+    replies: { 'a-free': [RATE_LIMITED], 'b-free': [RATE_LIMITED], 'c-free': [RATE_LIMITED] },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => m.verdict), [
+    'rate-limited',
+    'rate-limited',
+    'rate-limited',
+    'unverified',
+    'unverified',
+  ])
+  assert.deepEqual(report.unverified, ['d-free', 'e-free'])
+  assert.equal(runs().some((r) => r.model === 'd-free' || r.model === 'e-free'), false)
+  assert.equal(exitCode, 2)
+})
+
+test('an answer between rate-limited models resets the streak', async () => {
+  const ids = ['a-free', 'b-free', 'c-free', 'd-free']
+  const { deps } = world({
+    zenIds: ids,
+    builtinIds: ids,
+    replies: { 'a-free': [RATE_LIMITED], 'b-free': [RATE_LIMITED], 'd-free': [RATE_LIMITED] },
+  })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => m.verdict), ['rate-limited', 'rate-limited', 'ok', 'rate-limited'])
+  assert.deepEqual(report.unverified, [])
+})
+
+test('a plugin-fault outranks an unfinished run: exit 1, not 2', async () => {
+  const { deps } = world({
+    replies: { 'alpha-free': [RATE_LIMITED], 'beta-free': [ok('')] },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.deepEqual(report.models.map((m) => m.verdict), ['rate-limited', 'plugin-fault'])
+  assert.equal(exitCode, 1)
+})
