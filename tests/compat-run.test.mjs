@@ -398,3 +398,65 @@ test('the JSON parses back to the report and the matrix carries the same header 
   assert.match(md, /Unverified: late-free/)
   assert.match(md, /exit code 2/i)
 })
+
+const FAKE_KEY = 'sk-zen-fake-1234567890abcdef'
+const KEY_IDS = ['ok-free', 'limited-free', 'gated-free', 'down-free']
+const KEY_REPLIES = {
+  'limited-free': [RATE_LIMITED],
+  'gated-free': [GATED],
+  'down-free': [failed('dsh: PROVIDER_ERROR: Endpoint is unavailable')],
+}
+
+test('without a key nothing is re-run with one', async () => {
+  const { deps, runs } = world({ zenIds: KEY_IDS, builtinIds: KEY_IDS, replies: KEY_REPLIES })
+  const { report } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.header.keyed, false)
+  assert.equal(runs().some((r) => r.apiKey !== undefined), false)
+  assert.equal(report.models.some((m) => m.keyed !== null), false)
+})
+
+test('with a key only rate-limited and gate-refused models are re-run once, beside the anonymous verdict', async () => {
+  const keyedReply = (request) => (request.apiKey === FAKE_KEY ? ok() : request.model === 'gated-free' ? GATED : RATE_LIMITED)
+  const { deps, runs } = world({
+    zenIds: KEY_IDS,
+    builtinIds: KEY_IDS,
+    env: { OPENCODE_API_KEY: FAKE_KEY },
+    replies: { ...KEY_REPLIES, 'limited-free': [keyedReply], 'gated-free': [keyedReply] },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(report.header.keyed, true)
+  assert.deepEqual(
+    runs().filter((r) => r.apiKey !== undefined).map((r) => [r.model, r.apiKey === FAKE_KEY]),
+    [
+      ['limited-free', true],
+      ['gated-free', true],
+    ],
+  )
+  assert.deepEqual(report.models.map((m) => [m.id, m.verdict, m.keyed?.verdict ?? null]), [
+    ['ok-free', 'ok', null],
+    ['limited-free', 'rate-limited', 'ok'],
+    ['gated-free', 'gate-refused', 'ok'],
+    ['down-free', 'upstream-down', null],
+  ])
+  // A keyed answer does not make the anonymous run finished.
+  assert.equal(exitCode, 2)
+})
+
+test('the key never reaches the report, the JSON or the matrix, even when upstream echoes it', async () => {
+  const echo = failed(`dsh: AUTH_FAILED: Zen key 無效 Bearer ${FAKE_KEY} rejected（上游 HTTP 401）`)
+  const { deps, writes } = world({
+    zenIds: KEY_IDS,
+    builtinIds: KEY_IDS,
+    env: { OPENCODE_API_KEY: FAKE_KEY },
+    replies: {
+      ...KEY_REPLIES,
+      'ok-free': [failed(`dsh: PROVIDER_ERROR: request ${FAKE_KEY} failed`)],
+      'gated-free': [(request) => (request.apiKey === undefined ? GATED : echo)],
+    },
+  })
+  const { report, text } = await runCompat({ dsh: PIN, out: 'out' }, deps)
+  const everything = [JSON.stringify(report), text, ...writes.map((w) => w.text)].join('\n')
+  assert.equal(everything.includes(FAKE_KEY), false)
+  assert.equal(everything.includes(FAKE_KEY.slice(0, 12)), false)
+  assert.equal(report.models.find((m) => m.id === 'gated-free').keyed.verdict, 'gate-refused')
+})

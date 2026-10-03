@@ -26,12 +26,15 @@ export async function runCompat(options, deps) {
     )
   }
 
+  // Detected, never an option: a key on the command line ends up in shell history.
+  const key = deps.env.OPENCODE_API_KEY?.trim() || undefined
+  const ask = redactingDriver(deps.driver, key)
   const header = {
     dshVersion: dsh,
     pluginVersion: deps.pkg.version,
     date: deps.now().toISOString(),
     os: deps.osLabel,
-    keyed: false,
+    keyed: key !== undefined,
     tools: options.tools === true,
     path: VERIFICATION_PATH,
   }
@@ -68,7 +71,7 @@ export async function runCompat(options, deps) {
     let streak = 0
     let asked = false
     for (const { id, effort } of models) {
-      const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '' }
+      const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '', keyed: null }
       if (!warmup.ok) {
         results.push({ ...base, verdict: 'unverified', layer: null, reason: 'not run: the warmup failed', l0: null })
         continue
@@ -95,8 +98,15 @@ export async function runCompat(options, deps) {
       }
       if (asked) await deps.sleep(MODEL_SPACING_MS)
       asked = true
-      const verdict = await attempt(deps, { model: id, effort, task: L1_TASK })
-      results.push({ ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason })
+      const verdict = await attempt(ask, deps.sleep, { model: id, effort, task: L1_TASK })
+      // Anonymous stays the subject (it is the plugin's promise). A keyed
+      // re-run only separates "quota dry or gate changed" from "plugin broken",
+      // and sits beside the anonymous verdict instead of replacing it.
+      const keyed =
+        key !== undefined && (verdict.verdict === 'rate-limited' || verdict.verdict === 'gate-refused')
+          ? classify(await ask({ model: id, effort, task: L1_TASK, apiKey: key }))
+          : null
+      results.push({ ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason, keyed })
       streak = verdict.verdict === 'rate-limited' ? streak + 1 : 0
     }
   } finally {
@@ -166,10 +176,11 @@ export function renderMatrix(report) {
   if (report.warmup !== null) {
     lines.push(`- Warmup: ${report.warmup.ok ? 'ok' : `FAILED — ${report.warmup.error}`}`)
   }
-  lines.push('', '| model | verdict | layer | effort | L0 probe | reason |', '| --- | --- | --- | --- | --- | --- |')
+  lines.push('', '| model | verdict | layer | effort | L0 probe | with key | reason |', '| --- | --- | --- | --- | --- | --- | --- |')
   for (const model of report.models) {
     const effort = model.effort ?? model.effortNote
-    const cells = [model.id, model.verdict, model.layer ?? '-', effort, model.l0?.probe ?? '-', model.reason || '-']
+    const keyed = model.keyed === null ? '-' : model.keyed.reason ? `${model.keyed.verdict}: ${model.keyed.reason}` : model.keyed.verdict
+    const cells = [model.id, model.verdict, model.layer ?? '-', effort, model.l0?.probe ?? '-', keyed, model.reason || '-']
     lines.push(`| ${cells.map(cell).join(' | ')} |`)
   }
   lines.push('', `Unverified: ${report.unverified.join(', ') || '(none)'}`, '')
@@ -234,14 +245,32 @@ const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]
 const RATE_LIMIT_STREAK = 3
 
 /** One request with the 429 back-off applied; returns the final verdict. */
-async function attempt(deps, request) {
-  let verdict = classify(await deps.driver.run(request))
+async function attempt(ask, sleep, request) {
+  let verdict = classify(await ask(request))
   for (const wait of RATE_LIMIT_BACKOFF_MS) {
     if (verdict.verdict !== 'rate-limited') break
-    await deps.sleep(wait)
-    verdict = classify(await deps.driver.run(request))
+    await sleep(wait)
+    verdict = classify(await ask(request))
   }
   return verdict
+}
+
+/**
+ * The driver, with the key scrubbed from everything it returns. Upstream error
+ * text is not safe by default (S2), and a key echoed in it would otherwise
+ * reach the reason column. Replaced, not truncated: truncation is not
+ * redaction (S1).
+ */
+function redactingDriver(driver, key) {
+  const scrub = (text) => {
+    let out = String(text ?? '')
+    if (key !== undefined) out = out.replaceAll(key, '***')
+    return out.replace(/\bBearer\s+(?!public\b)\S+/gi, 'Bearer ***')
+  }
+  return async (request) => {
+    const output = await driver.run(request)
+    return { ...output, stdout: scrub(output.stdout), stderr: scrub(output.stderr) }
+  }
 }
 
 /** Printed in every report so a headless pass is never read as a web UI pass. */
