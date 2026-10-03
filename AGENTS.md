@@ -129,6 +129,10 @@ report verification limits and keep unrelated gap fixes out of scope.
 
 Issues live as local markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
 
+### Triage labels
+
+Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Labels:` line in each issue file. See `docs/agents/triage-labels.md`.
+
 ### Domain docs
 
 Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
