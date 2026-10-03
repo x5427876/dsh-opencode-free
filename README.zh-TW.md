@@ -313,6 +313,7 @@ pnpm run check      # typecheck、測試、打包
 |---|---|
 | `scripts/reverify.sh` | ① 模型目錄可連線、② 匿名閘門、③ API key（只在設定 `OPENCODE_API_KEY` 時執行） |
 | `node scripts/test-live.mjs [model-id ...]` | 對每個免費模型（或你列出的模型）送一個極短的匿名請求。它不宣告任何工具，所以 `replied:false` 通常是閘門不給，不是模型沒了——它不是可用性檢查。請先執行 `pnpm run build`。 |
+| `pnpm compat --dsh <版本> [--tools] [--keep] [--out <目錄>]` | 相容性驗證：在暫存的 `DSH_HOME` 安裝該版 DSH 與本 repo 打包的插件，經真實的 headless DSH 逐一驗證 Zen 全部免費模型。退出碼 `0` 全部驗過、`1` 插件端錯誤、`2` 沒驗完（額度受限）、`3` 前置檢查不通過。支援新版 DSH 發版前必跑；不進 CI。見 [`docs/compat-run.md`](docs/compat-run.md)。 |
 
 安裝或驗證此插件的 Agent，請看 [`AGENTS.md`](AGENTS.md)。
 

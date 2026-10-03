@@ -287,6 +287,10 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
 - pi-ai 0.87 的內建 `opencode` 目錄把 `mimo-v2.5-free` 換成
   `mimo-v2.6-flash-free`，插件的免費清單隨之改變（上游兩者當時都還在）。
 
+註：上面這套手動拼裝的實機驗證，現在由相容性驗證（`pnpm compat --dsh <版本>`）
+以同樣的隔離 `DSH_HOME` + headless + overlay 路徑自動完成，見
+[`docs/compat-run.md`](compat-run.md)。
+
 ## 我們相對 Pi 版的改編（非仿冒部分）
 
 - **DSH 化**：Pi 的 `pi.registerProvider()` → DSH 的

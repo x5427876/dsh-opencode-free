@@ -389,6 +389,7 @@ These scripts send real requests to the shared anonymous bucket:
 | `scripts/reverify.sh` | ① catalogue reachable, ② anonymous gate, ③ API key (only when `OPENCODE_API_KEY` is set) |
 | `node scripts/test-live.mjs [model-id ...]` | Sends one short anonymous request per model. It declares no tools, so a `replied:false` usually means the gate said no rather than that the model is gone — it is not an availability test. Run `pnpm run build` first. |
 | `node scripts/probe-ab.mjs [heavy light]` | A/Bs the probe's output budget against the live tier (default 1024 vs 16). **Consumes real quota across the whole catalogue** and is how `PROBE_MAX_TOKENS` was chosen — see `docs/adr/0002`. Run `pnpm run build` first. |
+| `pnpm compat --dsh <version> [--tools] [--keep] [--out <dir>]` | The compat run: installs that DSH and this repo's packed plugin in a temp `DSH_HOME` and verifies every Zen free model through real headless DSH. Exit `0` verified, `1` plugin-fault, `2` unfinished (rate-limited), `3` precondition refused. Required before releasing a new DSH version; not run in CI. See [`docs/compat-run.md`](docs/compat-run.md). |
 
 ### What it patches in your process
 

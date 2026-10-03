@@ -116,6 +116,29 @@ profile, requested release, installation mode, what changed, cleanup status,
 and what remains unverified. Do not patch DSH, switch to another paid route,
 wipe credentials, delete a profile, or claim success from a partial check.
 
+## DSH upgrades
+
+Use this when moving the plugin to a new DSH release (development, not an
+install request).
+
+1. Update the exact peer pins in `package.json` together with the documentation
+   and compatibility tests (standards rule C1).
+2. Run `pnpm run check`.
+3. **Before release, the compat run is required:**
+   `pnpm compat --dsh <version> --out <dir>`. See
+   [`docs/compat-run.md`](docs/compat-run.md). It sends real anonymous requests,
+   so an Agent runs it only when the user has asked for it. It installs into a
+   temp `DSH_HOME` and never touches a user profile or a running DSH.
+4. Read the exit code. `0` means every model was verified. `1` means a
+   `plugin-fault`, or the setup or warmup failed: fix it before release. `2`
+   means the run was not broken but did not finish because models are
+   rate-limited or unverified: run it again later, and do not report them as
+   passing. `3` means a precondition was refused and nothing ran.
+   `upstream-down` and `gate-refused` are reported but do not fail the run.
+
+The compat run is not the plugin's probe, and it is not part of CI
+([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)).
+
 ## Engineering standards
 
 When changing code, reviewing contributions, or preparing a release, read
