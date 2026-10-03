@@ -1,0 +1,360 @@
+{
+  "header": {
+    "dshVersion": "0.2.1-alpha.1",
+    "pluginVersion": "0.3.1",
+    "date": "2026-10-03T13:44:12.440Z",
+    "os": "win32 10.0.26200 x64, Node v24.13.0",
+    "keyed": false,
+    "tools": true,
+    "path": "Isolated DSH_HOME, built-in headless profile plus a --patch overlay (webServer on 127.0.0.1, default model). Same PiAiAdapter -> plugin path as the web profile, but not the profile users run: this is not a web UI verification."
+  },
+  "catalogue": {
+    "error": null,
+    "onlyLive": [
+      "deepseek-v4-flash-free",
+      "space-bunny-free",
+      "longcat-2.5-preview-free",
+      "mimo-v2.5-free",
+      "fledge-alpha-free",
+      "ling-3.1-flash-free"
+    ],
+    "onlyBuiltin": []
+  },
+  "warmup": {
+    "ok": true,
+    "error": null,
+    "visible": [
+      "big-pickle",
+      "deepseek-v4-flash-free",
+      "fledge-alpha-free",
+      "ling-3.0-flash-fin-free",
+      "ling-3.1-flash-free",
+      "longcat-2.5-preview-free",
+      "mimo-v2.5-free",
+      "mimo-v2.6-flash-free",
+      "muse-spark-1.2-contributor-free",
+      "muse-spark-1.3-contributor-free",
+      "nemotron-3-ultra-free",
+      "nemotron-3.5-lightning-free",
+      "space-bunny-free"
+    ]
+  },
+  "models": [
+    {
+      "id": "big-pickle",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "muse-spark-1.3-contributor-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "muse-spark-1.2-contributor-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "mimo-v2.6-flash-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "space-bunny-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "longcat-2.5-preview-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "mimo-v2.5-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "nemotron-3-ultra-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "fledge-alpha-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "ling-3.1-flash-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "deepseek-v4-flash-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": null,
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: unknown (HTTP 500)"
+      },
+      "verdict": "upstream-down",
+      "layer": "L0",
+      "reason": "dsh: INVALID_REQUEST: 400: {\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstream request failed: Model is unavailable.\"}"
+    },
+    {
+      "id": "ling-3.0-flash-fin-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": null,
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: unknown (HTTP 400)"
+      },
+      "verdict": "upstream-down",
+      "layer": "L0",
+      "reason": "dsh: INVALID_REQUEST: 400: {\"type\":\"server_error\",\"message\":\"Error from provider (Console): Upstream request failed: Endpoint is unavailable.\"}"
+    },
+    {
+      "id": "nemotron-3.5-lightning-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "pwsh",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: timeout (HTTP 200)"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    }
+  ],
+  "unverified": [],
+  "exitCode": 0
+}

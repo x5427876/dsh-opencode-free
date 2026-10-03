@@ -1,4 +1,4 @@
-Status: open
+Status: resolved
 Labels: ready-for-agent
 Blocked by: 10
 
@@ -25,3 +25,17 @@ Spec: `../spec.md`
 - [ ] 每個免費模型都有判定與驗到的層級；未驗證者明確列出
 - [ ] 沒有 `plugin-fault`，或每個 `plugin-fault` 都有對應的後續票
 - [ ] 結論如實寫進 `## Answer`，沒有把 `rate-limited` 或未驗證寫成通過
+
+## Answer
+
+2026-10-03 13:44Z，`pnpm compat --dsh 0.2.1-alpha.1 --tools --out docs/compat-reports`（Windows 11、Node v24.13.0、外掛 `0.3.1` 由目前 repo 打包、匿名、無 key）。報告：`docs/compat-reports/compat-0.2.1-alpha.1-2026-10-03.md` 與同名 `.json`，檔頭含 DSH 版本、外掛版本、日期、作業系統、key: no、tools: on 與驗證路徑。
+
+**退出碼 0**：全部模型都有判定，沒有 `plugin-fault`、沒有 `rate-limited`、沒有未驗證。
+
+- 11 個 `ok`，全部到 **L2**（`read` 與 `pwsh` 兩步都通過）：big-pickle、muse-spark-1.3-contributor-free、muse-spark-1.2-contributor-free、mimo-v2.6-flash-free、space-bunny-free、longcat-2.5-preview-free、mimo-v2.5-free、nemotron-3-ultra-free、fledge-alpha-free、ling-3.1-flash-free、nemotron-3.5-lightning-free。有發布等級的模型用最低等級送出（muse-spark 為 `minimal`、space-bunny 與 fledge 為 `low`），都沒有 `UNSUPPORTED_REASONING_EFFORT`。其餘標「無等級可選」，表示這些模型沒有驗到 reasoning 轉換。
+- 2 個 `upstream-down`（只停在 L0）：`deepseek-v4-flash-free`（`Upstream request failed: Model is unavailable`，暖機探測 HTTP 500）、`ling-3.0-flash-fin-free`（`Endpoint is unavailable`，與先前 Ling 3.0 的上游問題相同）。屬上游問題，不需另開外掛票。
+- `ling-3.1-flash-free` 的 L1 第一次被 429，退避 30 秒後成功，所以實機上也走到了退避路徑。
+- 暖機探測中 `nemotron-3.5-lightning-free` 標 `timeout`，但經 DSH 的 L1/L2 都通過。探測的逾時不是外掛相容性問題，這裡只做紀錄。
+- 清單差異：即時清單比內建清單多 6 個（deepseek-v4-flash-free、space-bunny-free、longcat-2.5-preview-free、mimo-v2.5-free、fledge-alpha-free、ling-3.1-flash-free），沒有「內建有、即時沒有」的模型。
+
+限制：驗證路徑是隔離的 `headless` profile 加 overlay，不是 web UI；只在 Windows 上執行；匿名結果反映這台機器在這個時間點的額度狀況。
