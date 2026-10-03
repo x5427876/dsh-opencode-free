@@ -107,15 +107,14 @@ export async function runCompat(options, deps) {
       if (asked) await deps.sleep(MODEL_SPACING_MS)
       asked = true
       const verdict = await attempt(ask, deps.sleep, { model: id, effort, task: L1_TASK })
+      let result = { ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason }
+      if (options.tools === true && verdict.verdict === 'ok') result = { ...result, ...(await toolRoundTrip(ask, deps, { model: id, effort })) }
       // Anonymous stays the subject (it is the plugin's promise). A keyed
       // re-run only separates "quota dry or gate changed" from "plugin broken",
       // and sits beside the anonymous verdict instead of replacing it.
-      const keyed =
-        key !== undefined && (verdict.verdict === 'rate-limited' || verdict.verdict === 'gate-refused')
-          ? classify(await ask({ model: id, effort, task: L1_TASK, apiKey: key }))
-          : null
-      let result = { ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason, keyed, tools: null }
-      if (options.tools === true && verdict.verdict === 'ok') result = { ...result, ...(await toolRoundTrip(ask, deps, { model: id, effort })) }
+      if (key !== undefined && (result.verdict === 'rate-limited' || result.verdict === 'gate-refused')) {
+        result = { ...result, keyed: classify(await ask({ model: id, effort, task: L1_TASK, apiKey: key })) }
+      }
       results.push(result)
       streak = result.verdict === 'rate-limited' ? streak + 1 : 0
     }
@@ -162,7 +161,7 @@ const EXIT_MEANING = {
 }
 
 /** The human-readable matrix. Same facts as the JSON, nothing more. */
-export function renderMatrix(report) {
+function renderMatrix(report) {
   const { header } = report
   const lines = [
     `# Compat run: DSH ${header.dshVersion} + dsh-opencode-free ${header.pluginVersion}`,
@@ -254,6 +253,7 @@ function lowestEffort(record) {
 function describe(error) {
   return error instanceof Error ? error.message : String(error)
 }
+
 const MODEL_SPACING_MS = 3_000
 /** Waits before each retry of a 429; one retry per entry. */
 const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]

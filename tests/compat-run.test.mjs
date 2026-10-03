@@ -583,3 +583,15 @@ test('models the warmup round saw answer are asked first, so a run of 429s canno
     ['c-free', 'rate-limited'],
   ])
 })
+
+test('a model left rate-limited by a tool step also gets the keyed re-run', async () => {
+  const limitedShell = (request) =>
+    request.apiKey === undefined && request.files?.['compat-shell.txt'] !== undefined ? RATE_LIMITED : toolUser()(request)
+  const { deps, runs } = world({
+    env: { OPENCODE_API_KEY: FAKE_KEY },
+    replies: { 'alpha-free': [limitedShell], 'beta-free': [toolUser()] },
+  })
+  const { report } = await runCompat({ dsh: PIN, tools: true }, deps)
+  assert.deepEqual(runs().filter((r) => r.apiKey !== undefined).map((r) => r.model), ['alpha-free'])
+  assert.deepEqual([report.models[0].verdict, report.models[0].keyed?.verdict], ['rate-limited', 'ok'])
+})
