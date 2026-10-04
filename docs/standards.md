@@ -19,7 +19,7 @@ Sources have distinct roles:
 | Comparable design | [opencode2dsh](https://github.com/FishBottle7/opencode2dsh) | Compare native providers, streaming, and catalogue integration. README claims are neither test evidence nor obligations for this project. |
 | Project decisions | Existing ADRs, installation guidance, and agreed maintenance policy | This project owns exact DSH compatibility, offline verification, conservative model verdicts, and minimal tooling. |
 
-External links point to moving branches reviewed for this baseline, not frozen specifications aligned with DSH `0.2.0-rc.2`. Identify the source category when citing a rule. Recheck the target release when changing host compatibility. The [official contribution guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/CONTRIBUTING.md) also presents the official repository as inspiration rather than a mandatory community-plugin template.
+External links point to moving branches reviewed for this baseline, not frozen specifications aligned with the DSH release this plugin targets. Identify the source category when citing a rule. Recheck the target release when changing host compatibility. The [official contribution guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/CONTRIBUTING.md) also presents the official repository as inspiration rather than a mandatory community-plugin template.
 
 ## 1. Architecture and Plugin Lifecycle
 
@@ -103,4 +103,4 @@ External links point to moving branches reviewed for this baseline, not frozen s
 3. Update affected documentation. Record existing deficiencies with evidence, impact, and acceptance criteria rather than expanding into unrelated refactoring.
 4. Report checks actually run and their limits. Close a gap only when evidence satisfies its acceptance criteria.
 
-This baseline introduces standards and a gap ledger only, not new tools, CI jobs, credential migrations, or implementation fixes.
+These standards and the gap ledger define rules and record gaps. They add no tools, CI jobs, credential migrations, or implementation fixes.

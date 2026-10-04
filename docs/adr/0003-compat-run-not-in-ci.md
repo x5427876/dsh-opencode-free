@@ -16,4 +16,4 @@ CI 的共用 IP 讓匿名 bucket 幾乎必然是乾的，結果沒有意義；�
 **Consequences**: 有 `rate-limited` 或未驗證的模型時退出碼為 2，
 意思是「沒壞，但沒驗完，稍後再跑」，和 `plugin-fault` 的 1 區分。
 若日後 Zen 提供可供 CI 使用的測試 key 或獨立額度，重審本決策。
-探測（probe）的歷史與範圍見 ADR 0002，不在此重複。
+探測（probe）的範圍見 ADR 0002，不在此重複。

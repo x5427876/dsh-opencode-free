@@ -7,8 +7,7 @@
 術語：技術段落一律用「仿冒 CLI 身份」，立場段落用「bypass」；
 不用「模仿」（見 `CONTEXT.md`）。
 
-> ⏳ 時效：本文件初版是 2026-09-22 的快照，2026-09-27 補上工具名稱閘門
-> （§8）與踩雷紀錄，2026-09-29 補上 pi-ai 0.87 transcript（§9）。上游無第三方合約，行為隨時會變；
+> ⏳ 時效：本文件記錄的是帶日期的實測觀察，不是上游的承諾。上游無第三方合約，行為隨時會變；
 > 若 `scripts/reverify.sh` 出現非預期燈號，先重跑腳本確認，仍異常則按
 > 「方法：MITM 錄封包 + 差分」重驗並更新本文件與 ADR。
 
@@ -25,7 +24,7 @@
 
 也就是：錄下真 CLI 的成功請求，跟失敗請求逐字節對，比出差異。
 
-### 可重跑的做法（2026-09-27 實際用過）
+### 可重跑的做法
 
 不需要 MITM 憑證。只要本機有一個**能成功**的客戶端（例如 Pi）：
 
@@ -43,22 +42,20 @@
 4. **最後用目標客戶端的真實組合驗證**（例如 DSH 在 Windows 的工具清單），
    確認差異就是它。
 
-## 踩雷紀錄（避免再犯）
+## 診斷原則（常見誤判）
 
-2026-09-22 到 09-27 之間，我們把 403 誤判成「出口 IP 匿名額度被閘」，
-還把錯誤訊息寫成「掛 key 即解」。實際原因是 §8 的工具名稱閘門。
-走錯的原因：
+403 不能直接歸因為「出口 IP 匿名額度被閘」，也不能把錯誤訊息寫成「掛 key 即解」。
+一個已確認的原因是 §8 的工具名稱閘門。常見誤判：
 
-- **探針和真實請求形狀不同。** `reverify.sh` 和 `test-live.mjs` 只送短訊息，
-  不帶 `tools`，`reverify.sh` 還沒有 `stream: true`。這種請求**永遠** 403，
-  所以「連極小 request 都失敗」不是 IP 被閘的證據，而是探針本身不合格。
-  探針必須符合所有已知閘門條件，否則它只能證明探針錯了。
-- **對照組也用了同樣不合格的探針。** 官方 OpenCode（`--pure`）和
-  `pi-opencode-direct` 的 `streamSimple()` 對照都送不帶工具的短訊息，
-  所以也 403。這讓錯誤結論看起來被「多方證實」。
-  對照組要用**完整的真實使用方式**（例如 `pi -p` 走完整 agent），不要只呼叫底層函式。
-- **沒有先問「哪個客戶端現在能用」。** 使用者的 Pi 其實一直能匿名使用。
-  只要先擷取它的成功請求來比對，一小時內就能定位。
+- **探針必須和真實請求形狀一致。** 不帶 `tools` 或不串流的請求**永遠** 403，所以
+  「連極小 request 都失敗」不是 IP 被閘的證據，而是探針本身不合格。探針必須符合所有
+  已知閘門條件，否則它只能證明探針錯了。`reverify.sh` 帶 `tools` 並串流；
+  `test-live.mjs` 走插件的 provider，由 §8 的對策補上工具。
+- **對照組也必須符合閘門條件。** 官方 OpenCode（`--pure`）和 `pi-opencode-direct`
+  的 `streamSimple()` 只送不帶工具的短訊息時也會 403，這會讓錯誤結論看起來被「多方
+  證實」。對照組要用**完整的真實使用方式**（例如 `pi -p` 走完整 agent），不要只呼叫
+  底層函式。
+- **先問「哪個客戶端現在能用」。** 擷取它的成功請求來比對，通常一小時內就能定位。
 - **平台差異。** 同一個 DSH，在 Linux／macOS 送 `bash`，在 Windows 送 `pwsh`
   （`dsh-base/cordis.patch.yml` 依 `process.platform` 開關 `tool-bash`／`tool-pwsh`）。
   在一個平台上成功，不代表另一個平台也成功。
@@ -93,7 +90,7 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 
 > ⚠️ 推論（部分驗證）：UA 尾段插件名（`dsh-opencode-free/0.2.1`，Pi 版是
 > `pi-opencode-direct/0.1.7`）不影響閘門。2026-09-27 帶 `dsh-opencode-free`
-> 尾段的請求已匿名 200，所以這個尾段目前可以通過；尚未測試其他尾段字串。
+> 尾段的請求已匿名 200，所以這個尾段在當時可以通過；尚未測試其他尾段字串。
 > 之前寫的「匿名全死、無法差分」是 §8 的誤判，現在可以用重播做 A/B。
 
 ### 3. 會話 id：結構逐字節對，生成方式是近似
@@ -122,7 +119,7 @@ return prefix + "_" + timeBytes.toString("hex") + randomBase62(LENGTH - 12)
 
 > ⚠️ 推論（未驗證）：「只驗結構、不驗時間真實性」是推論——已證結構非法
 > 會死（64 hex / 裸 base62 被拒）。2026-09-27 重播時每次都用純隨機的
-> `ses_` id（不含真實時間），請求都通過，所以時間造假目前可以通過。
+> `ses_` id（不含真實時間），請求都通過，所以時間造假在當時可以通過。
 
 親和三處同值：`x-opencode-session` ＝ `x-client-request-id` ＝
 `prompt_cache_key`（body 欄位）。`x-client-request-id` 是 MITM 發現的：
@@ -163,9 +160,9 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
 pi-ai 0.87 的 transcript 形狀（提示詞在 system 訊息裡；transcript 分支照抄
 Pi 0.1.7，請求帶工具時不替換）。見 §9。
 
-> ⚠️ 未重驗：2026-09-27 的重播顯示 system prompt 內容不影響閘門（§8）。
+> ⚠️ 未驗證：重播顯示 system prompt 內容不影響閘門（§8）。
 > 「Pi 壓縮提示詞 403」可能其實是壓縮請求不帶 `read`／`bash` 工具造成的。
-> 現在 §8 會替不帶工具的請求補上空工具，所以這個替換可能已經不需要；
+> §8 會替不帶工具的請求補上空工具，所以這個替換可能不需要；
 > 刪除前先用重播方法確認。
 
 ### 7. 旁路全覆蓋：三層守衛
@@ -184,7 +181,7 @@ Pi 0.1.7，請求帶工具時不替換）。見 §9。
 
 ### 8. 工具名稱閘門：必須有 `read` 與 `bash`
 
-2026-09-27 擷取 Pi（Windows）的成功請求後逐項重播發現：匿名層還檢查
+擷取 Pi（Windows）的成功請求後逐項重播（2026-09-27）發現：匿名層還檢查
 請求本體。缺一即 `403 FreeTierError`：
 
 - `stream: true`；
@@ -222,15 +219,16 @@ DSH 在 Windows 用 `dsh-base` 的 `tool-pwsh` 取代 `tool-bash`，送出的是
 主路徑（`zenProvider().stream*`）與 compat 路徑都套用。`stream: true` 由 pi-ai
 保證，插件不用處理。
 
-2026-09-27 DSH rc.2（Windows、`web` profile、無 key）實測：7 個免費模型都能對話；
-`pwsh` 與 `read` 工具往返都完成（軌跡記錄顯示 DSH 收到 `pwsh`）；
-除錯記錄 18 個請求全部 `200`、全部 `Bearer public`。
+實機驗證（Windows、`web` profile、無 key）：
 
-2026-09-28 DSH `0.2.0-rc.1`（同樣環境）重驗：`dsh-base` 在 Windows 仍以
-`tool-pwsh` 取代 `tool-bash`，工具名仍是 `read`／`pwsh`，對策不用改。
-6 個免費模型正常對話；`read` 與 `pwsh` 工具往返完成（`pwsh` 只花 6 秒）。
-Nemotron 3.5 Lightning 當時 10 秒後回 `200`，之後只送 `: keep-alive`、
-沒有內容；同時用 Pi 呼叫同一模型也一樣，所以是上游該模型卡住，不是閘門或插件問題。
+- DSH `0.2.0-rc.2`（2026-09-27）：7 個免費模型都能對話；`pwsh` 與 `read` 工具往返都
+  完成（軌跡記錄顯示 DSH 收到 `pwsh`）；除錯記錄 18 個請求全部 `200`、全部 `Bearer public`。
+- DSH `0.2.0-rc.1`（2026-09-28）：`dsh-base` 在 Windows 以 `tool-pwsh` 取代 `tool-bash`，
+  工具名是 `read`／`pwsh`，對策不用改。6 個免費模型正常對話；`read` 與 `pwsh` 工具往返
+  完成（`pwsh` 只花 6 秒）。Nemotron 3.5 Lightning 在該次測試中 10 秒後回 `200`，之後
+  只送 `: keep-alive`、沒有內容；用 Pi 呼叫同一模型也一樣，所以是上游該模型卡住，不是
+  閘門或插件問題。
+
 判斷方法：`200` 代表已通過閘門；之後沒資料，就用 Pi 對照，兩邊都卡就是上游。
 
 維護注意：
@@ -244,17 +242,17 @@ Nemotron 3.5 Lightning 當時 10 秒後回 `200`，之後只送 `: keep-alive`�
 
 ### 9. pi-ai 0.87：provider 收到的是 transcript（DSH `0.2.0-rc.2` 起）
 
-DSH `0.2.0-rc.2` 的 `dsh-llm-pi-ai` 把 pi-ai 從 `0.85.1` 升到 `^0.87.1`。
+DSH 從 `0.2.0-rc.2` 起，`dsh-llm-pi-ai` 使用 pi-ai `^0.87.1`；更早的版本使用 `0.85.1`。
 `PiAiAdapter` 仍組出舊的 `Context`（`systemPrompt` / `messages` / `tools`），
 但它呼叫 `Models.streamSimple()`，而這一層會先 `normalizeContext()`：把
 `systemPrompt` 與 `tools` 摺進開頭的 system 訊息（`toolsAdded`），再交給
 provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messages }`）。
 
-影響：插件原本改 `context.tools` 的閘門對策在 0.87 下完全失效——實測送出的
+影響：改 `context.tools` 的閘門對策在 0.87 下完全失效——實測送出的
 請求連呼叫端自己的 `tools` 都不見了（provider 忽略舊欄位），Windows 匿名請求
-會再次 403。只改 peer 版本號不夠，必須改程式碼。
+會 403。只改 peer 版本號不夠，必須改程式碼。
 
-對策（`0.2.1`）：
+對策：
 
 - `toTranscript()`：入口若看到舊欄位（`systemPrompt`／`tools`）就先
   `normalizeContext()`；已是 transcript 就原樣通過。DSH 與直接呼叫
@@ -270,24 +268,20 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
 哪種形狀——`DSH_OPENCODE_FREE_DEBUG=1` 的 `tools=` 數字由 `getCurrentTools()`
 算出；在 fixture `fetch` 裡印 `body.tools` 可直接看到送出的工具。
 
-2026-09-29 DSH `0.2.0-rc.2` 驗證：npm 上的 DSH rc.2 當時裝不起來（依賴
-`@deepseek-ai/dsh-client-ui-settings-account@0.2.0-rc.2` 未發布），改用本機
-`deepseek-harness` 原始碼（`dsh-v0.2.0-rc.2`）。在 scratchpad 建獨立
-`DSH_HOME`，用 `dsh plugin --profile headless add file:<tgz>` 裝打包好的插件，
+實機驗證（2026-09-29，DSH `0.2.0-rc.2`）：在獨立
+`DSH_HOME` 下，用 `dsh plugin --profile headless add file:<tgz>` 裝打包好的插件，
 以 `--patch` overlay 逐一指定模型跑 headless（無 key）：
 
-- `0.2.0`（peer 釘 rc.1）：DSH 啟動時直接略過插件（peer 版本不符）。
-- `0.2.1`：6 個免費模型正常回覆；`read` + `pwsh` 工具往返完成；請求全部
+- 插件 `0.2.0`（peer 釘 rc.1）：DSH 啟動時直接略過插件（peer 版本不符）。
+- 插件 `0.2.1`：6 個免費模型正常回覆；`read` + `pwsh` 工具往返完成；請求全部
   `Bearer public`、`200`，標題請求補上 2 個佔位工具。Ling 3.0 回
   `400 Upstream request failed: Endpoint is unavailable`，curl 最小請求相同，
   屬上游問題。
-- web UI 未驗證：harness 的 `build:web` 在本機因 esbuild 無法刪除 `%TEMP%`
-  的大型暫存檔（`Access is denied`，疑似防毒鎖檔）而失敗；headless 走同一條
-  `PiAiAdapter` → 插件路徑。
-- pi-ai 0.87 的內建 `opencode` 目錄把 `mimo-v2.5-free` 換成
-  `mimo-v2.6-flash-free`，插件的免費清單隨之改變（上游兩者當時都還在）。
+- web UI 未驗證；headless 走同一條 `PiAiAdapter` → 插件路徑。
+- pi-ai 0.87 的內建 `opencode` 目錄以 `mimo-v2.6-flash-free` 取代 `mimo-v2.5-free`；
+  內建目錄只是離線兜底，線上清單來自 models.dev（見 ADR 0002）。
 
-註：上面這套手動拼裝的實機驗證，現在由相容性驗證（`pnpm compat --dsh <版本>`）
+註：這套手動拼裝的實機驗證由相容性驗證（`pnpm compat --dsh <版本>`）
 以同樣的隔離 `DSH_HOME` + headless + overlay 路徑自動完成，見
 [`docs/compat-run.md`](compat-run.md)。
 
@@ -302,32 +296,29 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
   版本一致（DSH `0.2.0-rc.1` 以前是 `0.85.1`，`0.2.0-rc.2` 起是 `^0.87.1`），
   否則會裝出兩份 pi-ai。0.87 起走 transcript API（見上 §9）。
 
-## 上游閘門現況（實測 + 第三方佐證）
+## 上游閘門觀察（實測 + 第三方佐證）
 
-- 本機實測（2026-09-22）：Zen 目錄端點 200；但匿名 `hi`（Pi 官方原版
-  身份一字不改）回 `403 FreeTierError ... only be used from within OpenCode`。
-  此回應只證明上游拒絕請求；先前歸因為出口 IP 額度並排除 header 差異，證據不足。
-  重驗用 `scripts/reverify.sh`（紅綠燈，不耗額度外的人力）。
-- 2026-09-27 對照：DSH rc.2 的 `web` profile 對 7 個免費模型均收到
-  HTTP 403，沒有對話回覆。直接呼叫插件的 `big-pickle` 取得原始
-  `FreeTierError`，訊息為 `OpenCode's free tier can only be used from within OpenCode`。
-  同一台主機使用官方 OpenCode 1.18.16 與 1.18.32，以隔離設定、
-  `--pure`、匿名 `public` 和 `opencode/big-pickle` 測試，也收到相同 403。
-  因此失敗不限於 DSH；上游拒絕的具體條件仍未確認。未測試 Zen key。
-- 同日加做原專案對照：隔離安裝 npm `pi-opencode-direct@0.1.7`，
-  使用它自己的 `pi-ai@0.86.1` 與 `zenProvider().streamSimple()`，
-  對 7 個免費模型各送一次匿名短訊息（不重試）。7 個均回
-  `403 FreeTierError`，沒有文字回覆。這排除了僅 DSH 移植版本失敗的假設，
-  但不能據此判定 IP 額度或 key 是否能解決。
-  本插件可用 `node scripts/test-live.mjs` 重跑；先執行 `pnpm run build`。
-  此命令會發送實際請求，任一模型未回覆便以非零退出碼結束。
-- 2026-09-27 更正：以上 403 的共同原因是請求不帶 `read`／`bash` 工具
-  （短訊息測試都不帶工具；DSH 在 Windows 只有 `pwsh`），見 §8。
-  加上工具閘門對策後，`test-live.mjs` 7 個免費模型全部匿名回覆，
-  `reverify.sh` ②號燈轉綠。先前的 IP 額度推論不成立。
+- **不帶 `read`／`bash` 工具的請求一律 403**（§8）。以下觀察到的 403 都來自這個共同
+  原因（短訊息測試都不帶工具；DSH 在 Windows 只有 `pwsh`）：
+  - 匿名 `hi`（Pi 官方原版身份一字不改）回
+    `403 FreeTierError ... only be used from within OpenCode`（2026-09-22）。
+  - DSH rc.2 的 `web` profile 對 7 個免費模型均收到 HTTP 403，沒有對話回覆。直接呼叫
+    插件的 `big-pickle` 取得原始 `FreeTierError`，訊息為
+    `OpenCode's free tier can only be used from within OpenCode`。同一台主機使用官方
+    OpenCode 1.18.16 與 1.18.32，以隔離設定、`--pure`、匿名 `public` 和
+    `opencode/big-pickle` 測試，也收到相同 403（2026-09-27）。
+  - 隔離安裝 npm `pi-opencode-direct@0.1.7`，使用它自己的 `pi-ai@0.86.1` 與
+    `zenProvider().streamSimple()`，對 7 個免費模型各送一次匿名短訊息（不重試）。7 個
+    均回 `403 FreeTierError`，沒有文字回覆（2026-09-27）。這排除了「僅 DSH 移植版本
+    失敗」的假設。
+
+  這些 403 只證明上游拒絕請求，**不能**據此歸因為 IP 額度或 key。加上工具閘門對策後，
+  `test-live.mjs` 的免費模型全部匿名回覆，`reverify.sh` ②號燈為綠。重驗用
+  `scripts/reverify.sh`（紅綠燈）；`node scripts/test-live.mjs` 會發送實際請求，任一
+  模型未回覆便以非零退出碼結束，先執行 `pnpm run build`。未測試 Zen key。
 - 第三方說法（本專案未驗證）：免費額度是整出口 IP 共用的 trial bucket。
-  就算屬實，也不是本次 403 的原因（見 §8 與「踩雷紀錄」）。近期多方回報
-  收緊：LiteLLM 帶 header 也被拒、Hermes 靠補 session header 修復、
+  就算屬實，也不是上述 403 的原因（見 §8 與「診斷原則」）。多方回報收緊：
+  LiteLLM 帶 header 也被拒、Hermes 靠補 session header 修復、
   Go 要求 `x-opencode-session`（[pi#9230](https://github.com/earendil-works/pi/issues/9230)）。
 - 誠實註記： keyless 層沒有官方第三方合約，200 不代表被允許
   （見 opencodex 的立場說明）。本插件是社群 workaround 性質，
