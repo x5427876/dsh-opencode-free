@@ -70,8 +70,20 @@ dsh plugin --profile web add dsh-opencode-free@0.3.1
 dsh plugin --profile web list dsh-opencode-free --depth 0
 ```
 
-套件只出現一次，就代表安裝正確。若要確認插件也進了 composed config，可以跑
+`dsh plugin … list` 只能確認套件與版本已經裝上去，僅此而已——套件可以在它的 bundle
+註冊被移除之後仍然留在名單裡。若要確認插件也進了 composed config，可以跑
 `dsh --profile web --dump-config` 並找 `opencode-free`。
+
+> [!WARNING]
+> `--dump-config` 會把**整份組合後的 profile tree 原樣印出、不做任何遮蔽**：所有
+> bundle 的 patch、profile 自己的 patch 檔、home 層的 patch，以及所有 `--patch`
+> 覆寫層，全部寫在同一份文件裡。任何一層都可能帶著憑證——不只這個插件的，別的插件
+> 也一樣。所以**沒有任何一種 profile 狀態**能讓這份輸出可以安全貼進 issue、CI log
+> 或聊天；要分享請先自己遮蔽。
+> `--dump-default-config` 只印 bundle 層，略過 profile 的使用者層與 `--patch` 覆寫層，
+> 但同樣的理由讓它也看不到你自己的那一層。
+>
+> 若你跳過了 dump，請把 composed config 視為**未經驗證**——上面的清單不能替代它。
 
 其他 profile 和插件不會變動。
 
