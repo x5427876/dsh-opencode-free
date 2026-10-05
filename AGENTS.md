@@ -8,6 +8,12 @@ Use this guide when a user asks an Agent to install, update, verify, or remove
 - Confirm the target DSH profile; use `web` only when it is the user's target.
 - Use the pinned `v0.3.1` release assets for a first install, never a moving branch.
 - Never print API keys, credential stores, or request bodies.
+  `dsh --profile <name> --dump-config` prints the **whole composed profile tree,
+  unredacted** — every bundle patch, the profile's own patch file, the home-level
+  patch and any `--patch` overlay. Any layer can carry a credential belonging to
+  this plugin or another one, so no profile state makes it safe to paste; sharing
+  it means redacting it first. `--dump-default-config` prints bundle layers only,
+  omitting the profile's user layer and `--patch` overlays.
 - Do not start, stop, or restart DSH without explicit permission.
 - Preserve the DSH profile, unrelated plugins, and stored credentials.
 - Do not delete any DSH profile during install, update, verification, or uninstall.
@@ -94,7 +100,10 @@ Success requires:
 
 1. The requested package version appears once.
 2. `dsh --profile web --dump-config` shows `opencode-free` exactly once after
-   install or update, and absent after uninstall.
+   install or update, and absent after uninstall. Step 1 confirms only that the
+   package is installed — it cannot see whether the bundle registered — so if the
+   dump is skipped, report configuration composition as **unverified** rather
+   than as covered by step 1.
 3. No unrelated profile or plugin changed.
 4. A running DSH process was not restarted by the operation.
 

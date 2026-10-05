@@ -76,9 +76,23 @@ Check the install:
 dsh plugin --profile web list dsh-opencode-free --depth 0
 ```
 
-The install is correct when the package appears once. To confirm the plugin also
-reached the composed config, run `dsh --profile web --dump-config` and look for
-`opencode-free`.
+`dsh plugin … list` confirms that the package and its version are installed, and
+nothing beyond that — the package can stay installed after its bundle
+registration is gone. To confirm the plugin also reached the composed config, run
+`dsh --profile web --dump-config` and look for `opencode-free`.
+
+> [!WARNING]
+> `--dump-config` prints the **whole composed profile tree, unredacted**: every
+> bundle patch, the profile's own patch file, the home-level patch and any
+> `--patch` overlay, in one document. Any of those layers can carry a credential
+> belonging to this plugin or to another one, so there is no profile state that
+> makes the output safe to paste into an issue, a CI log or a chat — redact it
+> yourself before sharing. `--dump-default-config` narrows the output to bundle
+> layers only, omitting the profile's user layer and `--patch` overlays, but for
+> the same reason it cannot show you your own layer either.
+>
+> If you skip the dump, treat the composed configuration as **unverified**; the
+> listing above cannot substitute for it.
 
 Other profiles and plugins do not change.
 
