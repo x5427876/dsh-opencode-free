@@ -171,6 +171,25 @@ test('targets the DSH 0.2.1-alpha.1 contracts', async () => {
   )
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
     if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.1-alpha.1', name)
+    // A peer the plugin does not import unconditionally is genuinely optional, so
+    // `optional` on one of these would be a true statement about the package. The
+    // pair of assertions below is what rules that out: none is marked optional,
+    // and every one is the target of an IMPORT DECLARATION in the emitted
+    // output. In an ES module an import declaration can only occur at the top
+    // level — a nested one is a dynamic `import()` expression, which has no
+    // `from` clause — so matching the declaration form is what makes the claim
+    // top-level rather than merely "mentioned somewhere".
+    assert.notEqual(pkg.peerDependenciesMeta?.[name]?.optional, true, name)
+    assert.match(
+      host,
+      // String.raw, because a plain template literal turns `\s` and `\S` into
+      // the bare letters `s` and `S`, producing a regex that matches the word
+      // "import" and nothing else.
+      new RegExp(
+        String.raw`(?:^|\n)\s*import[\s\S]{0,400}?from ["']${name.replace('/', '\/')}["']`,
+      ),
+      `${name} is declared as a peer, so the emitted plugin must import it at the top level`,
+    )
   }
   assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^0.87.1')
   assert.equal(pkg.peerDependencies['react'], undefined)
