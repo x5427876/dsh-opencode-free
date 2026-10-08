@@ -74,6 +74,8 @@ window.__ModuleLoader__.load({
 			"probe": "立即探测",
 			"probing": "探测中…",
 			"probeFailed": "探测请求失败，模型显示保持不变，可重试。",
+			"probeCooldown": "刚跑过一轮探测，约 {minutes} 分钟内不会重复请求（每轮都要花共享额度）。",
+			"probeCooldownSeconds": "刚跑过一轮探测，约 {seconds} 秒后可再次点击（每轮都要花共享额度）。",
 			"probeUntrusted": "本轮有模型没能测到（上游限流、匿名层被拒或网络异常），这些模型的显示保持不变。",
 			"probedAt": "上次探测",
 			"unknownFree": "另有模型 Zen 正在免费层供应、models.dev 却没有它们的资料：",
@@ -92,6 +94,7 @@ window.__ModuleLoader__.load({
 			"probing.roundRefused": "本轮没能测到这些模型",
 			"probing.notModelFault": "这是上游当时的回应，不是该模型的结论",
 			"probing.retryHint": "点「立即探测」可重测",
+			"probing.bill": "{requests} 次请求 · {pending} 个待测",
 			"reason.dead": "已下架",
 			"reason.notlisted": "Zen 未提供",
 			"reason.timeout": "探测超时",
@@ -99,6 +102,8 @@ window.__ModuleLoader__.load({
 			"reason.anongated": "匿名层被拒",
 			"reason.quota": "额度用尽",
 			"reason.badkey": "key 无效",
+			"reason.endpoint": "上游端点不可达",
+			"reason.overloaded": "上游过载（稍后重试）",
 			"reason.unknown": "无响应",
 			"reason.error": "探测异常",
 			"advice.anongated": "上游当时拒绝了匿名层请求；挂 key 只能提高额度，不保证解除拒绝",
@@ -110,8 +115,32 @@ window.__ModuleLoader__.load({
 			"marker.opencodeonly": "上游说这个请求只能由 OpenCode 客户端发出",
 			"badge.vision": "视觉",
 			"badge.thinking": "思考",
+			"badge.tools": "工具",
+			"badge.measured": "实测",
+			"caps.ctx": "上下文",
+			"caps.out": "输出",
+			"caps.observed": "实测产出",
+			"caps.stated": "路由自述上限",
+			"caps.detailDeclared": "models.dev 声明 {value}",
+			"cap.sourceRoute": "来源：路由自述 {value}",
+			"cap.sourceVendor": "来源：厂商公布 {value}",
+			"cap.sourceWitnessed": "来源：目击生成 {value}",
+			"cap.sourceInferred": "来源：由夹挤签名推断 {value}",
+			"cap.sourceDeclared": "来源：models.dev 声明 {value}",
+			"caps.detailStated": "路由自述上限 {value}",
+			"caps.detailObserved": "实测产出 ≥{value}",
+			"caps.detailTruncated": "真实回答被预算截断 {count} 次",
+			"caps.truncated": "被预算截断",
+			"caps.truncatedTitle": "真实会话中被 max_tokens 拦腰截断的次数（免费）",
+			"caps.firstToken": "首字约 {ms}ms",
+			"caps.statedTitle": "上游在拒绝正文里说出的它自己的上限",
+			"caps.observedTitle": "本插件实际看这个模型写出过的最长回答",
+			"caps.declared": "声明",
 			"legend.vision": "多模态视觉",
 			"legend.thinking": "思考推理",
+			"legend.tools": "工具调用（本插件为每个请求补上 read/bash：免费层只放行带这两个工具的请求）",
+			"legend.measured": "已实测（非声明）",
+			"legend.verified": "已实测：{list}",
 			"empty": "当前没有可显示的模型。"
 		};
 
@@ -130,6 +159,8 @@ window.__ModuleLoader__.load({
 			"probe": "Probe now",
 			"probing": "Probing…",
 			"probeFailed": "The probe request failed; visibility is unchanged. You can retry.",
+			"probeCooldown": "A round just ran; it will not run again for about {minutes} minutes — each round spends the shared quota.",
+			"probeCooldownSeconds": "A round just ran; try again in about {seconds} seconds — each round spends the shared quota.",
 			"probeUntrusted": "Some models could not be measured this round (upstream throttling, the anonymous tier refusing, or a network error); those models keep their current visibility.",
 			"probedAt": "Last probe",
 			"unknownFree": "Models Zen serves on the free tier that models.dev carries no metadata for:",
@@ -148,6 +179,7 @@ window.__ModuleLoader__.load({
 			"probing.roundRefused": "These models could not be measured this round",
 			"probing.notModelFault": "that was the upstream's answer at the time, not a verdict on the model",
 			"probing.retryHint": "press “Probe now” to retry",
+			"probing.bill": "{requests} requests · {pending} still to measure",
 			"reason.dead": "Gone",
 			"reason.notlisted": "Not offered",
 			"reason.timeout": "Timed out",
@@ -155,6 +187,8 @@ window.__ModuleLoader__.load({
 			"reason.anongated": "Anon tier refused",
 			"reason.quota": "Quota used up",
 			"reason.badkey": "Bad key",
+			"reason.endpoint": "Upstream endpoint unreachable",
+			"reason.overloaded": "Upstream overloaded (retry later)",
 			"reason.unknown": "No response",
 			"reason.error": "Probe error",
 			"advice.anongated": "the upstream refused the anonymous request at the time; a key raises the quota but is not guaranteed to lift the refusal",
@@ -166,8 +200,32 @@ window.__ModuleLoader__.load({
 			"marker.opencodeonly": "upstream says only the OpenCode client may send this",
 			"badge.vision": "Vision",
 			"badge.thinking": "Thinking",
+			"badge.tools": "Tools",
+			"badge.measured": "measured",
+			"caps.ctx": "context",
+			"caps.out": "output",
+			"caps.observed": "observed",
+			"caps.stated": "route says",
+			"caps.detailDeclared": "models.dev declared {value}",
+			"cap.sourceRoute": "source: stated by the route ({value})",
+			"cap.sourceVendor": "source: published by the vendor ({value})",
+			"cap.sourceWitnessed": "source: a generation was watched ({value})",
+			"cap.sourceInferred": "source: inferred from a clamp signature ({value})",
+			"cap.sourceDeclared": "source: declared by models.dev ({value})",
+			"caps.detailStated": "route-stated ceiling {value}",
+			"caps.detailObserved": "observed ≥{value}",
+			"caps.detailTruncated": "real replies cut off at the budget: {count}",
+			"caps.truncated": "cut off",
+			"caps.firstToken": "first token ~{ms}ms",
+			"caps.truncatedTitle": "times a real reply was cut off at max_tokens (free)",
+			"caps.statedTitle": "the ceiling the upstream stated about itself in a refusal",
+			"caps.observedTitle": "the longest reply this plugin has watched this model produce",
+			"caps.declared": "declared",
 			"legend.vision": "Multimodal vision",
 			"legend.thinking": "Reasoning",
+			"legend.tools": "Tool calls (the plugin adds read/bash to every request — the free tier admits nothing without them)",
+			"legend.measured": "measured on the route, not declared",
+			"legend.verified": "verified: {list}",
 			"empty": "No models are available right now."
 		};
 
@@ -197,14 +255,22 @@ window.__ModuleLoader__.load({
 			return active;
 		}
 
+		/** `{name}` placeholders, replaced once, from a caller-supplied map. */
+		function interpolate(text, params) {
+			if (!params) return text;
+			return text.replace(/\{([a-zA-Z0-9_]+)\}/g, function (match, name) {
+				return hasOwnKey(params, name) ? String(params[name]) : match;
+			});
+		}
+
 		function translatorOf(ctx) {
 			var cachedTag = null;
 			var cachedDict = null;
-			return function (key) {
+			return function (key, params) {
 				var tag = activeLocaleOf(ctx);
 				if (tag !== cachedTag) { cachedTag = tag; cachedDict = dictionaryFor(tag); }
-				if (hasOwnKey(cachedDict, key)) return cachedDict[key];
-				return hasOwnKey(en, key) ? en[key] : key;
+				var text = hasOwnKey(cachedDict, key) ? cachedDict[key] : hasOwnKey(en, key) ? en[key] : key;
+				return interpolate(text, params);
 			};
 		}
 
@@ -242,6 +308,17 @@ window.__ModuleLoader__.load({
 			".opf-badge-vision{background:rgba(48,176,199,.10);color:#00737F;border:1px solid rgba(48,176,199,.25)}",
 			".opf-badge-think{background:rgba(255,69,58,.08);color:#C22C22;border:1px solid rgba(255,69,58,.20)}",
 			".opf-badge-think svg{width:10px;height:10px}",
+			".opf-badge-tools{background:rgba(88,86,214,.08);color:#4B4ACB;border:1px solid rgba(88,86,214,.20)}",
+			/* The measured mark rides on a badge that was verified on the route.
+			   It is deliberately a different channel from colour: a teal badge
+			   with a dot reads as "this one is not just a claim". */
+			".opf-measured::after{content:'✓';margin-left:2px;font-size:10px;opacity:.85}",
+			".opf-caps{font-size:11px;color:#6B6B72;white-space:nowrap;font-variant-numeric:tabular-nums}",
+			".opf-caps b{font-weight:500;color:#3A3A3F}",
+			".opf-caps .opf-declared{text-decoration:line-through;opacity:.75}",
+			".opf-limit+.opf-limit{margin-left:10px}",
+			".opf-hint-dot{cursor:help;opacity:.55}",
+			".opf-hint-dot:hover{opacity:1}",
 			".opf-side{display:flex;align-items:center;gap:12px;flex:none}",
 			".opf-state{font-size:13px;color:#6B6B72;user-select:none}",
 			".opf-state.on{color:#1D1D1F;font-weight:500}",
@@ -386,6 +463,12 @@ window.__ModuleLoader__.load({
 		/** Display names for thinking levels: "xhigh" reads "XHigh", not "Xhigh". */
 		var LEVEL_LABELS = { minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "XHigh", max: "Max" };
 
+		/** Token counts the way the picker writes them: 1048576 -> "1,048,576". */
+		function countLabel(n) {
+			if (typeof n !== "number" || !isFinite(n)) return "";
+			return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+		}
+
 		function levelLabel(level) {
 			if (typeof level !== "string" || level === "") return "";
 			if (Object.prototype.hasOwnProperty.call(LEVEL_LABELS, level)) return LEVEL_LABELS[level];
@@ -481,9 +564,36 @@ window.__ModuleLoader__.load({
 					var card = payload.models[k];
 					if (card === null || typeof card !== "object") continue;
 					if (typeof card.id !== "string" || card.id === "") continue;
+					/* The numbers and the provenance travel together. The card used
+					   to carry two booleans and a level, which is why a stale
+					   declaration and a measured one looked identical on screen —
+					   the panel had no way to show a number it was not sent. */
+					var ev = card.evidence !== null && typeof card.evidence === "object" ? card.evidence : {};
+					var stated = card.stated !== null && typeof card.stated === "object" ? card.stated : null;
+					var trunc = card.truncated !== null && typeof card.truncated === "object" ? card.truncated : null;
 					cards[card.id] = {
+						truncated:
+							trunc !== null && (typeof trunc.output === "number" || typeof trunc.context === "number")
+								? { output: typeof trunc.output === "number" ? trunc.output : 0, context: typeof trunc.context === "number" ? trunc.context : 0 }
+								: null,
+						stated:
+							stated !== null && (typeof stated.output === "number" || typeof stated.context === "number")
+								? { output: typeof stated.output === "number" ? stated.output : null, context: typeof stated.context === "number" ? stated.context : null }
+								: null,
 						image: card.image === true,
 						thinking: typeof card.thinking === "string" && card.thinking !== "" ? card.thinking : null,
+						contextWindow: typeof card.contextWindow === "number" && isFinite(card.contextWindow) ? card.contextWindow : null,
+						outputBudget: typeof card.outputBudget === "number" && isFinite(card.outputBudget) ? card.outputBudget : null,
+						observedOutput: typeof card.observedOutput === "number" && isFinite(card.observedOutput) ? card.observedOutput : null,
+						declaredContext: typeof card.declaredContext === "number" && isFinite(card.declaredContext) ? card.declaredContext : null,
+						declaredOutput: typeof card.declaredOutput === "number" && isFinite(card.declaredOutput) ? card.declaredOutput : null,
+						firstTokenMs: typeof card.firstTokenMs === "number" && isFinite(card.firstTokenMs) ? card.firstTokenMs : null,
+						evidence: {
+							context: typeof ev.context === "string" ? ev.context : "none",
+							output: typeof ev.output === "string" ? ev.output : "none",
+							vision: typeof ev.vision === "string" ? ev.vision : "none",
+							tools: typeof ev.tools === "string" ? ev.tools : "none",
+						},
 					};
 				}
 			}
@@ -572,9 +682,21 @@ window.__ModuleLoader__.load({
 		function probeCatalog() {
 			if (typeof fetch !== "function") return Promise.resolve(null);
 			try {
+				/* A 429 is not a failure: it is the floor between manual rounds, and
+				   it carries how much of it is left. The route used to answer 202 to
+				   a click that never started a round, so the card spun out its grace
+				   period with nothing to show and no word about why. Resolves
+				   { cooldownMs } for that case, a snapshot when the round started, and
+				   null for every other non-answer. */
 				return Promise.resolve(getJSON(PROBE_URL, { method: "POST", headers: { accept: "application/json" } }))
-					.then(function (response) { return response && response.ok ? response.json() : null; })
-					.then(readSnapshot)
+					.then(function (response) {
+						if (response && response.status === 429) {
+							return response.json().then(function (body) {
+								return { cooldownMs: typeof body.retryAfterMs === "number" ? body.retryAfterMs : 0 };
+							}).catch(function () { return { cooldownMs: 0 }; });
+						}
+						return response && response.ok ? response.json().then(readSnapshot) : null;
+					})
 					.catch(function (error) {
 						console.warn(TAG + " probe failed:", error && error.message ? error.message : error);
 						return null;
@@ -611,6 +733,8 @@ window.__ModuleLoader__.load({
 					? payload.targets.filter((id) => typeof id === "string")
 					: null,
 				startedAt: typeof payload.startedAt === "number" ? payload.startedAt : 0,
+				requests: typeof payload.requests === "number" ? payload.requests : 0,
+				pending: Array.isArray(payload.pending) ? payload.pending.filter((id) => typeof id === "string") : null,
 			};
 		}
 
@@ -644,6 +768,8 @@ window.__ModuleLoader__.load({
 			"anon-gated": "reason.anongated",
 			"quota-exhausted": "reason.quota",
 			"bad-key": "reason.badkey",
+			"upstream-overloaded": "reason.overloaded",
+			"endpoint-unavailable": "reason.endpoint",
 			"unknown": "reason.unknown",
 			"error": "reason.error"
 		};
@@ -660,7 +786,15 @@ window.__ModuleLoader__.load({
 		 * model is bad" when the round actually learned nothing about it, which
 		 * is exactly how a working model ends up wearing a failure badge.
 		 */
-		var CALLER_CODES = { "anon-gated": true, "quota-exhausted": true, "bad-key": true };
+		/* Codes that are about the CALLER, not the model. A row wearing one of these
+		   is grey, never red: the round learned nothing about that model. The reason
+		   is shown INLINE rather than only on hover — three different conditions all
+		   render as "未测到", and a reader who cannot tell them apart cannot tell
+		   whether to wait, reconfigure, or give up. */
+		/* "region-blocked" belongs here, not with the model's own failures: the model is
+		   not what is broken, the caller's egress is. Showing it in the model's own
+		   colour would say the model is at fault for where you are. */
+		var CALLER_CODES = { "anon-gated": true, "quota-exhausted": true, "bad-key": true, "upstream-overloaded": true, "endpoint-unavailable": true, "region-blocked": true };
 
 		function failureText(t, result) {
 			var key = typeof result.code === "string" && hasOwnKey(FAILURE_WORDS, result.code)
@@ -731,7 +865,10 @@ window.__ModuleLoader__.load({
 		 * can select.
 		 */
 		function ModelsCard(props) {
-			var t = typeof props.t === "function" ? props.t : function (key) { return key; };
+			/* The host supplies `t`; the fallback keeps the raw key but honours the
+			   same params argument, so a message with a placeholder degrades to a
+			   visible key rather than silently dropping the number. */
+			var t = typeof props.t === "function" ? props.t : function (key, params) { return interpolate(key, params); };
 			var scope = props.scope;
 
 			var tickState = useState(0);
@@ -908,7 +1045,15 @@ window.__ModuleLoader__.load({
 						   not been published yet. Without an identity the two are
 						   indistinguishable, and consuming `awaiting` on the earlier one is
 						   what ended the chain a tick early. */
-					reading.startedAt === pollRef.current.saw &&
+					/* `saw === null` means NOTHING was on screen when the button was
+					   pressed — the first read never landed — so there is no identity
+					   to compare against and nothing can be ruled out. That is an
+					   argument for keeping waiting, not for concluding the round is
+					   over: a finished reading whose stamp is a number can never
+					   equal null, so the test below would fail on every reading and
+					   hand the reader back a button for a round that is still
+					   running. */
+					(pollRef.current.saw === null || reading.startedAt === pollRef.current.saw) &&
 					Date.now() - pollRef.current.since < AWAIT_GRACE_MS
 				) {
 					/* `null`, deliberately: re-arming with the previous round's report
@@ -951,13 +1096,25 @@ window.__ModuleLoader__.load({
 				pollRef.current.saw =
 					pollRef.current.last === null ? null : pollRef.current.last.startedAt;
 				loadProgress().then(function (reading) {
+					/* A NULL reading is not "nothing to show", it is "nothing to
+					   identify against". The route answers nothing at all in the
+					   window right after a restart, so `last` stays null and this
+					   branch used to `adopt(null)` and return — which armed NO poll
+					   chain at all. The POST only answers when the round is OVER
+					   (29s measured), so the card sat busy with nothing watching:
+					   a button that blinked once and then nothing. Arm the poll;
+					   `adopt()` applies the grace to whatever cannot be ruled out. */
+					if (reading === null) {
+						if (pollRef.current.awaiting) startPolling(null);
+						return;
+					}
 					/* A reading can already be finished — the round may not have
 					   started yet when this first poll lands, and the host answers
 					   `running: false` until it does. That is the PRE-round state,
 					   not a completed round, so it must not be read as the end of
 					   this one. The POST returning successfully is what confirms the
 					   round exists; until then the poll simply keeps going. */
-					if (reading === null || reading.running === true) {
+					if (reading.running === true) {
 						adopt(reading);
 						return;
 					}
@@ -980,6 +1137,23 @@ window.__ModuleLoader__.load({
 				   and freeze the progress area mid-round, which is the exact bug
 				   the note above `pollActive` records. */
 				probeCatalog().then(function (snapshot) {
+					if (snapshot !== null && typeof snapshot.cooldownMs === "number") {
+						/* The round was refused, not started. Say so with the number,
+						   and leave the panel exactly as it was. */
+						pollRef.current.awaiting = false;
+						pollRef.current.active = false;
+						stopPolling();
+						/* Under a minute left must not be rounded UP into the next
+						   minute: 60.7s said "about 2 minutes" and the reader
+						   waited out a minute for a button that still refused. */
+						setProbeError(
+							snapshot.cooldownMs < 60000
+								? t("probeCooldownSeconds", { seconds: Math.max(1, Math.round(snapshot.cooldownMs / 1000)) })
+								: t("probeCooldown", { minutes: Math.ceil(snapshot.cooldownMs / 60000) }),
+						);
+						setProbing(false);
+						return;
+					}
 					if (snapshot !== null) setCatalog(snapshot);
 					else {
 						/* The round may still be running, so the poll is left alone
@@ -1104,21 +1278,105 @@ window.__ModuleLoader__.load({
 			var rows = ordered.map(function (id) {
 				var shown = !hasOwnKey(hidden, id);
 				var card = hasOwnKey(cards, id) ? cards[id] : null;
-				var left = [E("span", { key: "id", className: "opf-id" }, id)];
+				/* What was VERIFIED about this model, on the name itself.
+				   The tool badge used to sit here and it was removed: 9 of 12 rows
+				   carried it, none ever lacked it, and a mark that is on every row
+				   tells the reader nothing they would not have assumed. The
+				   measurement stays — it is what would put the badge back — and it
+				   lives on the model name now, which is the one element that means
+				   "this model" rather than "this number". */
+				var verified = [];
+				if (card !== null) {
+					if (card.evidence.tools === "route") verified.push(t("badge.tools"));
+					if (card.evidence.vision === "route" && card.image === true) verified.push(t("badge.vision"));
+				}
+				var left = [
+					E("span", {
+						key: "id",
+						className: "opf-id",
+						title: verified.length === 0 ? undefined : t("legend.verified", { list: verified.join(" · ") }),
+					}, id),
+				];
 				var rowClass = "opf-row";
 				/* Capability badges describe the model and are always on
 				   screen; the probe badge describes THIS round and sits after
 				   them, because it is the thing the reader just asked for. */
 				{
+					/* A badge carries the measured mark when the ROUTE was asked
+					   and agreed. Without it a declared badge and a verified one
+					   are the same object on screen, which is the whole reason
+					   this row could not be trusted before. */
+					var measuredClass = function (on) { return on ? " opf-measured" : ""; };
 					if (card !== null && card.image === true) {
-						left.push(E("span", { key: "vision", className: "opf-badge opf-badge-vision" },
-							eyeIcon(),
-							E("span", null, t("badge.vision"))));
+						left.push(E("span", {
+							key: "vision",
+							className: "opf-badge opf-badge-vision" + measuredClass(card.evidence.vision === "route"),
+							title: card.evidence.vision === "route" ? t("legend.measured") : t("caps.declared")
+						}, eyeIcon(), E("span", null, t("badge.vision"))));
 					}
 					if (card !== null && card.thinking !== null) {
 						left.push(E("span", { key: "think", className: "opf-badge opf-badge-think" },
 							starIcon(),
 							E("span", null, t("badge.thinking") + " · " + levelLabel(card.thinking))));
+					}
+					/* The two numbers the request path uses, and ONLY the effective
+					   values. Provenance moved into the tooltip.
+
+					   This line used to read `输出预算 131,072 → 262,144` plus two more
+					   numbers on the same line, and the reader asked what the current
+					   maximum output was — a line that shows four figures and two
+					   arrows cannot answer that at a glance, however true each figure
+					   is. The effective value is what the request carries, so it is what
+					   the line says; where it came from, and what the model has actually
+					   been seen writing, are one hover away. */
+					if (card !== null && (card.contextWindow !== null || card.outputBudget !== null)) {
+												/* Where each number comes from, NAMED. "已实测" used to cover four
+							different things — a limit the route stated, a figure a vendor
+							published, a reply somebody watched finish, and a raise inferred
+							from a clamp — and the panel could not tell them apart. The number
+							never changes; the word does. */
+						var SOURCE_WORDS = {
+							route: "cap.sourceRoute",
+							vendor: "cap.sourceVendor",
+							witnessed: "cap.sourceWitnessed",
+							inferred: "cap.sourceInferred",
+							declared: "cap.sourceDeclared",
+						};
+						var detail = function (shown, declared, evidence) {
+							var lines = [t(SOURCE_WORDS[evidence] ?? "cap.sourceDeclared", { value: countLabel(shown) })];
+							if (declared !== null && declared !== shown) {
+								lines.push(t("caps.detailDeclared", { value: countLabel(declared) }));
+							}
+							return lines.join("\n");
+						};
+						var parts2 = [];
+						if (card.contextWindow !== null) {
+							parts2.push(E("span", { key: "ctx", className: "opf-limit", title: detail(card.contextWindow, card.declaredContext, card.evidence.context) },
+								t("caps.ctx") + " ", E("b", null, countLabel(card.contextWindow)),
+								card.evidence.context !== "declared"
+									? E("span", { key: "ctxt", className: "opf-hint-dot" }, " ⓘ")
+									: null));
+						}
+						if (card.outputBudget !== null) {
+							/* Everything known about the output number, in one place:
+							   what the publisher declared, what the route says it will
+							   take, what the model has been watched writing, and how
+							   often a real reply has been cut off. They were four items on
+							   the row; they are one sentence in a tooltip. */
+							var lines2 = detail(card.outputBudget, card.declaredOutput, card.evidence.output);
+							if (card.stated !== null && card.stated.output !== null) {
+								lines2 += (lines2 === "" ? "" : "\n") + t("caps.detailStated", { value: countLabel(card.stated.output) });
+							}
+							if (card.observedOutput !== null) {
+								lines2 += (lines2 === "" ? "" : "\n") + t("caps.detailObserved", { value: countLabel(card.observedOutput) });
+							}
+							if (card.truncated !== null) {
+								lines2 += (lines2 === "" ? "" : "\n") + t("caps.detailTruncated", { count: String(card.truncated.output + card.truncated.context) });
+							}
+							parts2.push(E("span", { key: "out", className: "opf-limit", title: lines2 },
+								t("caps.out") + " ", E("b", null, countLabel(card.outputBudget))));
+						}
+						left.push(E("span", { key: "limits", className: "opf-caps" }, parts2));
 					}
 				}
 				if (hasReading) {
@@ -1131,9 +1389,20 @@ window.__ModuleLoader__.load({
 						: "unprobed";
 					if (status === "ok") {
 						var ms = typeof verdict.ms === "number" && isFinite(verdict.ms) ? Math.max(0, Math.round(verdict.ms)) : null;
-						left.push(E("span", { key: "probe", className: "opf-probe opf-probe-ok" },
+						// Total latency alone cannot tell a model that is slow to
+						// START from one that simply writes a lot, and those feel
+						// completely different to wait for.
+						var ftft = card !== null && card.firstTokenMs !== null
+							? t("caps.firstToken", { ms: String(card.firstTokenMs) })
+							: "";
+						left.push(E("span", {
+							key: "probe",
+							className: "opf-probe opf-probe-ok",
+							title: ftft === "" ? undefined : ftft
+						},
 							checkIcon(),
-							E("span", { className: "opf-probe-ms" }, ms === null ? "" : ms + "ms")));
+							E("span", { className: "opf-probe-ms" }, ms === null ? "" : ms + "ms"),
+							ftft === "" ? null : E("span", { key: "ftft", className: "opf-probe-ms" }, " · " + ftft)));
 					} else if (status === "failed") {
 						if (CALLER_CODES[verdict.code] === true) {
 							/* Grey, never red: the round learned nothing about
@@ -1145,7 +1414,8 @@ window.__ModuleLoader__.load({
 								className: "opf-probe opf-probe-wait",
 								title: failureDetail(t, verdict)
 							}, E("span", { className: "opf-waitdot" }),
-								E("span", null, t("probing.unmeasured"))));
+								E("span", null, t("probing.unmeasured")),
+								E("span", null, " · " + failureText(t, verdict))));
 						} else {
 							/* Red, but never mute: the badge names the reason and
 							   the full story (status + what to do about it) rides
@@ -1250,7 +1520,9 @@ window.__ModuleLoader__.load({
 			   renders whenever the card does. */
 			var legend = E("span", { className: "opf-legend" },
 				E("span", { className: "opf-badge opf-badge-vision" }, eyeIcon(), E("span", null, t("legend.vision"))),
-				E("span", { className: "opf-badge opf-badge-think" }, starIcon(), E("span", null, t("legend.thinking"))));
+				E("span", { className: "opf-badge opf-badge-think" }, starIcon(), E("span", null, t("legend.thinking"))),
+				E("span", { className: "opf-badge opf-badge-tools", title: t("legend.tools") }, E("span", null, "read + bash")),
+				E("span", { className: "opf-badge opf-measured" }, E("span", null, t("legend.measured"))));
 
 			/* Progress capsule. LIVE: pulsing dot, "正在探测", "done/total", mini
 			   bar — per the mock. FINISHED: the same shape, tinted by the
@@ -1342,6 +1614,20 @@ window.__ModuleLoader__.load({
 								t("probing.reconfirmed") + " " + String(reconfirmedCount))
 							: null);
 				}
+			}
+
+			/* What the round COST. A round may take several samples of one model, so
+			   the model tally is not the bill: someone who presses "Probe now" is
+			   spending the shared anonymous bucket and is entitled to see what it
+			   bought and what it still owes. */
+			if (capsule !== null && progress !== null && progress.running !== true && progress.requests > 0) {
+				capsule = E("span", { className: "opf-capsule" },
+					capsule,
+					E("span", { className: "opf-capsule-skip" },
+						t("probing.bill", {
+							requests: progress.requests,
+							pending: progress.pending === null ? 0 : progress.pending.length,
+						})));
 			}
 
 			/* When the tier refused, said the quota was gone, or rejected the key,

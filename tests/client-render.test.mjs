@@ -471,6 +471,11 @@ test('a finished round stays on screen: tally, per-row reasons, and the dead mod
   let postResolve = null
   const finished = {
     running: false,
+    // The round's COST, which is not its model tally: a round may take several
+    // samples of one model, and someone who presses "Probe now" is spending the
+    // shared anonymous bucket.
+    requests: 11,
+    pending: ['longcat-2.5-preview-free'],
     total: 3,
     done: 3,
     current: null,
@@ -525,6 +530,18 @@ test('a finished round stays on screen: tally, per-row reasons, and the dead mod
     assert.ok(
       end.texts.some((t) => t.includes('探测完成')),
       'the capsule reads as finished',
+    )
+    // The COST, beside the tally: `done/total` counts models, this counts what
+    // the shared bucket paid. The card's own translator is in play here, so the
+    // tree carries real wording with the numbers interpolated — which is what a
+    // user actually reads.
+    assert.ok(
+      end.texts.some((x) => String(x).includes('11') && String(x).includes('次请求')),
+      "the round's bill is rendered with the request count: " + JSON.stringify(end.texts),
+    )
+    assert.ok(
+      end.texts.some((x) => String(x).includes('1 个待测')),
+      'and how many models still owe samples',
     )
     assert.ok(
       end.texts.some((t) => t.includes('1')),
@@ -1194,6 +1211,45 @@ test('the manual round closes on the poll, not on the POST that started it', asy
   }
 })
 
+test('a throttled click says so, with the number, instead of spinning', async () => {
+  // The route used to answer 202 to a click that never started a round, so the
+  // card waited out AWAIT_GRACE_MS (30s) with nothing on screen — the exact
+  // "I clicked probe and nothing happened" report. 429 is a real answer with a
+  // real number in it, and the card must show that number rather than a spinner.
+  const mounted = await renderCard({
+    hidden: [],
+    routes: ({ url, method }) => {
+      if (url.endsWith('/api/probe') && method === 'POST') {
+        return { ok: false, status: 429, json: async () => ({ error: 'cooldown', retryAfterMs: 243_000 }) }
+      }
+      return { ok: true, json: async () => SNAPSHOT }
+    },
+  })
+  try {
+    mounted.findButton('立即探测').props.onClick()
+    await mounted.fireTimers()
+    const texts = collect(mounted.rerender()).texts
+    assert.ok(
+      texts.some((t) => t.includes('分钟')),
+      'the card names the remaining wait, rounded up to whole minutes',
+    )
+    assert.equal(
+      texts.some((t) => t.includes('探测中')),
+      false,
+      'and it does NOT sit in the probing state for a round that never started',
+    )
+    assert.equal(
+      [...walk(mounted.rerender())].some(
+        (n) => n.tag === 'button' && [...walk(n)].some((d) => d.text === '立即探测'),
+      ),
+      true,
+      'the button is released immediately',
+    )
+  } finally {
+    mounted.dispose()
+  }
+})
+
 test('every palette colour meets WCAG AA against the card', async () => {
   // Audit 2026-09-30: all 26 text colours were measured with the WCAG 2.1
   // relative-luminance formula and NONE reached 4.5:1 — including the probe
@@ -1489,4 +1545,179 @@ test('a slow catalogue gate does not end the poll before the requested round sta
   } finally {
     mounted.dispose()
   }
+})
+
+test('GUARD: a click whose first progress read FAILS still waits for the round', async () => {
+  // Right after a restart is the case that breaks it. The card mounts and issues
+  // its first read; the plugin's route is not answering yet (or the read fails),
+  // so `loadProgress()` resolves to null and `pollRef.current.last` stays null.
+  // The reader clicks in that window, `saw` is null, and the click handler's own
+  // read takes the same branch:
+  //
+  //     if (reading === null || reading.running === true) { adopt(reading); return; }
+  //
+  // `adopt(null)` returns immediately, so the POLL CHAIN IS NEVER ARMED. Nothing
+  // is watching, the POST answers only when the round is over (29s measured), and
+  // the panel shows a button that blinked once and then nothing at all.
+  //
+  // No identity on screen means nothing can be ruled out, which is an argument for
+  // arming the poll, not for concluding. The grace still bounds it, so a backend
+  // that never starts the round still releases the button.
+  const OLD = 1759146617000
+  const previous = {
+    running: false,
+    total: 2,
+    done: 2,
+    current: null,
+    results: { 'big-pickle': { status: 'ok', ms: 90 } },
+    targets: null,
+    startedAt: OLD,
+  }
+  const live = {
+    running: true,
+    total: 3,
+    done: 1,
+    current: 'muse-spark-1.3-contributor-free',
+    results: { 'muse-spark-1.3-contributor-free': { status: 'ok', ms: 140 } },
+    startedAt: OLD + 5000,
+  }
+  let polls = 0
+  let clicked = false
+  const mounted = await renderCard({
+    hidden: [],
+    routes: ({ url, method }) => {
+      if (url.endsWith('/api/probe') && method === 'POST') {
+        clicked = true
+        return { ok: true, status: 202, json: async () => SNAPSHOT }
+      }
+      if (url.endsWith('/api/probe') && method === 'GET') {
+        // EVERY read before the click fails — the route is not up yet, which is
+        // what the window right after a restart looks like.
+        if (!clicked) return { ok: false, status: 503, json: async () => null }
+        polls += 1
+        return { ok: true, json: async () => (polls <= 1 ? previous : live) }
+      }
+      return { ok: true, json: async () => SNAPSHOT }
+    },
+  })
+  try {
+    mounted.findButton('立即探测').props.onClick()
+    // Each flush runs the promises armed by the previous one, so the chain needs
+    // a few ticks to reach the round that is really running.
+    await mounted.fireTimers()
+    await mounted.fireTimers()
+    await mounted.fireTimers()
+    await mounted.fireTimers()
+    assert.ok(polls >= 3, 'the poll chain is armed even though the first read failed')
+    assert.ok(
+      collect(mounted.rerender()).texts.some((t) => t.includes('探测中')),
+      'and the button stays busy, because nothing observed rules the stale reading out',
+    )
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test('GUARD: the row states the limits that are IN EFFECT, and hides the provenance', async () => {
+  // Asked directly: "当前配置的最大输出大小是多少，没看懂". The row answered with
+  // four figures and two arrows — `输出预算 131,072 → 262,144`, `路由自述上限
+  // 262,144`, `实测产出 ≥64,000` — and every one of them was true, and the
+  // reader still could not say what the plugin SENDS. A line cannot be made true
+  // enough to be readable; it has to be shortened.
+  //
+  // So the line carries the effective values only, and everything about where
+  // they came from is one hover away. The declared value is NOT struck through in
+  // the open any more: a strikethrough next to the live number reads as "this is
+  // what you get" to anyone who has not internalised the convention.
+  const mounted = await renderCard({
+    hidden: [],
+    snapshot: {
+      ...SNAPSHOT,
+      visible: ['longcat-2.5-preview-free'],
+      models: [
+        {
+          id: 'longcat-2.5-preview-free',
+          image: true,
+          thinking: 'high',
+          contextWindow: 1000000,
+          outputBudget: 262144,
+          declaredContext: 1000000,
+          declaredOutput: 131072,
+          observedOutput: 64000,
+          stated: { output: 262144, at: 1759146617000 },
+          evidence: { context: 'declared', output: 'witnessed', vision: 'route', tools: 'route' },
+        },
+      ],
+    },
+  })
+  // The two limits are sibling spans, so the row is read as one line of text.
+  // Titles are attributes, not text — which is the whole point: the provenance is
+  // present on the row without being IN the row.
+  const line = collect(mounted.rerender()).texts.join(' ')
+  assert.match(line, /1,000,000/, 'the context window is on the row')
+  assert.match(line, /262,144/, 'the number that is actually SENT is on the row')
+  assert.doesNotMatch(line, /131,072/, 'the replaced declaration is not competing for the eye')
+  assert.doesNotMatch(line, /64,000/, 'nor is what the model was watched writing')
+  const titled = [...walk(mounted.rerender())].filter((n) => typeof n.props?.title === 'string' && n.props.title.length > 0)
+  const outputNode = titled.find((n) => n.props.title.includes('262,144'))
+  assert.ok(outputNode !== undefined, 'and the provenance is one hover away')
+  assert.match(outputNode.props.title, /131,072/, 'the declaration it replaced')
+  assert.match(outputNode.props.title, /64,000/, 'what the model was actually watched writing')
+  // The harness swaps `setTimeout` for a capturing stub and only puts it back on
+  // dispose. A test that leaves it installed makes the NEXT test's render loop
+  // wait on a timer that is never fired — a hang with no error anywhere, which is
+  // what this file did to itself twice today.
+  mounted.dispose()
+})
+
+test('GUARD: a badge that is on every row is not a badge', async () => {
+  // Asked, correctly: tool calling works on every model here, so what is the
+  // badge telling me? Measured over the live set — 9 rows carried the tool badge,
+  // two were unmeasured, and NOT ONE ever lacked it. A mark that appears on every
+  // row asserts nothing a reader would not have assumed, and it takes space that
+  // a varying capability should have.
+  //
+  // Vision is the contrast that keeps the other two: 7 rows declare image input
+  // and 5 do not, so that badge carries a decision — DSH refuses to attach a
+  // screenshot to a model that does not take one. Thinking never says "cannot"
+  // either, but it names the LEVEL you will be offered, which is a setting rather
+  // than a claim.
+  //
+  // So the tool badge is gone and the measurement moved to the model name, which
+  // is the one element that means "this model". The measurement must survive: if
+  // a model ever refuses to call a tool, that is the fact that earns the badge
+  // back, and nothing here may throw the evidence away.
+  const mounted = await renderCard({
+    hidden: [],
+    snapshot: {
+      ...SNAPSHOT,
+      visible: ['space-bunny-free', 'big-pickle'],
+      models: [
+        { id: 'space-bunny-free', image: true, thinking: 'max', contextWindow: 1048576, outputBudget: 524288, declaredContext: 1048576, declaredOutput: 524288, evidence: { context: 'declared', output: 'declared', vision: 'route', tools: 'route' } },
+        { id: 'big-pickle', image: false, thinking: 'high', contextWindow: 200000, outputBudget: 48000, declaredContext: 200000, declaredOutput: 32000, evidence: { context: 'route', output: 'witnessed', vision: 'none', tools: 'route' } },
+      ],
+    },
+  })
+  const nodes = [...walk(mounted.rerender())]
+  const badges = nodes.filter((n) => String(n.props?.className ?? '').includes('opf-badge'))
+  // The card's footer legend keeps one, because the free tier's admission rule is
+  // a fact about THIS PLUGIN rather than about any model, and it is worth saying
+  // once. What must not survive is the per-row one.
+  const toolBadges = badges.filter((n) => String(n.props.className).includes('opf-badge-tools'))
+  assert.equal(toolBadges.length, 1, 'exactly one tools badge, and it is the legend')
+  assert.match(
+    [...walk(toolBadges[0])].filter((n) => n.text).map((n) => n.text).join(''),
+    /read/,
+    'the legend states the admission rule instead of a per-model claim',
+  )
+  assert.match(String(toolBadges[0].props.title ?? ''), /read|bash/, 'and explains it on hover')
+  assert.ok(
+    badges.some((n) => String(n.props.className).includes('opf-badge-vision')),
+    'the vision badge stays: it is the capability that actually varies',
+  )
+  // The evidence is not discarded with the badge: it moves to the model name,
+  // which is the one element on the row that means "this model".
+  const idNodes = nodes.filter((n) => String(n.props?.className ?? '') === 'opf-id')
+  assert.equal(idNodes.length, 2, 'one per row')
+  for (const node of idNodes) assert.match(String(node.props.title ?? ''), /工具/, 'tools stay listed where they were verified')
 })

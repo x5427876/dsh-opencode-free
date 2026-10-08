@@ -5,7 +5,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { isFree, thinkingLevelMapFor } from '../lib/catalog.js'
+import { channelFor, isFree, thinkingLevelMapFor } from '../lib/catalog.js'
 
 /** A precondition failed: nothing was installed and no request was sent. */
 export class CompatPreconditionError extends Error {}
@@ -245,7 +245,9 @@ const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
  * `undefined` for a toggle model or one with no list: the default is used.
  */
 function lowestEffort(record) {
-  const map = thinkingLevelMapFor(record)
+  // The channel is load-bearing: `thinkingLevelMapFor` decides the Off
+  // row from it, and a record that declares no reasoning gets no map at all.
+  const map = thinkingLevelMapFor(record, channelFor(record))
   if (map === undefined) return undefined
   return EFFORT_ORDER.find((level) => typeof map[level] === 'string')
 }

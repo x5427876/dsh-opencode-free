@@ -12,6 +12,7 @@ import {
   GATE_TTL_MS,
   MODELS_DEV_URL,
   cachePath,
+  adopt,
   catalogueIsStale,
   channelFor,
   createCatalog,
@@ -30,6 +31,36 @@ import {
   modelCapability,
   readCache,
   thinkingLevelMapFor,
+  measuredEffortMap,
+  measuredContextFor,
+  reasoningFingerprint,
+  isMeasuredEffort,
+  isMeasuredContext,
+  contextFingerprint,
+  contextWindowFor,
+  observedOutputFor,
+  observedOutputIsStale,
+  contextEvidenceFor,
+  seededContextFor,
+  CEILING_SILENCE_TTL_MS,
+  isMeasuredLimits,
+  DEAD_RECHECK_MS,
+  CAPABILITY_TTL_MS,
+  capabilityFingerprint,
+  measuredCapabilityFor,
+  clampVerdict,
+  effortVerdict,
+  nextEffortQuestion,
+  fallbackLevelFor,
+  effortVerdictFresh,
+  EFFORT_READING,
+  EFFORT_TTL_MS,
+  CAPABILITY_SAMPLE_BUDGET,
+  EFFORT_SAMPLES,
+  EFFORT_WORKING_RATIO,
+  EFFORT_CANDIDATE_SAMPLES,
+  MANUAL_SAMPLE_BUDGET,
+  effortVerdictFrom,
   topThinkingLevel,
   unknownFree,
   writeCacheAtomic,
@@ -62,6 +93,7 @@ const modelsDict = () => ({
   'ling-3.0-flash-fin-free': {
     id: 'ling-3.0-flash-fin-free',
     name: 'Ling 3.0 Flash Fin Free',
+    reasoning: true,
     reasoning_options: [{ type: 'toggle' }],
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   },
@@ -69,7 +101,9 @@ const modelsDict = () => ({
   'muse-spark-1.3-contributor-free': {
     id: 'muse-spark-1.3-contributor-free',
     name: 'Muse Spark 1.3 Free',
+    reasoning: true,
     reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }],
+    modalities: { input: ['text', 'image', 'video', 'pdf', 'audio'], output: ['text'] },
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
     limit: { context: 1048576, output: 32768 },
   },
@@ -77,13 +111,16 @@ const modelsDict = () => ({
   'muse-spark-1.2-contributor-free': {
     id: 'muse-spark-1.2-contributor-free',
     name: 'Muse Spark 1.2 Free',
+    reasoning: true,
     status: 'deprecated',
     reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }],
+    modalities: { input: ['text', 'image', 'video', 'pdf', 'audio'], output: ['text'] },
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
   },
   'deepseek-v4-flash-free': {
     id: 'deepseek-v4-flash-free',
     name: 'DeepSeek V4 Flash Free',
+    reasoning: true,
     status: 'deprecated',
     cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
     limit: { context: 200000, output: 128000 },
@@ -303,16 +340,24 @@ test('channelFor defaults to completions (opencode is openai-compatible)', () =>
 const { getSupportedThinkingLevels, clampThinkingLevel } = await import('@earendil-works/pi-ai')
 
 test('thinkingLevelMapFor maps the published effort levels and nulls the rest', () => {
-  // space-bunny-free, real record 2026-09-29. `off` stays absent (offered):
-  // the placeholder effort that would otherwise reach the wire is stripped by
-  // the plugin's onPayload guard instead (see the GUARD test in
-  // compatibility.test.mjs).
+  // space-bunny-free, real record 2026-09-29. `off` is NULL for an unmeasured
+  // declared ladder: measured 2026-10-06, `reasoning_effort:"none"` answers
+  // HTTP 400 there, and an empty effort list is what the host renders as its
+  // provider-default row — which already means "send nothing". Offering `off`
+  // anyway produced a row that lied about stopping a model nothing could stop.
   assert.deepEqual(
-    thinkingLevelMapFor({
-      reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }],
-    }),
+    thinkingLevelMapFor(
+      { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }] },
+      'openai-completions',
+    ),
     {
-      minimal: null,
+      off: null,
+      // Ladder rows are not filtered by models.dev: measured across eight models
+      // and both channels, no ladder level has EVER been refused, and
+      // muse-spark-1.3 accepts a `max` it never published at 516 reasoning
+      // tokens. An ignored ladder level is inert; an ignored `off` is the
+      // opposite of its promise, which is why only `off` is gated.
+      minimal: 'minimal',
       low: 'low',
       medium: 'medium',
       high: 'high',
@@ -322,88 +367,546 @@ test('thinkingLevelMapFor maps the published effort levels and nulls the rest', 
   )
   // muse-spark, real record: no `max`, so it must not be offered.
   assert.deepEqual(
-    thinkingLevelMapFor({
-      reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }],
-    }),
+    thinkingLevelMapFor(
+      { reasoning: true, reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }] },
+      'openai-responses',
+    ),
     {
+      off: null,
       minimal: 'minimal',
       low: 'low',
       medium: 'medium',
       high: 'high',
       xhigh: 'xhigh',
+      // ABSENT, not null: pi-ai reads an absent opt-in level as "not offered",
+      // and `max` is withheld until the model names it.
     },
   )
-  // Off is never claimed either way: it means "send no reasoning parameter".
+  // `off` is always PRESENT as a key now, and null for an unmeasured ladder.
+  // "Not measured" and "measured to work" are different answers, and conflating
+  // them is what made an absent key read as permission.
   assert.equal(
-    Object.prototype.hasOwnProperty.call(
-      thinkingLevelMapFor({ reasoning_options: [{ type: 'effort', values: ['low'] }] }),
-      'off',
-    ),
+    thinkingLevelMapFor({ reasoning: true, reasoning_options: [{ type: 'effort', values: ['low'] }] }, 'openai-completions').off,
+    null,
+  )
+})
+
+test('thinkingLevelMapFor always returns a map for a reasoning model', () => {
+  // The original regression: `undefined` is NOT "no claim" — pi-ai reads an
+  // absent map as "offer everything". Measured 2026-10-06, that had seven of the
+  // ten live models offering four levels models.dev publishes nothing for.
+  for (const record of [
+    { reasoning: true, reasoning_options: [{ type: 'toggle' }] },
+    { reasoning: true, reasoning_options: [] },
+    { reasoning: true, reasoning_options: undefined },
+    { reasoning: true, reasoning_options: 'nonsense' },
+    { reasoning: true, reasoning_options: [{ type: 'effort' }] },
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: [] }] },
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: ['turbo', 7, null] }] },
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: ['turbo'] }] },
+  ]) {
+    const map = thinkingLevelMapFor(record, 'openai-completions')
+    assert.equal(typeof map, 'object', `expected a map for ${JSON.stringify(record)}`)
+    assert.notEqual(map, null)
+    // Nothing unmeasured may claim an off the model was never shown to accept.
+    assert.equal(map.off, null, 'an unmeasured record claims no off value')
+  }
+  // A non-reasoning model is the ONE case that produces no map at all:
+  // `getSupportedThinkingLevels` already answers ["off"] on its own.
+  assert.equal(thinkingLevelMapFor({ reasoning: false, reasoning_options: [] }, 'openai-completions'), undefined)
+})
+
+test('INVARIANT: no string outside {published, "none"} lands in a map', () => {
+  // The "off"-is-a-400 guard. A string value is exactly what makes pi-ai emit
+  // `reasoning_effort`, and "off" is not in Zen's validated set
+  // (minimal|low|medium|high|xhigh|max|none).
+  const known = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+  const records = [
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }] },
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }] },
+    { reasoning: true, reasoning_options: [{ type: 'effort', values: ['none', 'high'] }] },
+    { reasoning: true, reasoning_options: [{ type: 'toggle' }] },
+    { reasoning: true, reasoning_options: [] },
+  ]
+  for (const record of records) {
+    const map = thinkingLevelMapFor(record, 'openai-completions')
+    for (const value of Object.values(map)) {
+      if (typeof value !== 'string') continue
+      assert.ok(value === 'none' || known.has(value), `unexpected map value ${value}`)
+    }
+  }
+  // A measured level-works value IS a known level name, by construction.
+  const measured = thinkingLevelMapFor(
+    { reasoning: true, reasoning_options: [{ type: 'toggle' }] },
+    'openai-completions',
+    { kind: 'level-works', level: 'minimal', fp: 'x', api: 'openai-completions', at: 0 },
+  )
+  assert.equal(measured.off, 'minimal')
+})
+
+test('the levels a host offers follow models.dev, per model', () => {
+  // The map the record produces, read back through pi-ai's own filter. An
+  // unmeasured model offers no `off`: measured 2026-10-06, offering it produced
+  // a row that either sent nothing (model kept reasoning) or was refused with a
+  // 400 — never what the label said.
+  const of = (id, measured) =>
+    getSupportedThinkingLevels({
+      id,
+      reasoning: true,
+      thinkingLevelMap: thinkingLevelMapFor(modelsDict()[id], 'openai-completions', measured),
+    })
+  assert.deepEqual(of('space-bunny-free'), ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+  assert.deepEqual(of('muse-spark-1.3-contributor-free'), ['minimal', 'low', 'medium', 'high', 'xhigh'])
+  // And a model that NAMES `max` in a refusal does NOT get it: naming a level
+  // is not offering it. See the named test below for why.
+  assert.deepEqual(
+    getSupportedThinkingLevels({
+      id: 'muse-spark-1.3-contributor-free',
+      reasoning: true,
+      thinkingLevelMap: thinkingLevelMapFor(modelsDict()['muse-spark-1.3-contributor-free'], 'openai-responses', undefined, ['low', 'high', 'max']),
+    }),
+    ['minimal', 'low', 'medium', 'high', 'xhigh'],
+    'naming a level is not offering it',
+  )
+  // Undeclared `max` stays hidden UNTIL the model names it: pi-ai treats it as
+  // opt-in, and offering a level on no evidence is the other half of the same
+  // mistake in the opposite direction.
+  // No published list and no measurement: nothing is claimed, so the host
+  // renders its provider-default row alone.
+  assert.deepEqual(of('big-pickle'), ['minimal', 'low', 'medium', 'high'], 'the default ladder is offered unfiltered')
+  assert.deepEqual(of('ling-3.0-flash-fin-free'), ['minimal', 'low', 'medium', 'high'])
+  // The derived records themselves carry the same maps.
+  const derived = derive(modelsDict(), { template: template(), knownApis: new Map() })
+  const spark = derived.candidates.find((m) => m.id === 'muse-spark-1.3-contributor-free')
+  assert.deepEqual(getSupportedThinkingLevels(spark), ['minimal', 'low', 'medium', 'high', 'xhigh'])
+})
+
+test('the clamp signature is arithmetic, not an error-body inference', () => {
+  // `clampMaxTokensToContext` is min(maxTokens, max(1, contextWindow - estimate
+  // - 4096)), so an emitted value of exactly 1 means the conversation passed the
+  // declared window minus 4096. One-directional: an OVERSTATED window cannot make
+  // the clamp fire at all, so a hit is positive evidence of understatement only.
+  // It needs no attribution, which is what keeps it immune to the generic-400
+  // blindness the upstream provokes.
+  const starved = { emitted: 1, starved: true }
+  // Nothing: the request was not starved.
+  assert.deepEqual(clampVerdict(undefined, { emitted: 1, starved: false }, 200000), { kind: 'none' })
+  // Not the floor: a merely reduced budget is not the signature.
+  assert.deepEqual(clampVerdict(undefined, { emitted: 904, starved: true }, 200000), { kind: 'none' })
+  // One observation is not a conclusion — measured: a single reply here cannot
+  // distinguish an understated window from a genuinely full conversation.
+  assert.deepEqual(clampVerdict(undefined, starved, 200000), { kind: 'hit', hits: 1 })
+  assert.deepEqual(clampVerdict({ verdict: 'ok', at: 1, contextHits: 1 }, starved, 200000), {
+    kind: 'confirmed',
+    raisedTo: 800000,
+  })
+})
+
+test('a raise never lowers a window and never exceeds the cap', () => {
+  // C1: the declaration is the value. Nothing is substituted from a band, and
+  // decimal-vs-binary formatting was measured to carry no predictive power.
+  const record = { limit: { context: 200000, output: 32000 } }
+  assert.equal(contextWindowFor(record), 200000, 'unmeasured keeps the declaration')
+  assert.equal(contextWindowFor(record, { raisedTo: 1048576, fp: contextFingerprint(record), at: 1 }), 800000)
+  // A stale measurement about revised limits is discarded, not applied.
+  assert.equal(contextWindowFor(record, { raisedTo: 1048576, fp: 'stale', at: 1 }), 200000)
+  // A proposal BELOW the declaration can never lower it.
+  assert.equal(contextWindowFor(record, { raisedTo: 50000, fp: contextFingerprint(record), at: 1 }), 200000)
+  // The ceiling binds even when the measurement asks for more.
+  const big = { limit: { context: 1048576, output: 64000 } }
+  assert.equal(contextWindowFor(big, { raisedTo: 8388608, fp: contextFingerprint(big), at: 1 }), 1048576)
+  // A model whose window really was full keeps its window: the proposal is
+  // already at the ceiling, so there is nothing to raise and the counter resets.
+  assert.deepEqual(
+    clampVerdict({ verdict: 'ok', at: 1, contextHits: 5 }, { emitted: 1, starved: true }, 1048576),
+    { kind: 'hit', hits: 0 },
+  )
+})
+
+test('a malformed context measurement is dropped, not trusted', () => {
+  assert.equal(isMeasuredContext({ raisedTo: 800000, fp: 'f', at: 1 }), true)
+  for (const bad of [
+    undefined,
+    null,
+    'x',
+    { raisedTo: 0, fp: 'f', at: 1 },
+    { raisedTo: -5, fp: 'f', at: 1 },
+    { raisedTo: Number.NaN, fp: 'f', at: 1 },
+    { raisedTo: 800000, at: 1 },
+    { raisedTo: 800000, fp: 'f' },
+  ]) {
+    assert.equal(isMeasuredContext(bad), false, `expected ${JSON.stringify(bad)} to be rejected`)
+  }
+})
+
+test('contextFingerprint moves only for its own axis', () => {
+  const base = { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low'] }], limit: { context: 1, output: 2 } }
+  const original = contextFingerprint(base)
+  assert.equal(contextFingerprint({ ...base, reasoning: false }), original, 'reasoning does not move it')
+  assert.equal(contextFingerprint({ ...base, reasoning_options: [] }), original, 'effort does not move it')
+  assert.notEqual(contextFingerprint({ ...base, limit: { context: 2, output: 2 } }), original)
+  assert.notEqual(contextFingerprint({ ...base, limit: { context: 1, output: 3 } }), original)
+  // A record with no limits at all is distinguishable from one declaring zeros.
+  assert.notEqual(contextFingerprint({ ...base, limit: undefined }), original)
+})
+
+test('the probe alternates its question so a baseline costs no extra request', () => {
+  // The baseline is asked for rather than assumed: an absolute threshold is not
+  // defensible across models, because longcat's floor of 36 sits ABOVE
+  // big-pickle's omitted baseline of 14. Asking costs nothing because the round
+  // changes what its existing request asks.
+  assert.equal(nextEffortQuestion(undefined), 'baseline', 'an unseen model starts by asking for its own default')
+  // Three baseline samples before a candidate is asked: a median over one point
+  // is just that point. The samples themselves are free on a no-ladder model,
+  // where the liveness request's `low` already clamps to omission.
+  assert.equal(nextEffortQuestion({ verdict: 'ok', at: 1, effortBaselineTokens: [16] }), 'baseline', 'one is not a median');
+  assert.equal(nextEffortQuestion({ verdict: 'ok', at: 1, effortBaselineTokens: [14, 16, 55] }), 'none');
+  // ONE decisive rejection moves on, not three. big-pickle's `none` sits at a
+  // ratio of 12.4 — far outside the bracket, so repeating it only spends quota
+  // to confirm what is settled. longcat is why the fallback exists at all: its
+  // `none` is 1.578 and its lowest level is 0.800, so both must be spent.
+  assert.equal(
+    nextEffortQuestion({ verdict: 'ok', at: 1, effortBaselineTokens: [14, 16, 55], effortDiscord: 1 }, 'minimal'),
+    'minimal',
+  );
+  assert.equal(
+    nextEffortQuestion({ verdict: 'ok', at: 1, effortBaselineTokens: [14, 16, 55], effortQuestion: 'minimal', effortDiscord: 1 }),
+    'minimal',
+    'it stays moved: a settled question is not re-opened',
+  );
+});
+
+test('the fallback asks the model its OWN lowest level, not a fixed one', () => {
+  // Measured 2026-10-06. space-bunny-free publishes `low…max` and its `low`
+  // brings reasoning to 0/9/22/37 against an omitted baseline of 35 — a working
+  // Off. Asking it for `minimal` instead measures a level it never published,
+  // finds nothing, and withholds a row the model does support.
+  assert.equal(fallbackLevelFor({ reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }] }), 'low');
+  // Declared out of order — the vocabulary's order decides, not the record's.
+  assert.equal(fallbackLevelFor({ reasoning_options: [{ type: 'effort', values: ['high', 'max', 'low'] }] }), 'low');
+  // No ladder at all: `minimal` is where big-pickle's 0/8 was measured.
+  assert.equal(fallbackLevelFor({ reasoning_options: [] }), 'minimal');
+  assert.equal(fallbackLevelFor({ reasoning_options: [{ type: 'toggle' }] }), 'minimal');
+  // And it must never be `off`, whatever the model declares.
+  assert.notEqual(fallbackLevelFor({ reasoning_options: [{ type: 'effort', values: ['none', 'high'] }] }), 'off');
+});
+
+test('INVARIANT: a candidate is judged on the MEDIAN, against the model not a number', () => {
+  // Measured 2026-10-06, medians against each model's own omitted baseline:
+  //   big-pickle  minimal 0    against 16  ->  0.000   WORKS
+  //   space-bunny low    9    against 42  ->  0.231   WORKS
+  //   longcat     minimal 36    against 45  ->  0.800   inert
+  //   muse-spark  minimal 38    against 166 ->  0.229   WORKS
+  //   big-pickle  none  173    against 16  ->  10.81   inert
+  // The bracket is (0.231, 0.800) and 0.43 is its max-margin cut in log space.
+  assert.equal(effortVerdictFrom([0, 8, 0, 0, 8, 0], [14, 16, 55]), true, 'big-pickle minimal');
+  assert.equal(effortVerdictFrom([0, 22, 0, 22], [35, 55, 36, 42]), true, 'space-bunny low');
+  assert.equal(effortVerdictFrom([36, 36, 36, 36], [36, 45, 77]), false, 'longcat minimal is its own default');
+  assert.equal(effortVerdictFrom([173, 198, 173], [14, 16, 55]), false, "big-pickle's none is nowhere near");
+  // The median is what makes big-pickle's bimodal samples work at all. Its
+  // `minimal` alternates 0 and 8; per-sample classification flips between
+  // "works" and "inert" on that, while the median of [0,8,0,0,8,0] is 0 and
+  // lands decisively below the 0.43 boundary.
+  assert.equal(effortVerdictFrom([0, 8, 0, 0, 8, 0], [14, 16, 55]), true);
+  assert.equal(effortVerdictFrom([0, 8], [14, 16, 55]), true, 'the same holds on two samples');
+  // And a sample that is genuinely near the baseline is not rescued by a
+  // favourable median: this is what a partial reduction looks like.
+  assert.equal(effortVerdictFrom([8, 8], [14, 16, 55]), false, '8 against 16 is a 0.50 ratio, inside the bracket, so no claim');
+  // An absolute threshold cannot work, and this pair is why: longcat's floor of
+  // 36 against muse-spark's working 38. Two tokens.
+  assert.equal(effortVerdictFrom([36, 36], [45, 45]), false);
+  assert.equal(effortVerdictFrom([38, 38], [166, 184]), true);
+  // No claim without both sides. "We did not look" must never read as "it does
+  // not work" — that is the lie this change set exists to remove.
+  assert.equal(effortVerdictFrom([], [16]), undefined, 'no candidate samples');
+  assert.equal(effortVerdictFrom([0], []), undefined, 'no baseline samples');
+  assert.equal(effortVerdictFrom([0], undefined), undefined, 'an absent baseline');
+  assert.equal(effortVerdictFrom([0], [0]), undefined, 'a zero baseline cannot be divided by');
+})
+
+
+test('INVARIANT: an effort verdict needs agreeing samples, not a majority', () => {
+  // Measured 2026-10-06: `big-pickle` returned HTTP 400 on three of nine
+  // IDENTICAL requests and HTTP 200 on the rest, with `reasoning_content`
+  // present on every 200. A single sample therefore records the wrong row about a
+  // third of the time, and nothing downstream can notice — unlike an
+  // `inconclusive`, the probe returns a clean 200.
+  assert.deepEqual(effortVerdict(undefined, 'none-works'), { kind: 'discord', samples: ['none-works'] });
+  assert.deepEqual(effortVerdict(['none-works'], 'none-works'), { kind: 'sample', samples: ['none-works', 'none-works'] });
+  assert.deepEqual(effortVerdict(['none-works', 'none-works'], 'none-works'), { kind: 'confirmed' });
+  // A disagreement RESETS rather than being out-voted. big-pickle's six-to-three
+  // would decide "accepted" by majority, which is the reading its own data
+  // refutes: when it does accept, the reasoning is still present.
+  assert.deepEqual(effortVerdict(['none-works', 'none-works'], 'noop'), { kind: 'discord', samples: ['noop'] });
+  assert.deepEqual(effortVerdict(['noop', 'none-works'], 'noop'), { kind: 'discord', samples: ['noop'] });
+})
+
+test('effort samples persist so a restart does not restart the count', async () => {
+  // Losing the tally costs a few more rounds, never a wrong verdict — but only
+  // if the tally is actually carried on disk.
+  const dir = await mkdtemp(join(tmpdir(), 'effort-'));
+  const file = join(dir, 'catalog.json');
+  await writeFile(
+    file,
+    JSON.stringify({
+      version: 1,
+      etag: undefined,
+      fetchedAt: 1,
+      models: {},
+      probes: {
+        'flip-free': { verdict: 'ok', at: 1, effortReading: EFFORT_READING, effortSamples: ['none-works', 'none-works'] },
+        'bad-free': { verdict: 'ok', at: 1, effortReading: EFFORT_READING, effortSamples: ['none-works', 7, null] },
+        'absent-free': { verdict: 'ok', at: 1 },
+      },
+      lastProbeAt: 0,
+    }),
+  );
+  const read = await readCache(file);
+  assert.deepEqual(read.probes['flip-free'].effortSamples, ['none-works', 'none-works']);
+  // Damaged entries are dropped rather than trusted.
+  assert.deepEqual(read.probes['bad-free'].effortSamples, ['none-works']);
+  // A cache written before this field existed reads as "never sampled", which
+  // is exactly right and self-heals on the next round.
+  //
+  // The same is true of a record from an OLDER INSTRUMENT, and deliberately so:
+  // those samples were written by a probe that never read the reasoning count,
+  // so they are all zero — and one stored zero keeps the median at zero for
+  // ever. `absent-free` stands for both cases.
+  assert.equal(read.probes['absent-free'].effortSamples, undefined);
+  await rm(dir, { recursive: true, force: true });
+})
+
+test('a measurement is applied only when its fingerprint and channel still match', () => {
+  // An effort measurement is OF a claim. If models.dev revised `reasoning_options`
+  // the answer is about a question no longer being asked, and applying it would
+  // widen what is offered on the strength of a stale vote.
+  const section = {
+    'q-free': {
+      id: 'q-free',
+      name: 'Q',
+      reasoning: true,
+      reasoning_options: [{ type: 'toggle' }],
+      cost: { input: 0, output: 0 },
+    },
+  }
+  const tpl = template()
+  const fp = reasoningFingerprint(section['q-free'])
+  const [model] = derive(section, { template: tpl, knownApis: new Map() }).candidates
+  const probes = {
+    'q-free': { verdict: 'ok', at: 1, effort: { kind: 'none-works', fp, api: 'openai-completions', at: 1 } },
+  }
+  // Matching: the measurement is adopted.
+  const map = measuredEffortMap([model], section, probes)
+  assert.equal(map.get('q-free')?.kind, 'none-works')
+
+  // Stale fingerprint: dropped, leaving the map unmeasured — which offers no off.
+  const revised = { 'q-free': { ...section['q-free'], reasoning_options: [{ type: 'effort', values: ['low'] }] } }
+  assert.equal(measuredEffortMap([model], revised, probes).size, 0)
+
+  // Wrong channel: dropped. Off is `reasoning_effort` on completions and
+  // `reasoning.effort` on responses, so a measurement of one is evidence about
+  // the other only by coincidence.
+  const responsesProbes = {
+    'q-free': { verdict: 'ok', at: 1, effort: { kind: 'none-works', fp, api: 'openai-responses', at: 1 } },
+  }
+  assert.equal(measuredEffortMap([model], section, responsesProbes).size, 0)
+
+  // Absent evidence is not a claim either way.
+  assert.equal(measuredEffortMap([model], section, {}).size, 0)
+})
+
+test('reasoningFingerprint moves only for its own axis', () => {
+  const base = { reasoning: true, reasoning_options: [{ type: 'effort', values: ['low'] }], limit: { context: 1, output: 1 } }
+  const original = reasoningFingerprint(base)
+  assert.equal(reasoningFingerprint({ ...base, limit: { context: 999, output: 5 } }), original, 'limits do not move it')
+  assert.notEqual(reasoningFingerprint({ ...base, reasoning_options: [{ type: 'effort', values: ['low', 'high'] }] }), original)
+  assert.notEqual(reasoningFingerprint({ ...base, reasoning: false }), original)
+  // A record that publishes no options at all is distinguishable from one that
+  // published an empty list — "described and found nothing" vs "said nothing".
+  assert.notEqual(reasoningFingerprint({ ...base, reasoning_options: [] }), original)
+})
+
+test('a malformed persisted measurement is dropped, not trusted', () => {
+  assert.equal(isMeasuredEffort({ kind: 'none-works', fp: 'f', api: 'openai-completions', at: 1 }), true)
+  assert.equal(
+    isMeasuredEffort({ kind: 'level-works', level: 'minimal', fp: 'f', api: 'openai-responses', at: 1 }),
+    true,
+  )
+  for (const bad of [
+    undefined,
+    null,
+    'none-works',
+    { kind: 'works', fp: 'f', api: 'openai-completions', at: 1 },
+    { kind: 'none-works', fp: 'f', api: 'nonsense-channel', at: 1 },
+    { kind: 'none-works', api: 'openai-completions', at: 1 },
+    { kind: 'level-works', fp: 'f', api: 'openai-completions', at: 1 },
+    { kind: 'level-works', level: 'turbo', fp: 'f', api: 'openai-completions', at: 1 },
+  ]) {
+    assert.equal(isMeasuredEffort(bad), false, `expected ${JSON.stringify(bad)} to be rejected`)
+  }
+})
+
+test('INVARIANT: the ladder is not filtered by models.dev, and `off` still is', () => {
+  // The asymmetry is measured, not preferred.
+  //
+  // LADDER ROWS: across eight models and both channels, no ladder level has ever
+  // been refused — not a declared one, and not an undeclared one. `big-pickle`
+  // accepts `low` at 164 reasoning tokens; `mimo-v2.6-flash-free` accepts
+  // `minimal` and `high`; `muse-spark-1.3` accepts a `max` it never published, at
+  // 516, the strongest mode that model has. An IGNORED ladder level is inert —
+  // the user gets the default, which is what the provider-default row also gives.
+  //
+  // `off`: an ignored Off is the opposite of its promise — maximum reasoning
+  // where the user asked for none — so it is gated on measurement alone. That
+  // asymmetry is why the two are decided apart rather than by one rule.
+  const noLadder = thinkingLevelMapFor({ reasoning: true, reasoning_options: [] }, 'openai-completions');
+  assert.deepEqual(noLadder, {
+    off: null,
+    minimal: 'minimal',
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+  });
+  // xhigh/max stay opt-in: absent means NOT offered, and they are withheld until
+  // a measurement or the model's own refusal names them.
+  assert.equal(Object.prototype.hasOwnProperty.call(noLadder, 'xhigh'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(noLadder, 'max'), false);
+  // A model that publishes no reasoning at all still gets nothing.
+  assert.equal(thinkingLevelMapFor({ reasoning_options: [] }, 'openai-completions'), undefined);
+});
+
+test('INVARIANT: a confirmed verdict stops being re-litigated', () => {
+  // A verdict that keeps absorbing samples has a median over an ever-growing set,
+  // which is a different statistic from the three that produced it.
+  // big-pickle's `minimal` alternates 0 and 8, so a slowly growing median can
+  // drift across the boundary and silently demote a control the model supports.
+  const fp = 'yes:[]';
+  const fresh = { verdict: 'ok', at: 1, effort: { kind: 'none-works', fp, api: 'openai-completions', at: 1 }, effortFrozenAt: 1_000, effortBaselineTokens: [16, 16, 16] };
+  assert.equal(effortVerdictFresh(fresh, fp, 1_000 + EFFORT_TTL_MS - 1), true, 'fresh inside the TTL');
+  assert.equal(effortVerdictFresh(fresh, fp, 1_000 + EFFORT_TTL_MS), false, 'stale at the TTL');
+  // A revised declaration voids it immediately, whatever the clock says.
+  assert.equal(effortVerdictFresh(fresh, 'yes:[{"type":"toggle"}]', 1_001), false);
+  // And no verdict is never fresh.
+  assert.equal(effortVerdictFresh(undefined, fp, 1_001), false);
+  assert.equal(effectlessNeverFrozen({ verdict: 'ok', at: 1, effort: { kind: 'none-works', fp, api: 'openai-completions', at: 1 } }), false);
+  function effectlessNeverFrozen(record) {
+    return effortVerdictFresh(record, fp, 1_001);
+  }
+  // A settled model asks nothing, so the round cannot grow its sample set.
+  assert.equal(nextEffortQuestion(fresh, 'minimal', true), 'settled');
+  assert.equal(nextEffortQuestion(fresh, 'minimal', false), 'none', 'unsettled it keeps measuring');
+});
+
+test('a level the model NAMES is not thereby OFFERED', () => {
+  // `muse-spark-1.3-contributor-free` refused `none` with
+  // `allowed values: ["minimal","low","medium","high","xhigh","max"]` — naming
+  // `max`, which models.dev does not publish.
+  //
+  // That enumeration says the SPELLING is accepted. It does not say the tier
+  // exposes the mode: a route can take `max` and answer from `xhigh` instead,
+  // returning 200 with the reasoning count of a mode the user never chose. The
+  // one `max` request on record has NO token count at all
+  // (`tests/measured-samples.json`: `max -> 200, tokens: null, n=1`), so nothing
+  // ever distinguished honoured from downgraded — and the operator confirms `max`
+  // is not open to individuals on this route.
+  //
+  // Offering a level claims what the user will GET; a refusal's vocabulary claims
+  // what the parser will accept. Only the first kind may produce a row.
+  const record = { reasoning: true, reasoning_options: [{ type: 'effort', values: ['minimal', 'low', 'medium', 'high', 'xhigh'] }] }
+  assert.equal(
+    getSupportedThinkingLevels({ id: 'm', reasoning: true, thinkingLevelMap: thinkingLevelMapFor(record, 'openai-responses') }).includes('max'),
+    false,
+    'withheld on no evidence',
+  )
+  assert.equal(
+    getSupportedThinkingLevels({
+      id: 'm',
+      reasoning: true,
+      thinkingLevelMap: thinkingLevelMapFor(record, 'openai-responses', undefined, ['low', 'high', 'max']),
+    }).includes('max'),
+    false,
+    'and STILL withheld once the model names it — validity is not availability',
+  )
+  // A level models.dev publishes is offered exactly as before: the change is
+  // about where a NEW level may come from, not about the published ladder.
+  assert.equal(
+    getSupportedThinkingLevels({
+      id: 'm',
+      reasoning: true,
+      thinkingLevelMap: thinkingLevelMapFor(record, 'openai-responses', undefined, ['xhigh']),
+    }).includes('xhigh'),
+    true,
+  )
+});
+
+test('the same fixture shape yields opposite maps from opposite measurements', () => {
+  // The whole reason shape cannot drive this rule. Measured 2026-10-06:
+  // ling-3.1-flash-free (`[toggle]`) took `none` from 32 reasoning tokens to 0,
+  // while longcat-2.5-preview-free (`[toggle]`, the SAME declared shape) stayed
+  // at 71-80 with HTTP 200. Identical metadata, opposite behaviour.
+  const toggle = { reasoning: true, reasoning_options: [{ type: 'toggle' }] }
+  const noneWorks = { kind: 'none-works', fp: 'f', api: 'openai-completions', at: 0 }
+  const noop = { kind: 'noop', fp: 'f', api: 'openai-completions', at: 0 }
+  assert.equal(thinkingLevelMapFor(toggle, 'openai-completions', noneWorks).off, 'none')
+  assert.equal(thinkingLevelMapFor(toggle, 'openai-completions', noop).off, null)
+  // An empty ladder is no more predictive: three of four `[]` models honoured
+  // `none`, big-pickle refused it with a 400.
+  const empty = { reasoning: true, reasoning_options: [] }
+  assert.equal(thinkingLevelMapFor(empty, 'openai-completions', noneWorks).off, 'none')
+  assert.equal(thinkingLevelMapFor(empty, 'openai-completions', { ...noop, kind: 'rejected' }).off, null)
+})
+
+test('CHANNEL GATE: "none" is never applied across channels', () => {
+  // Off is `reasoning_effort` on completions and `reasoning.effort` on responses,
+  // and `none` is REJECTED on the second: measured 2026-10-06,
+  // muse-spark-1.3-contributor-free answers
+  // `reasoning_effort 'none' is not supported ... allowed values: [minimal, low,
+  // medium, high, xhigh, max]`. A measurement of one channel is evidence about
+  // the other only by coincidence, so the mismatch voids it.
+  const record = { reasoning: true, reasoning_options: [{ type: 'toggle' }] }
+  const onCompletions = { kind: 'none-works', fp: 'f', api: 'openai-completions', at: 0 }
+  assert.equal(thinkingLevelMapFor(record, 'openai-completions', onCompletions).off, 'none')
+  assert.equal(thinkingLevelMapFor(record, 'openai-responses', onCompletions).off, null)
+})
+
+test('R1 honours a published off member instead of discarding it as foreign', () => {
+  // north-mini-code-free publishes ["none","high"]. The old membership test
+  // dropped "none" as "not a level", which removed the model's only off member.
+  assert.equal(
+    thinkingLevelMapFor({ reasoning: true, reasoning_options: [{ type: 'effort', values: ['none', 'high'] }] }, 'openai-completions')
+      .off,
+    'none',
+  )
+  // A ladder WITHOUT an off member claims nothing, whatever the channel.
+  assert.equal(
+    thinkingLevelMapFor({ reasoning: true, reasoning_options: [{ type: 'effort', values: ['low', 'high'] }] }, 'openai-responses').off,
+    null,
+  )
+})
+
+test('GUARD: the map, not the guard, decides what Off puts on the wire', () => {
+  // The premise this replaces was "off is always offered and reaching the wire
+  // is always wrong", disproven twice: `none` is measured to stop reasoning on
+  // nemotron-3-ultra-free (49 -> 0) and refused outright on space-bunny-free.
+  // The map is now the single authority; this pins that the two agree.
+  const noneWorks = (record, channel) =>
+    thinkingLevelMapFor(record, channel, { kind: 'none-works', fp: 'f', api: channel, at: 0 })
+  // Where the map says "none", the guard must let it through — see the mirror
+  // test in compatibility.test.mjs for the wire side.
+  assert.equal(noneWorks({ reasoning: true, reasoning_options: [] }, 'openai-completions').off, 'none')
+  // Where it says null, there is no off row at all.
+  const rejected = thinkingLevelMapFor(
+    { reasoning: true, reasoning_options: [{ type: 'toggle' }] },
+    'openai-completions',
+    { kind: 'rejected', fp: 'f', api: 'openai-completions', at: 0 },
+  )
+  assert.equal(rejected.off, null)
+  assert.equal(
+    getSupportedThinkingLevels({ id: 'x', reasoning: true, thinkingLevelMap: rejected }).includes('off'),
     false,
   )
 })
 
-test('thinkingLevelMapFor claims nothing when models.dev publishes no levels', () => {
-  // A `toggle` model is reasoning on/off and pi-ai has no name for bare "on";
-  // guessing would offer levels upstream rejects, which the host reports as
-  // UNSUPPORTED_REASONING_EFFORT rather than clamping.
-  assert.equal(thinkingLevelMapFor({ reasoning_options: [{ type: 'toggle' }] }), undefined)
-  assert.equal(thinkingLevelMapFor({ reasoning_options: [] }), undefined)
-  assert.equal(thinkingLevelMapFor({ reasoning_options: undefined }), undefined)
-  assert.equal(thinkingLevelMapFor({ reasoning_options: 'nonsense' }), undefined)
-  // An effort option with no usable level names is not a level list.
-  assert.equal(thinkingLevelMapFor({ reasoning_options: [{ type: 'effort' }] }), undefined)
-  assert.equal(thinkingLevelMapFor({ reasoning_options: [{ type: 'effort', values: [] }] }), undefined)
-  assert.equal(
-    thinkingLevelMapFor({ reasoning_options: [{ type: 'effort', values: ['turbo', 7, null] }] }),
-    undefined,
-  )
-  // Levels pi-ai does not know cannot be expressed, so a list of only those
-  // makes no claim rather than producing an empty map.
-  assert.equal(thinkingLevelMapFor({ reasoning_options: [{ type: 'effort', values: ['turbo'] }] }), undefined)
-})
-
-test('the levels a host offers follow models.dev, per model', () => {
-  // The map the record produces, read back through pi-ai's own filter.
-  // `off` is absent from every produced map, which is what keeps it offered —
-  // the wire shape it would otherwise produce is guarded in zen-provider.ts.
-  const of = (id) =>
-    getSupportedThinkingLevels({
-      id,
-      reasoning: true,
-      thinkingLevelMap: thinkingLevelMapFor(modelsDict()[id]),
-    })
-  assert.deepEqual(of('space-bunny-free'), ['off', 'low', 'medium', 'high', 'xhigh', 'max'])
-  assert.deepEqual(of('muse-spark-1.3-contributor-free'), [
-    'off',
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-  ])
-  // No published list: pi-ai's default set, unchanged from before this work.
-  assert.deepEqual(of('big-pickle'), ['off', 'minimal', 'low', 'medium', 'high'])
-  assert.deepEqual(of('ling-3.0-flash-fin-free'), ['off', 'minimal', 'low', 'medium', 'high'])
-  // The derived records themselves carry the same maps.
-  const derived = derive(modelsDict(), { template: template(), knownApis: new Map() })
-  const spark = derived.candidates.find((m) => m.id === 'muse-spark-1.3-contributor-free')
-  assert.deepEqual(getSupportedThinkingLevels(spark), ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'])
-})
-
-test('GUARD: "off" is offered but never reaches the wire', () => {
-  // pi-ai's responses transport renders an unoffered default as
-  // `reasoning: { effort: "none" }` and an explicit "off" as `effort: "off"` —
-  // two values neither pi-ai's own builtin records nor OpenCode ever send.
-  // Keeping "off" offered is only safe because the plugin's onPayload guard
-  // strips exactly those placeholders (see compatibility.test.mjs); this pins
-  // the precondition that makes the guard necessary.
-  const spark = derive(modelsDict(), { template: template(), knownApis: new Map() }).candidates.find(
-    (m) => m.id === 'muse-spark-1.3-contributor-free',
-  )
-  assert.equal(getSupportedThinkingLevels(spark).includes('off'), true, 'off is offered')
-  assert.equal(Object.prototype.hasOwnProperty.call(spark.thinkingLevelMap ?? {}, 'off'), false)
-})
 
 test('GUARD: the muse-spark xhigh default is no longer silently clamped away', async () => {
   // The plugin asks for `xhigh` on muse-spark (zen-provider streamSimple). With
@@ -418,8 +921,10 @@ test('GUARD: the muse-spark xhigh default is no longer silently clamped away', a
     (m) => m.id === 'space-bunny-free',
   )
   assert.equal(clampThinkingLevel(bunny, 'max'), 'max', 'a published opt-in level is reachable')
-  // A level the model does not publish clamps DOWN rather than being offered.
-  assert.equal(getSupportedThinkingLevels(bunny).includes('minimal'), false)
+  // Ladder rows are no longer filtered by models.dev, so `minimal` is offered
+  // even though space-bunny does not publish it. What is still withheld is
+  // anything a model has never named and never reported.
+  assert.equal(getSupportedThinkingLevels(bunny).includes('minimal'), true, 'undeclared ladder levels are offered')
 })
 
 test('a derived record carries all four capabilities from models.dev', () => {
@@ -435,15 +940,22 @@ test('a derived record carries all four capabilities from models.dev', () => {
   const pickle = candidates.find((m) => m.id === 'big-pickle')
   assert.deepEqual(pickle.input, ['text'], 'text-only stays text-only')
   assert.equal(pickle.contextWindow, 200000)
-  assert.equal(pickle.maxTokens, 32000)
-  // A record that publishes nothing falls back to the template per field.
+  // `limit.output` says 32000 and this model was watched producing 48,000 of it
+  // (2026-10-07, `stopReason: "length"`), so the budget follows the observation.
+  assert.equal(pickle.maxTokens, 48000)
+  // A record that publishes NOTHING falls back to the template for the identity
+  // and transport fields, but NOT for capability claims. `input` and `reasoning`
+  // describe what the model can do; inheriting them from another model answers
+  // "models.dev did not say" with "assume the most capable thing we know".
   const bare = derive(
     { 'bare-free': { id: 'bare-free', cost: { input: 0, output: 0 } } },
     { template: template() },
   ).candidates[0]
   assert.equal(bare.contextWindow, template().contextWindow)
   assert.equal(bare.maxTokens, template().maxTokens)
-  assert.deepEqual(bare.input, template().input)
+  assert.deepEqual(bare.input, ['text'], 'an unstated modality claim is not a capability')
+  assert.equal(bare.reasoning, false, 'an unstated reasoning claim is not a capability')
+  assert.notDeepEqual(template().input, bare.input, 'the template would have leaked its own capabilities')
   // The template's level map is never inherited: it belongs to another model.
   assert.equal(bare.thinkingLevelMap, undefined)
 })
@@ -467,23 +979,46 @@ test('topThinkingLevel reads the strongest published level, nothing else', () =>
 test('modelCapability projects image and top level per record', () => {
   const { candidates } = derive(modelsDict(), { template: template(), knownApis: new Map() })
   const card = (id) => modelCapability(candidates.find((m) => m.id === id))
-  assert.deepEqual(card('space-bunny-free'), { id: 'space-bunny-free', image: true, thinking: 'max' })
-  assert.deepEqual(card('muse-spark-1.3-contributor-free'), {
-    id: 'muse-spark-1.3-contributor-free',
+  assert.deepEqual(card('space-bunny-free'), {
+    id: 'space-bunny-free',
     image: true,
-    thinking: 'xhigh',
+    thinking: 'max',
+    contextWindow: 1048576,
+    outputBudget: 524288,
+    observedOutput: undefined,
+    declaredContext: undefined,
+    declaredOutput: undefined,
+    levels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+    off: null,
+    // No record and no probes: nothing was measured and nothing was published,
+    // so every flag reads false. The card says "unknown" on all four axes rather
+    // than borrowing an answer from the template.
+    evidence: { context: 'none', output: 'none', vision: 'declared', tools: 'declared' },
   })
+  assert.equal(card('muse-spark-1.3-contributor-free').thinking, 'xhigh')
   // Toggle-only and level-less records get no thinking badge. `ling` publishes
-  // neither image input nor levels, so it inherits the template's text+image
-  // input — the fallback pinned by the modalities test above. A badge rendered
-  // from that record is faithful to the record; the record itself is a guess
-  // for undeclared fields, which is what the template is for.
-  assert.deepEqual(card('ling-3.0-flash-fin-free'), {
-    id: 'ling-3.0-flash-fin-free',
-    image: true,
-    thinking: null,
-  })
-  assert.deepEqual(card('big-pickle'), { id: 'big-pickle', image: false, thinking: null })
+  // `modalities.input: ["text"]` and `attachment: false`, so it is text-only —
+  // it does NOT inherit the template's text+image. The old fallback answered
+  // "models.dev did not say" with "inherit the most capable thing we know", and
+  // it was not cosmetic: DSH throws UNSUPPORTED_CONTENT on an image for a model
+  // without it, so the inherited claim converts a silent omission into a hard
+  // failure the user cannot act on.
+  // Only the badges are asserted here; the numbers are asserted where the card is
+  // built from a real record, because with no record passed there is nothing to
+  // compare a declared value against.
+  assert.deepEqual(
+    { image: card('ling-3.0-flash-fin-free').image, thinking: card('ling-3.0-flash-fin-free').thinking },
+    {
+      image: false,
+      // The default ladder is offered, so the strongest offered rung is now the
+      // badge. The card names what exists, not what models.dev declared.
+      thinking: 'high',
+    },
+  )
+  assert.deepEqual(
+    { image: card('big-pickle').image, thinking: card('big-pickle').thinking },
+    { image: false, thinking: 'high' },
+  )
 })
 
 test('capabilities ride alongside visible, same ids in the same order', async () => {
@@ -499,10 +1034,39 @@ test('capabilities ride alongside visible, same ids in the same order', async ()
     )
     const bunny = state.capabilities.find((c) => c.id === 'space-bunny-free')
     assert.equal(bunny.image, true)
+    // The card carries the numbers the request path uses. Reading them here, off a
+    // catalogue that has probed, is what makes "the panel cannot disagree with the
+    // wire" a checkable claim rather than an intention.
+    assert.equal(bunny.contextWindow, 1048576, 'the window pi-ai clamps this conversation against')
+    assert.equal(bunny.outputBudget, 524288, 'the BUDGET pi-ai puts on the wire')
+    // No generation has been watched for this model, so there is no observed
+    // output. Absent is "never watched" — the row must not imply the model
+    // writes exactly the budget, or exactly the declaration.
+    assert.equal(bunny.observedOutput, undefined)
+    assert.equal(bunny.declaredContext, 1048576, 'and what models.dev published beside it')
+    assert.equal(bunny.evidence.context, 'declared', 'equal numbers: the declaration was right, nothing was raised')
+    assert.equal(bunny.evidence.vision, 'route', 'measured on the route, not copied from the declaration')
+    assert.deepEqual(bunny.levels, ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+    assert.equal(bunny.off, null, 'no Off row is offered without a measurement that says one works')
     assert.equal(bunny.thinking, 'max')
-    // Cards carry names and booleans only — never the full records.
+    // Cards carry numbers, names and booleans — never the full records. The
+    // numbers are here on purpose: they are what the request path clamps with, so
+    // hiding them from the panel is what let a stale declaration look identical
+    // to a measured one. Nothing request-shaping rides along.
     for (const card of state.capabilities) {
-      assert.deepEqual(Object.keys(card).sort(), ['id', 'image', 'thinking'])
+      assert.deepEqual(Object.keys(card).sort(), [
+        'contextWindow',
+        'declaredContext',
+        'declaredOutput',
+        'evidence',
+        'id',
+        'image',
+        'levels',
+        'observedOutput',
+        'off',
+        'outputBudget',
+        'thinking',
+      ])
     }
   })
 })
@@ -559,12 +1123,19 @@ test('derive maps published limits and falls back per missing field', () => {
   assert.equal(ling.name, 'Ling 3.0 Flash Fin Free')
 })
 
-test('derive keeps only text/image modalities and falls back when none survive', () => {
+test('derive keeps text/image modalities and does NOT inherit the template when none survive', () => {
   const { candidates } = derive(modelsDict(), { template: template() })
   const bunny = candidates.find((m) => m.id === 'space-bunny-free')
   assert.deepEqual(bunny.input, ['text', 'image'], 'audio/video are not pi-ai input kinds')
   const ling = candidates.find((m) => m.id === 'ling-3.0-flash-fin-free')
-  assert.deepEqual(ling.input, ['text', 'image'], 'no modalities -> template input')
+  // The fixture records no `modalities`, so the honest answer is text-only. The
+  // template resolves to mimo-v2.6-flash-free (text+image), and inheriting it
+  // answered "models.dev did not say" with "inherit the most capable thing we
+  // know" — the same error as an undefined level map, one field over.
+  assert.deepEqual(ling.input, ['text'], 'an unstated modality claim is not a capability')
+  // And it is not a cosmetic one: DSH throws UNSUPPORTED_CONTENT on an image for
+  // a model without it, so an inherited claim turns a silent omission into a
+  // hard failure the user cannot act on.
 })
 
 test('derive inherits identity and zeroes cost on every candidate', () => {
@@ -767,6 +1338,11 @@ function catalogWith({
   probe,
   listZenIds,
   hidden,
+  // Pinned to one: most of what is under test here is the round's SAMPLING
+  // (a verdict costs several samples, a refusal moves the question, a dead
+  // verdict is final), and a budget-sized probe bill per click would drown it.
+  // The budget itself is exercised by its own test.
+  manualSampleBudget = 1,
 } = {}) {
   return createCatalog({
     template: template(),
@@ -779,6 +1355,7 @@ function catalogWith({
     ...(probe === undefined ? {} : { probe }),
     ...(listZenIds === undefined ? {} : { listZenIds }),
     ...(hidden === undefined ? {} : { hidden }),
+    manualSampleBudget,
   })
 }
 
@@ -1029,10 +1606,16 @@ const DEAD = (status) => ({ kind: 'dead', reason: `probe says gone (HTTP ${statu
  */
 function recordingProber(verdicts = {}) {
   const calls = []
+  // The ceiling and capability questions land in their own list: they run on EVERY
+  // round now (on their own budget), and the assertions below are about which
+  // models were asked for LIVENESS, in which order, once each.
+  const capability = []
   let inFlight = 0
   let overlapped = false
-  const probe = async (model) => {
-    calls.push(model.id)
+  const probe = async (model, question) => {
+    if (question === 'ceiling' || (typeof question === 'string' && question.startsWith('capability:'))) {
+      capability.push(model.id + ':' + question)
+    } else calls.push(model.id)
     inFlight += 1
     if (inFlight > 1) overlapped = true
     await tick()
@@ -1040,6 +1623,7 @@ function recordingProber(verdicts = {}) {
     return verdicts[model.id] ?? { kind: 'ok' }
   }
   probe.calls = calls
+  probe.capability = capability
   probe.overlapped = () => overlapped
   return probe
 }
@@ -1066,6 +1650,17 @@ function pastProbeFloor(clock) {
   clock.t += PROBE_FLOOR_MS + 1_000
 }
 
+/** A free model whose record matches the shape of mimo-v2.6-flash-free. */
+function mimoRecord() {
+  return { ...modelsDict()['space-bunny-free'], id: 'mimo-v2.6-flash-free', name: 'Mimo V2.6 Flash Free' }
+}
+
+/** The persisted verdict record for one model, read back off disk. */
+async function readProbeRecord(path, id) {
+  const cache = JSON.parse(await readFile(path, 'utf8'))
+  return cache.probes?.[id] ?? {}
+}
+
 const SERVED = ['big-pickle', 'ling-3.0-flash-fin-free', 'muse-spark-1.3-contributor-free']
 
 const DERIVED = [
@@ -1076,6 +1671,1199 @@ const DERIVED = [
   'muse-spark-1.3-contributor-free',
   'space-bunny-free',
 ]
+
+test('GUARD: a round keeps the evidence it did not re-derive', async () => {
+  // The record was rebuilt from scratch every round, so anything this round did
+  // not re-derive disappeared: a candidate round wiped the baseline, a baseline
+  // round wiped the candidates. EFFORT_SAMPLES asks for three on EACH side, so
+  // a rule that erases half the tally on alternate rounds can never satisfy it
+  // — the axis could not converge at any number of rounds.
+  await withTempDir(async (dir) => {
+    const clock = { t: 1_000_000 }
+    const asked = []
+    // Exactly the measured shape: 55 reasoning tokens omitted, 0 under `none`
+    // (mimo-v2.6-flash-free, 2026-10-06, tests/measured-samples.json).
+    const probe = async (model, question) => {
+      asked.push(question)
+      return {
+        kind: 'ok',
+        api: 'openai-completions',
+        effort: {
+          kind: question === 'baseline' ? 'baseline' : 'candidate',
+          tokens: question === 'baseline' ? 55 : 0,
+        },
+      }
+    }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: scriptedFetch([fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) })]),
+      probe,
+      listZenIds: async () => ['space-bunny-free'],
+    })
+    await catalog.forceRefresh()
+
+    for (let i = 0; i < 3; i += 1) {
+      pastProbeFloor(clock)
+      await catalog.forceProbes()
+    }
+    const baseline = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.deepEqual(baseline.effortBaselineTokens, [55, 55, 55], 'three baseline samples must accumulate')
+    assert.equal(asked.at(-1), 'baseline', 'a third sample is not yet a median')
+
+    pastProbeFloor(clock)
+    await catalog.forceProbes()
+    assert.equal(asked.at(-1), 'none', 'three samples is enough to move to the candidate question')
+    const both = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.deepEqual(both.effortTokens, [0], 'the candidate lands in the candidate bucket')
+    assert.deepEqual(both.effortBaselineTokens, [55, 55, 55], 'and the baseline it is judged against must still be there')
+  })
+})
+
+test('GUARD: a round does not erase a harvested vocabulary or a measured window', async () => {
+  // Same root cause, two pieces of evidence that cost a real request to obtain:
+  // the level vocabulary a refusal enumerated (ADR 0004 §33/§34 — only
+  // self-reporting models ever give it up) and a measured context window. Both
+  // are written by a DIFFERENT round than the one that will read them, so a
+  // rebuild that keeps only what it just derived throws away the only copy.
+  await withTempDir(async (dir) => {
+    // models.dev publishes this ladder as [minimal, low, medium, high, xhigh];
+    // the measured window is fingerprinted against `limit`, so the seed and the
+    // refresh below must publish the SAME limits or the measurement is voided by
+    // its own guard.
+    const fledge = {
+      ...modelsDict()['muse-spark-1.3-contributor-free'],
+      id: 'fledge-alpha-free',
+      name: 'Fledge Alpha Free',
+    }
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'fledge-alpha-free': fledge },
+        probes: {
+          'fledge-alpha-free': {
+            verdict: 'ok',
+            at: 1_000_000,
+            selfReported: ['low', 'high', 'max'],
+            context: { raisedTo: 1048576, fp: '1048576:131072', at: 1_000_000 },
+          },
+        },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    )
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'fledge-alpha-free': fledge }) }),
+      probe: async () => ({ kind: 'ok', api: 'openai-completions' }),
+      listZenIds: async () => ['fledge-alpha-free'],
+    })
+    await catalog.forceRefresh()
+    pastProbeFloor(clock)
+    await catalog.forceProbes()
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'fledge-alpha-free')
+    assert.deepEqual(record.selfReported, ['low', 'high', 'max'], 'a harvested vocabulary survives an unrelated round')
+    assert.equal(record.context?.raisedTo, 1048576, 'a measured window survives an unrelated round')
+    assert.equal(record.verdict, 'ok', 'while the verdict itself is still rewritten every round')
+  })
+})
+
+test('GUARD: a refusal to the spelling we asked counts as a sample, not a silence', async () => {
+  // Measured 2026-10-06: space-bunny-free answers `reasoning_effort: "none"`
+  // with a hard 400 on both channels, while the same model answers the omitted
+  // request normally. That refusal is the evidence ADR 0004 §31 needs to move
+  // the round to the model's own lowest level — and it used to be filed as
+  // "this round reached nothing", which (a) discarded the only evidence that
+  // `none` is unusable there and (b) silenced the model for six hours, so the
+  // fallback could never even be asked.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async (_model, question) => {
+        asked.push(question)
+        // The generic 400 every model returns for a bad parameter; it carries no
+        // vocabulary, so nothing may be harvested from it either.
+        if (question === 'none') {
+          return { kind: 'inconclusive', code: 'unknown', http: 400, reason: 'invalid request（HTTP 400）' }
+        }
+        // The omitted request measures 42; the fallback level drops to 4.
+        const tokens = question === 'baseline' ? 42 : 4
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens },
+        }
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    })
+    await catalog.forceRefresh()
+    // Three baselines, the refusal, then enough rounds at the fallback to
+    // confirm: three samples to produce a verdict, three to agree.
+    for (let i = 0; i < 10; i += 1) {
+      pastProbeFloor(clock)
+      await catalog.forceProbes()
+    }
+
+    const effortAsked = asked.filter((q) => q !== 'ceiling')
+    assert.equal(effortAsked[3], 'none', 'the candidate question is asked first');
+    assert.equal(effortAsked[4], 'low', 'one refusal moves the round to the model\'s own lowest level');
+    assert.deepEqual(
+      [...new Set(effortAsked.slice(4).filter((q) => q !== 'settled'))],
+      ['low'],
+      'every question after the refusal is that same fallback level',
+    );
+    assert.equal(asked.at(-1), 'settled', 'and once the verdict is frozen the round stops re-measuring it');
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.equal(record.verdict, 'ok', 'a refusal is not a verdict about liveness');
+    assert.equal(record.effort?.kind, 'level-works', 'the fallback level is what gets confirmed');
+    assert.equal(record.effort?.level, 'low');
+  })
+})
+
+test('GUARD: a spelling that reduces nothing does not become an Off row', async () => {
+  // Live 2026-10-06: `longcat-2.5-preview-free` ended up with
+  // `level-works / minimal` while its OWN samples said the opposite —
+  // [1,36,36,36,36] against a [36,36,36] baseline, median 36 against a
+  // threshold of 15.48. Nothing was reduced, and the model was handed an Off row
+  // anyway.
+  //
+  // The verdict's KIND was being re-derived from the question spelling at
+  // confirmation ("were we asking about `none`, or about a level?") instead of
+  // taken from the sample that was actually confirmed — so every confirmed
+  // `noop` came back labelled `level-works`.
+  //
+  // A verdict that names a level it did not demonstrate is the one lie this
+  // axis cannot ship: it hands the user a control that changes nothing.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      // longcat's real numbers: the baseline is 36 and so is everything asked
+      // for, at the fallback level.
+      probe: async (_model, question) => ({
+        kind: 'ok',
+        api: 'openai-completions',
+        effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens: question === 'baseline' ? 36 : 36 },
+      }),
+      listZenIds: async () => ['space-bunny-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free');
+    assert.equal(record.effort?.kind, 'noop', 'the confirmed sample was "reduced nothing", so that is the verdict');
+    assert.equal(record.effort?.level, undefined, 'and it names no level');
+    await catalog.forceRefresh();
+    const model = catalog.current().models.find((m) => m.id === 'space-bunny-free');
+    assert.equal(model?.thinkingLevelMap?.off, null, 'so the user gets no Off row instead of one that does nothing');
+  })
+})
+
+test('GUARD: a 401 that blames the request shape is a refusal of the spelling, not of the caller', async () => {
+  // `space-bunny-free` — the model this session runs on, answering normally the
+  // whole time — sat in the panel as "unmeasurable" for rounds.
+  //
+  // It has no problem at all. Measured 2026-10-06, five probes each:
+  //   the omitted request  → 200, five out of five
+  //   `reasoning_effort:"low"` → 200, five out of five
+  //   `reasoning_effort:"none"` → refused every time, and the two channels
+  //     disagree about how: completions answers a generic 400, responses
+  //     answers `401 Model space-bunny-free is not supported for format openai`.
+  //
+  // That 401 was classified as a credential failure, `isCallerScoped` returned it
+  // immediately, and the other channel's answer was discarded — so the model
+  // looked unmeasurable and the round never reached the fallback level that
+  // works.
+  //
+  // The attribution is sound because the round only asks a spelling after three
+  // successful omitted samples on the same channel: the request that fails
+  // differs from one that worked by exactly the injected field.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async (model, question) => {
+        asked.push(question);
+        // space-bunny-free publishes low…max, so ITS lowest level is `low`.
+        if (question === 'none') {
+          return {
+            kind: 'inconclusive',
+            code: 'unknown',
+            http: 401,
+            formatScoped: true,
+            reason: 'not supported for format openai（HTTP 401）',
+          };
+        }
+        const tokens = question === 'baseline' ? 40 : 6;
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens },
+        };
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    assert.ok(asked.includes('low'), 'the round moved past the refused spelling to its own lowest level');
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free');
+    assert.equal(record.effort?.kind, 'level-works', 'and confirmed the level that actually works');
+    assert.equal(record.effort?.level, 'low');
+    assert.equal(catalog.probeProgress().results['space-bunny-free'].status, 'ok', 'so the row is not "unmeasurable"');
+  })
+})
+
+test('GUARD: three refusals of the same spelling end at no Off row, never a wrong one', async () => {
+  // The terminal case: when no spelling works, ADR 0004 §31 wants `off: null` —
+  // an honest absence, not a control that does nothing. The refusal has to be
+  // able to REACH that verdict, which it could not while it was filed as a round
+  // that reached nothing.
+  await withTempDir(async (dir) => {
+    // Seeded BEFORE the container exists, so the warm read adopts it: the
+    // baseline is already measured (three samples) and nothing has disagreed.
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'space-bunny-free': modelsDict()['space-bunny-free'] },
+        probes: {
+          // Stamped: this is what a record from the CURRENT instrument looks
+          // like. An unstamped one stands for the pre-fix instrument, whose
+          // samples were all zero — see the instrument-version test below.
+          'space-bunny-free': { verdict: 'ok', at: 1_000_000, effortReading: EFFORT_READING, effortBaselineTokens: [35, 42, 55] },
+        },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    )
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async () => ({ kind: 'inconclusive', code: 'unknown', http: 400, reason: 'invalid request（HTTP 400）' }),
+      listZenIds: async () => ['space-bunny-free'],
+    })
+    await catalog.forceRefresh()
+    for (let i = 0; i < 4; i += 1) {
+      pastProbeFloor(clock)
+      await catalog.forceProbes()
+    }
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.equal(record.effort?.kind, 'rejected', 'three agreeing refusals confirm a rejection');
+    assert.equal(record.effort?.level, undefined, 'a rejection names no level');
+    await catalog.forceRefresh();
+    const model = catalog.current().models.find((m) => m.id === 'space-bunny-free');
+    assert.equal(model?.thinkingLevelMap?.off, null, 'so the model gets no Off row rather than a lying one');
+  })
+})
+
+test('GUARD: samples from an older instrument are re-measured, not judged', async () => {
+  // The first release of the effort axis never read `usage.reasoning`, so every
+  // sample it wrote was a hard 0. Those zeros cannot be told apart from real
+  // ones by value — a model asked for `low` may genuinely report zero — so they
+  // are told apart by INSTRUMENT. Left in place they are worse than useless: one
+  // stored 0 alongside three real samples keeps `median(baseline)` at 0, which
+  // `effortVerdictFrom` reads as "no claim", and the axis never converges again.
+  await withTempDir(async (dir) => {
+    // Exactly what a poisoned deployment looks like: two baselines, both zero.
+    // The record needs this model's OWN id, or `derive` names it after the
+    // borrowed fixture's id and the catalogue prunes the probe as unknown.
+    const mimo = { ...modelsDict()['space-bunny-free'], id: 'mimo-v2.6-flash-free', name: 'Mimo V2.6 Flash Free' };
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'mimo-v2.6-flash-free': mimo },
+        probes: {
+          'mimo-v2.6-flash-free': { verdict: 'ok', at: 1_000_000, effortBaselineTokens: [0, 0] },
+        },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    )
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'mimo-v2.6-flash-free': mimo }) }),
+      // Measured 2026-10-06: mimo-v2.6-flash-free reasons 37 when omitted and 0
+      // under `none`.
+      probe: async (_model, question) => {
+        asked.push(question);
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens: question === 'baseline' ? 37 : 0 },
+        }
+      },
+      listZenIds: async () => ['mimo-v2.6-flash-free'],
+    })
+    await catalog.forceRefresh();
+    for (let i = 0; i < 10; i += 1) {
+      pastProbeFloor(clock);
+      await catalog.forceProbes();
+    }
+    assert.ok(asked.includes('baseline'), 'the baseline is asked again rather than believed');
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'mimo-v2.6-flash-free');
+    assert.deepEqual(record.effortBaselineTokens, [37, 37, 37], 'the poisoned zeros are gone, not averaged with real samples');
+    assert.equal(record.effort?.kind, 'none-works', 'and the model still reaches a verdict');
+    await catalog.forceRefresh();
+    const model = catalog.current().models.find((m) => m.id === 'mimo-v2.6-flash-free');
+    assert.equal(model?.thinkingLevelMap?.off, 'none', 'so it gets the Off row the measurement always supported');
+  })
+})
+
+test('GUARD: a verdict whose own samples contradict it is corrected on read', async () => {
+  // longcat-2.5-preview-free, exactly as it sits on disk on 2026-10-06:
+  // verdict `level-works / minimal`, samples [1,36,36,36,36], baseline
+  // [36,36,36]. Median 36 against a threshold of 15.48 — no reduction — and the
+  // model was handed an Off row anyway.
+  //
+  // The verdict is a pure function of those samples and the samples sit beside
+  // it, so waiting for the TTL or a re-measurement is waiting for an answer
+  // that is already in the record. Reading recomputes the kind.
+  await withTempDir(async (dir) => {
+    const fp = reasoningFingerprint({ ...modelsDict()['space-bunny-free'], id: 'longcat-2.5-preview-free' });
+    const stored = {
+      verdict: 'ok',
+      at: 1_000_000,
+      effortReading: EFFORT_READING,
+      effort: { kind: 'level-works', level: 'minimal', fp, api: 'openai-completions', at: 1_000_000 },
+      effortFrozenAt: 1_000_000,
+      effortTokens: [1, 36, 36, 36, 36],
+      effortBaselineTokens: [36, 36, 36],
+    };
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'longcat-2.5-preview-free': modelsDict()['space-bunny-free'] },
+        probes: { 'longcat-2.5-preview-free': stored },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    );
+    const read = await readCache(join(dir, 'catalog.json'));
+    assert.equal(read.probes['longcat-2.5-preview-free'].effort?.kind, 'noop', 'the samples say it reduces nothing');
+    assert.equal(read.probes['longcat-2.5-preview-free'].effort?.level, undefined, 'so it names no level');
+
+    // A verdict the samples DO support keeps its level, and one that reduces
+    // reasoning stays a finding rather than being rewritten into `noop`.
+    const good = { ...stored, effortTokens: [0, 0, 0], effortBaselineTokens: [36, 36, 36] };
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'longcat-2.5-preview-free': modelsDict()['space-bunny-free'] },
+        probes: { 'longcat-2.5-preview-free': good },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    );
+    const read2 = await readCache(join(dir, 'catalog.json'));
+    assert.equal(read2.probes['longcat-2.5-preview-free'].effort?.kind, 'level-works', 'supported: the level is kept');
+  })
+})
+
+test('GUARD: a verdict whose samples were deleted reads as no verdict', async () => {
+  // 0.3.1 confirmed a verdict and then cleared `effortTokens`. Every verdict it
+  // wrote is therefore an assertion nobody can reproduce — and one of them
+  // disagrees with the recorded measurement (live 2026-10-06:
+  // `longcat-2.5-preview-free` confirmed at a level that does nothing for it).
+  //
+  // The plugin should not trust a number whose evidence the code that produced it
+  // deleted. Dropping it on read re-measures the model on the next round.
+  await withTempDir(async (dir) => {
+    const fp = reasoningFingerprint({ ...modelsDict()['space-bunny-free'], id: 'longcat-2.5-preview-free' });
+    const cache = {
+      version: CACHE_VERSION,
+      fetchedAt: 1_000_000,
+      models: { 'longcat-2.5-preview-free': modelsDict()['space-bunny-free'] },
+      probes: {
+        // The shape 0.3.1 wrote: a frozen verdict, and no samples behind it.
+        'longcat-2.5-preview-free': {
+          verdict: 'ok',
+          at: 1_000_000,
+          effortReading: EFFORT_READING,
+          effort: { kind: 'level-works', level: 'minimal', fp, api: 'openai-completions', at: 1_000_000 },
+          effortFrozenAt: 1_000_000,
+          effortTokens: [],
+          effortBaselineTokens: [36, 36, 36],
+        },
+        // A `rejected` verdict is decided by refusals, not by a median, so having
+        // no samples is legitimate and it must survive.
+        'space-bunny-free': {
+          verdict: 'ok',
+          at: 1_000_000,
+          effortReading: EFFORT_READING,
+          effort: { kind: 'rejected', fp: 'x', api: 'openai-completions', at: 1_000_000 },
+          effortFrozenAt: 1_000_000,
+          effortTokens: [],
+        },
+      },
+      lastProbeAt: 1_000_000,
+    };
+    await writeFile(join(dir, 'catalog.json'), JSON.stringify(cache), 'utf8');
+    const read = await readCache(join(dir, 'catalog.json'));
+    assert.equal(
+      read.probes['longcat-2.5-preview-free'].effort,
+      undefined,
+      'an unreproducible verdict is not adopted',
+    );
+    assert.equal(
+      read.probes['longcat-2.5-preview-free'].effortFrozenAt,
+      undefined,
+      'nor is its freeze marker, so the model is measured again',
+    );
+    assert.equal(
+      read.probes['space-bunny-free'].effort?.kind,
+      'rejected',
+      'a refusal-based verdict stands without samples',
+    );
+  })
+})
+
+test('GUARD: a confirmed verdict keeps the samples it rests on', async () => {
+  // The samples were cleared on confirmation while the comment beside them said
+  // they were kept. That is not a tidiness question: they are the only evidence a
+  // frozen verdict has, and a verdict whose evidence is gone cannot be checked by
+  // anyone, including the next measurement. On 2026-10-06 that left
+  // `longcat-2.5-preview-free` confirmed at a level the recorded measurement says
+  // does nothing, with no way to see what it was confirmed on.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async (_model, question) => {
+        const tokens = question === 'baseline' ? 40 : 6;
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens },
+        };
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free');
+    assert.ok(record.effort !== undefined, 'a verdict exists');
+    assert.ok(
+      (record.effortTokens?.length ?? 0) >= EFFORT_SAMPLES,
+      'and the samples behind it survive, so the median can be recomputed by a reader',
+    );
+    assert.deepEqual(record.effortBaselineTokens, [40, 40, 40], 'as does the baseline it was judged against');
+    assert.deepEqual(record.effortSamples, [], 'while the TALLY is emptied, which is what was meant by frozen');
+
+    // The median that produced the verdict is the one a reader can recompute.
+    const median = (values) => values.slice().sort((a, b) => a - b)[values.length >> 1];
+    assert.ok(
+      median(record.effortTokens) < EFFORT_WORKING_RATIO * median(record.effortBaselineTokens),
+      'and it still explains the verdict after the fact',
+    );
+  })
+})
+
+test('GUARD: a route that reports no reasoning stops being asked, not asked for ever', async () => {
+  // `fledge-alpha-free` sends no `completion_tokens_details` (ADR 0004 §33), so
+  // its baseline reads 0 — and the ratio test is `candidate < 0.43 × baseline`,
+  // where nothing is below 0.43 × 0. The axis is structurally undecidable: no
+  // verdict is reachable, so every round spent its whole budget on a question
+  // that cannot land. Live 2026-10-06: base [0,0,0], cand [0,0,0,0,0], nothing.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const fledge = { ...modelsDict()['muse-spark-1.3-contributor-free'], id: 'fledge-alpha-free', name: 'Fledge Alpha Free' }
+    let asked = 0
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'fledge-alpha-free': fledge }) }),
+      probe: async (_model, question) => {
+        // Counted per AXIS: a round now also asks the capability questions once
+        // each, and this guard is about the effort ladder not being re-asked for
+        // ever. Counting them together would make the guard pass for the wrong
+        // reason the moment the capability questions stop.
+        if (question === 'ceiling') return { kind: 'inconclusive', code: 'error', http: 400, reason: 'stub refusal' };
+        if (typeof question === 'string' && question.startsWith('capability:')) return { kind: 'ok', api: 'openai-completions', capability: { axis: question.slice(11), ok: true, detail: 'stub' } };
+        asked += 1;
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+      },
+      listZenIds: async () => ['fledge-alpha-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    assert.ok(asked <= EFFORT_SAMPLES, `the baseline is sampled, then the axis is given up on (asked ${asked})`);
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'fledge-alpha-free');
+    assert.deepEqual(record.effortBaselineTokens, [0, 0, 0]);
+    assert.equal(record.effort, undefined, 'nothing is claimed about a model we cannot measure');
+    assert.deepEqual(record.effortTokens, undefined, 'and no candidate reading was filed from a question that cannot land');
+
+    // Later rounds pay one liveness request, and file nothing: stopping the LOOP
+    // was not enough on its own — the round still opened with one shot, that shot
+    // asked the spelling, and its reading grew the sample array by one every
+    // round for ever. Live 2026-10-06: `fledge-alpha-free` went from six samples
+    // to seven while already "abandoned".
+    for (let i = 0; i < 3; i += 1) {
+      clock.t += 25 * 60 * 60_000;
+      await catalog.runProbes();
+    }
+    const later = await readProbeRecord(join(dir, 'catalog.json'), 'fledge-alpha-free');
+    assert.deepEqual(later.effortBaselineTokens, [0, 0, 0], 'the baseline does not grow either');
+    assert.equal(later.effortTokens, undefined, 'nor does the candidate array');
+    assert.equal(later.effortQuestion, undefined, 'and no question is left standing');
+  })
+})
+
+test('GUARD: a measured context window is used, and a changed declaration discards it', async () => {
+  // models.dev under-reports `limit.context` and says nothing about it.
+  // Measured 2026-10-06: mimo-v2.6-flash-free and mimo-v2.5-free both declare
+  // 200000 and both answer `[400] This endpoint's maximum context length is
+  // 1048576 tokens`; nemotron-3.5-lightning-free declares 262144 and says
+  // 1000000 — while ling-3.1-flash-free declares the SAME 262144 and is exactly
+  // right. Silent and fatal: an under-reported window is never refused, it just
+  // clamps `max_tokens` to 1 and returns HTTP 200 with no characters.
+  const section = (context) => ({
+    'mimo-v2.6-flash-free': { ...modelsDict()['space-bunny-free'], id: 'mimo-v2.6-flash-free', name: 'Mimo', limit: { context, output: 32000 } },
+    'ling-3.1-flash-free': { id: 'ling-3.1-flash-free', name: 'Ling', reasoning: true, reasoning_options: [{ type: 'toggle' }], cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 }, limit: { context: 262144, output: 32768 } },
+  })
+  const window = (id, ctx) => {
+    const dict = section(ctx);
+    const models = derive(dict, { template: template() }).candidates;
+    return derive(dict, { template: template(), measuredContext: measuredContextFor(models, dict, {}) })
+      .candidates.find((m) => m.id === id).contextWindow;
+  };
+
+  // The endpoint STATED this limit about itself, so it is bounded only by the
+  // absolute ceiling — not by the `declared x 4` valve, which exists to stop an
+  // INFERRED raise from retiring capability on a healthy model. Measured
+  // 2026-10-07: the plugin was advertising 800000 where the endpoint says
+  // 1048576, withholding 248K of real context.
+  assert.equal(window('mimo-v2.6-flash-free', 200000), 1048576, 'the stated window replaces the stale declaration');
+  assert.equal(window('ling-3.1-flash-free', 262144), 262144, 'a model with no measurement keeps its declaration');
+  assert.equal(
+    window('mimo-v2.6-flash-free', 400000),
+    1048576,
+    'a moved declaration does not DISCARD the measurement, it DEMOTES it: the seed is now inferred rather than first-party, so it is bounded by declared x 4 (1,600,000) and the ceiling (1,048,576) — and it still clears both. Discarding a witnessed number over a pointer move is what let a models.dev typo fix silently delete it (ADR 0004 §56).',
+  )
+  assert.equal(
+    contextEvidenceFor(section(400000)['mimo-v2.6-flash-free'], 1048576, seededContextFor(section(400000)['mimo-v2.6-flash-free'], 'mimo-v2.6-flash-free')),
+    'inferred',
+    'and the panel says `inferred` — a demoted source does not keep the first-party claim',
+  );
+})
+
+test('GUARD: the output budget follows models.dev unless a generation was WATCHED past it', async () => {
+  // `limit.output` reaches the wire as `max_tokens`, and the route enforces it —
+  // asked for 8 with a prompt that wanted thousands, six models returned exactly
+  // 8 with `finish_reason: "length"` (measured 2026-10-07). So a declaration that
+  // is too low really does cut a reply, silently, at `finish_reason: "length"`.
+  //
+  // But acceptance is a fact about the REQUEST. The same day every route accepted
+  // budgets up to 1,040,384, and no model was ever seen writing anything like it.
+  // Shipping those as "maximum output" is the mistake the operator caught (ADR
+  // 0004 §43) and this is the rule that replaces it: **only delivery evidence
+  // moves this field.** One model has such an observation, so one model's budget
+  // differs from its declaration, and the other six follow models.dev exactly.
+  const section = (output) => ({
+    'mimo-v2.6-flash-free': { ...modelsDict()['space-bunny-free'], id: 'mimo-v2.6-flash-free', name: 'Mimo', limit: { context: 200000, output } },
+    'space-bunny-free': { ...modelsDict()['space-bunny-free'], id: 'space-bunny-free', name: 'Space Bunny', limit: { context: 1048576, output: 524288 } },
+    'longcat-2.5-preview-free': { ...modelsDict()['space-bunny-free'], id: 'longcat-2.5-preview-free', name: 'Longcat', limit: { context: 1000000, output: 131072 } },
+  })
+  const built = (id, output) => {
+    const dict = section(output)
+    const first = derive(dict, { template: template() }).candidates
+    return derive(dict, { template: template(), measuredContext: measuredContextFor(first, dict, {}) })
+      .candidates.find((m) => m.id === id)
+  }
+
+  // Two kinds of evidence now move this field, and a vendor's own word outranks
+  // anything measured here. Xiaomi publishes MiMo-V2.6-Flash as 1M context /
+  // **128K max output**; the route accepts 8,000,000 (three 200s) so it enforces
+  // nothing at all; and a generation was watched to 64,000. models.dev says
+  // 32,000 — four times below the vendor's own number.
+  assert.equal(built('mimo-v2.6-flash-free', 32000).maxTokens, 131072, 'a VENDOR-STATED ceiling outranks a declaration 4x too low')
+  // longcat: the route names its own ceiling in a refusal — "/max_tokens: 995834
+  // is not less or equal to 262144" — while models.dev publishes half of it. The
+  // budget moves on that, with no production witnessed at all.
+  assert.equal(
+    built('longcat-2.5-preview-free', 131072).maxTokens,
+    262144,
+    'a ceiling the ROUTE states in a refusal moves the budget',
+  )
+  assert.equal(
+    built('space-bunny-free', 524288).maxTokens,
+    524288,
+    'and so does one whose declaration happens to be right',
+  )
+  assert.equal(
+    built('mimo-v2.6-flash-free', 64000).maxTokens,
+    64000,
+    'a seed measured against another declaration does not RAISE the budget — the number it was measured about is not this one',
+  )
+  assert.equal(
+    observedOutputFor(section(64000)['mimo-v2.6-flash-free'], 'mimo-v2.6-flash-free', 131072),
+    79722,
+    'but the witnessed generation SURVIVES the move: it was watched happening, and throwing it away is how a typo fix erases the only production in the table',
+  )
+  assert.equal(
+    observedOutputFor(section(64000)['mimo-v2.6-flash-free'], 'mimo-v2.6-flash-free', 64000),
+    64000,
+    'clamped to the budget we would actually send — claiming a longer reply than we allow would be a different lie',
+  )
+  assert.equal(
+    observedOutputIsStale(section(64000)['mimo-v2.6-flash-free'], 'mimo-v2.6-flash-free'),
+    true,
+    'and the panel is told the figure has not been re-checked against this declaration',
+  )
+  // The observation is reported separately and only where it exists, so the row
+  // can never present a budget as something the model was seen to write.
+  assert.equal(observedOutputFor(section(32000)['mimo-v2.6-flash-free'], 'mimo-v2.6-flash-free', 64000), 64000)
+  assert.equal(
+    observedOutputFor(section(131072)['longcat-2.5-preview-free'], 'longcat-2.5-preview-free', 131072),
+    64000,
+    'watched writing 64,000 against a declared 131,072: still an observation. A guard that dropped anything below the declaration made the panel claim this model had never been watched writing — on the one model with the most evidence — and it protected nothing, because the budget is a max() over the declaration anyway.',
+  )
+  const mimo = built('mimo-v2.6-flash-free', 32000)
+  assert.ok(mimo.maxTokens <= mimo.contextWindow, 'a budget above the context it must fit inside is unreachable')
+})
+
+test('GUARD: a round counts models, and a row reports what it learned about one', async () => {
+  // The shot loop broke the tally's two invariants at once. `done` counted
+  // SAMPLES while `total` counted models, so the panel read "53/27" live on
+  // 2026-10-06; and each shot overwrote the row, so a model that produced three
+  // good baseline samples and then hit a 429 was painted red — the round's actual
+  // finding discarded by its last request.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    let shot = 0
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'mimo-v2.6-flash-free': mimoRecord() }) }),
+      // Three good baseline samples, then the shared bucket says no.
+      probe: async () => {
+        shot += 1;
+        if (shot > 3) return { kind: 'inconclusive', code: 'quota-exhausted', http: 429, reason: 'free tier quota' };
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 37 } };
+      },
+      listZenIds: async () => ['mimo-v2.6-flash-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    const progress = catalog.probeProgress();
+    assert.equal(progress.total, 1, 'one model is the whole round');
+    assert.equal(progress.done, 1, 'and one model is the whole tally, however many samples it took');
+    assert.equal(
+      progress.results['mimo-v2.6-flash-free'].status,
+      'ok',
+      'the row reports what the round learned about the model, not what its last request hit',
+    );
+  })
+
+  // The other direction: a model that never answers is still a red row, and the
+  // reason survives.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'mimo-v2.6-flash-free': mimoRecord() }) }),
+      probe: async () => ({ kind: 'inconclusive', code: 'quota-exhausted', http: 429, reason: 'free tier quota' }),
+      listZenIds: async () => ['mimo-v2.6-flash-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+    const row = catalog.probeProgress().results['mimo-v2.6-flash-free'];
+    assert.equal(row.status, 'failed');
+    assert.equal(row.code, 'quota-exhausted', 'a red row still carries why');
+  })
+})
+
+test('GUARD: an inferred raise is still held to declared x 4, a stated one is not', async () => {
+  // Two evidence strengths, two ceilings. The clamp signature also fires on a
+  // HEALTHY model whose context is genuinely full, so an inferred raise must stay
+  // behind a valve; a number the endpoint stated about itself must not be clipped
+  // by a valve built for a different kind of evidence.
+  const withLimits = (context) => ({
+    id: 'x',
+    reasoning: true,
+    cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+    limit: { context, output: 32000 },
+  });
+  const measured = (raisedTo, source) => ({
+    raisedTo,
+    fp: contextFingerprint(withLimits(200000)),
+    at: 0,
+    ...(source === undefined ? {} : { source }),
+  });
+  assert.equal(contextWindowFor(withLimits(200000), measured(1048576, 'measured')), 1048576, 'stated: only the ceiling bounds it');
+  assert.equal(contextWindowFor(withLimits(200000), measured(1048576, 'inferred')), 800000, 'inferred: declared x 4 still applies');
+  assert.equal(contextWindowFor(withLimits(200000), measured(1048576)), 800000, 'a record with no source reads as inferred');
+  assert.equal(
+    contextWindowFor(withLimits(200000), measured(9_000_000, 'measured')),
+    1048576,
+    'even a stated value cannot exceed the absolute ceiling',
+  );
+})
+
+test('GUARD: a verdict is visible in the same round that confirms it', async () => {
+  // `state.models` was derived before the round, so the Off row a round confirms
+  // landed on disk but not in the list the picker reads: the user watched a round
+  // confirm it and had to wait for the next catalogue sync or a restart. The
+  // round republishes from its own evidence now, using the same derivation the
+  // warm start uses.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'mimo-v2.6-flash-free': mimoRecord() }) }),
+      probe: async (_model, question) => ({
+        kind: 'ok',
+        api: 'openai-completions',
+        effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens: question === 'baseline' ? 37 : 0 },
+      }),
+      listZenIds: async () => ['mimo-v2.6-flash-free'],
+    });
+    await catalog.forceRefresh();
+    const before = catalog.current().models.find((m) => m.id === 'mimo-v2.6-flash-free');
+    assert.equal(before.thinkingLevelMap?.off, null, 'nothing has been measured yet');
+
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+    const after = catalog.current().models.find((m) => m.id === 'mimo-v2.6-flash-free');
+    assert.equal(after.thinkingLevelMap?.off, 'none', 'the row the round confirmed is in the list it republished');
+    assert.equal(after.contextWindow, before.contextWindow, 'and nothing else moved with it');
+  })
+})
+
+test('GUARD: one manual click can finish a measurement, not just start one', async () => {
+  // A round used to spend exactly one request per model. A verdict needs three
+  // baseline samples plus five candidate ones (median first, then three agreeing
+  // judgements), so a click could never change a capability row — the user saw a
+  // completed round and an unchanged picker, with no way to tell progress from
+  // failure. Measured 2026-10-06 on the live deployment: one round left every
+  // model holding a single baseline sample.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'mimo-v2.6-flash-free': mimoRecord() }) }),
+      // Measured 2026-10-06: mimo-v2.6-flash-free reasons 37 when omitted, 0 under
+      // `none` — an exact off.
+      // Mirrors the real probe: a question it actually asked about produces a
+      // candidate reading, anything else (baseline, settled) a baseline one.
+      probe: async (_model, question) => {
+        asked.push(question);
+        const asked_ = question === 'none' || question === 'low';
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: asked_ ? 'candidate' : 'baseline', tokens: asked_ ? 0 : 37 },
+        };
+      },
+      listZenIds: async () => ['mimo-v2.6-flash-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    assert.equal(asked.filter((q) => q === 'baseline').length, EFFORT_SAMPLES, 'the baseline is sampled to a median');
+    assert.equal(
+      asked.filter((q) => q === 'none').length,
+      EFFORT_CANDIDATE_SAMPLES,
+      'and the candidate to the first three agreeing judgements',
+    );
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'mimo-v2.6-flash-free');
+    assert.equal(record.effort?.kind, 'none-works');
+    assert.ok(typeof record.effortFrozenAt === 'number', 'confirmed and frozen inside the one click');
+    assert.ok(asked.length <= MANUAL_SAMPLE_BUDGET, 'and the budget was never exceeded');
+
+    // A second click must not re-measure a model that already has its answer.
+    asked.length = 0;
+    clock.t += 25 * 60 * 60_000;
+    await catalog.forceProbes();
+    assert.deepEqual(
+      [...new Set(asked.filter((q) => q !== 'ceiling'))],
+      ['settled'],
+      'a settled model is asked for liveness only — no further sample of that axis',
+    );
+    const settled = await readProbeRecord(join(dir, 'catalog.json'), 'mimo-v2.6-flash-free');
+    assert.deepEqual(
+      settled.effortBaselineTokens,
+      [37, 37, 37],
+      'and its frozen baseline does not grow for ever on liveness rounds',
+    );
+  })
+
+  // The budget is a CEILING, not a bill: a model whose `none` is refused falls
+  // back to its own lowest level and stops as soon as that level is confirmed.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async (_model, question) => {
+        asked.push(question);
+        if (question === 'none') {
+          return { kind: 'inconclusive', code: 'unknown', http: 400, reason: 'invalid request（HTTP 400）' };
+        }
+        const tokens = question === 'baseline' ? 40 : 6;
+        return {
+          kind: 'ok',
+          api: 'openai-completions',
+          effort: { kind: question === 'baseline' ? 'baseline' : 'candidate', tokens },
+        };
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.equal(record.effort?.kind, 'level-works');
+    assert.equal(record.effort?.level, 'low', 'the fallback level, not the one that was refused');
+    // The refusal detour is exactly what the extra `EFFORT_FALLBACK_AFTER` in the
+    // budget pays for; the first block above is the other side of the same
+    // contract — a model that answers early is not billed the ceiling.
+    assert.ok(
+      asked.filter((q) => q === 'baseline' || q === 'none' || q === 'settled' || q === 'low' || q === 'minimal' || q === 'high').length <= MANUAL_SAMPLE_BUDGET &&
+        asked.length <= MANUAL_SAMPLE_BUDGET + CAPABILITY_SAMPLE_BUDGET,
+      `each axis stays inside its own budget (asked ${asked.length})`,
+    );
+  })
+})
+
+test('GUARD: a manual round inside the floor says why it refused', async () => {
+  // `forceProbes()` used to return nothing, so the route answered 202 whether or
+  // not a round had started: a refused click was indistinguishable from a
+  // started one, and the card spun out its grace period in silence. The refusal
+  // carries the number the user needs.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    let calls = 0;
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      probe: async () => {
+        calls += 1;
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 40 } };
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    })
+    await catalog.forceRefresh()
+
+    const first = await catalog.forceProbes();
+    assert.deepEqual(first, { started: true }, 'the first click starts a round');
+    // Liveness, the ceiling question, and one capability axis — the round spends
+    // the capability budget as well as the effort one, and "one request per model"
+    // stopped being the whole cost when the harvest joined it.
+    // The ceiling question and the axes, but only when they can conclude: this
+    // stub answers no capability question, so nothing is recorded and the next
+    // round is free to try again.
+    assert.ok(calls >= 2, `a manual round spends liveness plus the ceiling question (asked ${calls})`);
+
+    clock.t += 60_000;
+    const refused = await catalog.forceProbes();
+    assert.equal(refused.started, false, 'a click inside the floor starts nothing');
+    assert.equal(refused.reason, 'cooldown');
+    assert.equal(refused.retryAfterMs, PROBE_FLOOR_MS - 60_000, 'and says how much of the floor is left');
+    assert.equal(calls, 2, 'no second round was spent');
+
+    clock.t += PROBE_FLOOR_MS;
+    assert.deepEqual(await catalog.forceProbes(), { started: true }, 'and the floor really does expire');
+    assert.equal(calls, 3, 'the same three: liveness, ceiling, one capability axis');
+  })
+})
+
+test('GUARD: a confirmed verdict names the level the probe actually asked', async () => {
+  // The round derived the question TWICE: once to send it (with the model's own
+  // lowest published level as the fallback) and once to label the verdict (with
+  // a hardcoded `minimal`). After a disagreement those two disagree, so a
+  // measurement taken at `low` was recorded as a claim about `minimal` — a level
+  // this model does not publish, which `thinkingLevelMapFor` would then hand the
+  // user as an Off row.
+  await withTempDir(async (dir) => {
+    await writeFile(
+      join(dir, 'catalog.json'),
+      JSON.stringify({
+        version: CACHE_VERSION,
+        fetchedAt: 1_000_000,
+        models: { 'space-bunny-free': modelsDict()['space-bunny-free'] },
+        probes: {
+          // Three baselines and one disagreement: the next question is the
+          // fallback, which for space-bunny-free is `low` (its own lowest
+          // published level), not `minimal`.
+          'space-bunny-free': {
+            verdict: 'ok',
+            at: 1_000_000,
+            effortReading: EFFORT_READING,
+            effortBaselineTokens: [35, 55, 42],
+            effortDiscord: 1,
+          },
+        },
+        lastProbeAt: 1_000_000,
+      }),
+      'utf8',
+    )
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBodyWith({ 'space-bunny-free': modelsDict()['space-bunny-free'] }) }),
+      // Measured 2026-10-06: space-bunny-free at its lowest declared level drops
+      // reasoning to 0/9/22/37 against an omitted baseline of 36/42/55.
+      probe: async (_model, question) => {
+        asked.push(question)
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'candidate', tokens: 4 } }
+      },
+      listZenIds: async () => ['space-bunny-free'],
+    })
+    await catalog.forceRefresh()
+    // Five rounds, not three: `working` needs three samples before it produces a
+    // verdict at all, and the verdict then needs three of those to agree.
+    for (let i = 0; i < 5; i += 1) {
+      pastProbeFloor(clock)
+      await catalog.forceProbes()
+    }
+    assert.deepEqual([...new Set(asked.filter((q) => q !== 'ceiling'))], ['low'], 'every round must ask the model\'s own lowest published level');
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'space-bunny-free')
+    assert.equal(record.effort?.kind, 'level-works');
+    assert.equal(record.effort?.level, 'low', 'the verdict names the level that was measured');
+    assert.ok(typeof record.effortFrozenAt === 'number', 'and it is frozen so it stops re-measuring');
+
+    // The map is derived from the evidence, so it becomes visible on the next
+    // sync or restart — which is what the picker reads.
+    await catalog.forceRefresh();
+    const model = catalog.current().models.find((m) => m.id === 'space-bunny-free');
+    assert.equal(model?.thinkingLevelMap?.off, 'low', 'and the Off row the user gets is that same level');
+  })
+})
+
+test('GUARD: the daily round covers every model Zen serves; the manual one stays on screen', async () => {
+  // Two rounds, two jobs. The manual round spends a budget per model on the
+  // models the user has switched on — those are the answers somebody is
+  // watching for. The daily round spends ONE request each and nobody asked for
+  // it, so it may as well settle every model Zen still lists: a hidden model
+  // whose free tier has ended is exactly the one nobody discovers by looking at
+  // the picker.
+  //
+  // Before this they shared one rule, so hiding a model also stopped the daily
+  // round from ever learning whether that model still works.
+  await withTempDir(async (dir) => {
+    const clock = { t: 1_000_000 }
+    const asked = []
+    const probe = async (model) => {
+      asked.push(model.id);
+      return { kind: 'ok' };
+    };
+    const make = () =>
+      catalogWith({
+        dir,
+        clock,
+        manualSampleBudget: 1,
+        fetchImpl: async () =>
+          fakeResponse({
+            body: apiBodyWith({
+              'big-pickle': modelsDict()['big-pickle'],
+              'space-bunny-free': modelsDict()['space-bunny-free'],
+            }),
+          }),
+        probe,
+        hidden: (id) => id === 'space-bunny-free',
+        listZenIds: async () => ['big-pickle', 'space-bunny-free'],
+      });
+    const build = async (catalog) => {
+      await catalog.forceRefresh();
+      catalog.applyZenGate(['big-pickle', 'space-bunny-free']);
+      return catalog;
+    };
+
+    const daily = await build(make());
+    asked.length = 0;
+    clock.t += 25 * 60 * 60_000;
+    await daily.runProbes();
+    // `asked` records MODEL IDS, so the ceiling question shows up as the id
+    // repeating. The unique set is the liveness list.
+    assert.deepEqual([...new Set(asked)].sort(), ['big-pickle', 'space-bunny-free'], 'the daily round asks the hidden one too');
+
+    const manual = await build(make());
+    asked.length = 0;
+    clock.t += 25 * 60 * 60_000;
+    await manual.forceProbes();
+    // The manual round is scoped to what is switched on, and it now also asks the
+    // visible model for its ceiling and capabilities — so the id appears more than
+    // once. What it must NOT contain is the hidden one.
+    assert.deepEqual([...new Set(asked)], ['big-pickle'], 'and the manual round stays on what is switched on');
+  })
+})
+
+
+test('GUARD: restoring a cached round never overwrites a round that is running', async () => {
+  // "Click probe, it flashes, then nothing happens."
+  //
+  // The startup read restores the previous round's finished report. It resolves
+  // on its own schedule, and a round can begin before it lands — the daily round
+  // starts from `getModels()`, which is exactly what a restarting host does.
+  // Restoring over a live `probeRun` sends `requests` back to 0, `done` back to
+  // the old total and `running` to false, so the panel adopts a finished-looking
+  // report at once and stops following: the round runs on invisibly.
+  //
+  // Measured 2026-10-06: the endpoint reported `running:false, requests:0,
+  // done:35/35` while a round was demonstrably in flight.
+  //
+  // Driven through `adopt` itself — that is where the clobbering happens, and so
+  // where the guard belongs — using two plain objects, the way the other
+  // round-level cases here are driven.
+  const state = initialState([])
+  state.models = ['a-free', 'b-free'].map((id) => ({ id, name: id, api: 'openai-completions' }))
+  let release
+  const blocked = new Promise((resolve) => {
+    release = resolve;
+  });
+  const deps = {
+    path: join(tmpdir(), 'never-written-adopt-does-not-write'),
+    fetchImpl: async () => {
+      throw new Error('no network in this test');
+    },
+    now: () => 1_700_000_000_000,
+    userAgent: undefined,
+    ttlMs: 86_400_000,
+    warmReadTimeoutMs: 2_000,
+    warm: Promise.resolve(),
+    template: state.models[0],
+    knownApis: undefined,
+    probe: async (model) => {
+      if (model.id === 'a-free') await blocked;
+      return { kind: 'ok' };
+    },
+    listZenIds: async () => ['a-free', 'b-free'],
+    hidden: undefined,
+  };
+
+  const running = runProbeRound(state, deps);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(state.probeRun.running, true, 'a round is in flight');
+  const before = { done: state.probeRun.done, requests: state.probeRun.requests };
+  assert.equal(before.requests, 1, 'and it has spent a request');
+
+  // What the startup read does when it lands late: a finished report from disk.
+  adopt(state, deps, {
+    version: CACHE_VERSION,
+    fetchedAt: 1,
+    models: { 'a-free': {}, 'b-free': {} },
+    probes: {},
+    lastProbeAt: 1,
+    lastRound: { total: 7, done: 7, results: {}, targets: ['a-free'] },
+  }, true);
+
+  assert.equal(state.probeRun.running, true, 'still running');
+  assert.equal(state.probeRun.done, before.done, 'the tally it had reached is untouched');
+  assert.equal(state.probeRun.requests, before.requests, 'and so is its request count');
+  release();
+  await running;
+})
+
+test('GUARD: there is no ask-again cadence — every served model is asked every round', async () => {
+  // The backoff (0 → 6h → 24h → 7d, keyed on consecutive misses) is gone by
+  // decision: a round asks every model the Zen gate still lists, every time.
+  //
+  // It used to protect the shared anonymous bucket from models that were being
+  // rate-limited — measured, `ling-3.1-flash-free` answered 429 seven times
+  // across hours on 2026-10-06. That is a real cost, and the round's own shape
+  // bounds it anyway: a model that fails a shot LEAVES the shot loop, so an
+  // unreachable model costs exactly one request per round, not the budget.
+  await withTempDir(async (dir) => {
+    const clock = { t: 1_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () =>
+        fakeResponse({
+          body: apiBodyWith({
+            'big-pickle': modelsDict()['big-pickle'],
+            'deepseek-v4-flash-free': modelsDict()['deepseek-v4-flash-free'],
+          }),
+        }),
+      // The failing model is the one that would have been backed off.
+      probe: async (model) => {
+        asked.push(model.id);
+        if (model.id === 'deepseek-v4-flash-free') return { kind: 'inconclusive', code: 'quota-exhausted', http: 429 };
+        return { kind: 'ok' };
+      },
+      listZenIds: async () => ['big-pickle', 'deepseek-v4-flash-free'],
+    });
+    await catalog.forceRefresh();
+    catalog.applyZenGate(['big-pickle', 'deepseek-v4-flash-free']);
+
+    for (let round = 1; round <= 3; round += 1) {
+      asked.length = 0;
+      clock.t += 60_000;
+      pastProbeFloor(clock);
+      await catalog.forceProbes();
+      assert.deepEqual(
+        // Distinct ids: a model that answers is asked several times inside one
+        // round (that is the sampling budget); the question here is only whether
+        // the FAILING model is asked again next round.
+        [...new Set(asked.filter((q) => q !== 'ceiling'))].sort(),
+        ['big-pickle', 'deepseek-v4-flash-free'],
+        `round ${round}: a model that failed the last one is asked again`,
+      );
+    }
+  })
+})
 
 test('a round covers the whole pre-gate catalogue, in order, one at a time', async () => {
   await withTempDir(async (dir) => {
@@ -1159,6 +2947,37 @@ test('a dead verdict is final: the model is never probed again', async () => {
   })
 })
 
+test('GUARD: "still measuring" never names a model the picker does not offer', async () => {
+  // Live 2026-10-06: the panel reported 28 models as still being measured, 23 of
+  // which Zen no longer lists — they are the round's `not-listed` bucket, gated
+  // out of the picker entirely. Telling a user to keep clicking for models that
+  // are not in their list, and never will be, is how a badge teaches distrust.
+  await withTempDir(async (dir) => {
+    const clock = { t: 1_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: scriptedFetch([fakeResponse({ body: apiBody() })]),
+      probe: async () => ({ kind: 'ok' }),
+    });
+    await catalog.forceRefresh();
+    // The Zen gate, applied the way a round applies it.
+    catalog.applyZenGate(['big-pickle', 'space-bunny-free']);
+    const pending = catalog.probeProgress().pending;
+    assert.ok(pending.includes('big-pickle'), 'a served, unmeasured model is pending');
+    assert.equal(
+      pending.some((id) => id === 'gpt-6-astra' || id === 'glm-5-free'),
+      false,
+      'and a model Zen does not list is not — it is not in the picker to be measured',
+    );
+    assert.deepEqual(
+      pending.slice().sort(),
+      ['big-pickle', 'space-bunny-free'],
+      'pending is exactly the picker list minus what has been measured',
+    );
+  })
+})
+
 test('probeProgress tracks the round live: current, done/total and per-model results', async () => {
   await withTempDir(async (dir) => {
     const seen = []
@@ -1194,12 +3013,14 @@ test('probeProgress tracks the round live: current, done/total and per-model res
       catalog.probeProgress(),
       {
         running: false,
+        requests: 0,
         total: 0,
         done: 0,
         current: null,
         results: {},
         targets: [],
         startedAt: 0,
+        pending: [...DERIVED],
       },
       'no round has ever run',
     )
@@ -1218,6 +3039,29 @@ test('probeProgress tracks the round live: current, done/total and per-model res
     const end = catalog.probeProgress()
     assert.equal(end.running, false)
     assert.equal(end.done, DERIVED.length)
+    // The harness pins the manual EFFORT budget to 1, so this round is one
+    // liveness request per model — plus the ceiling harvest, which now runs on
+    // every round on its own budget. That is the number the panel shows for what
+    // the round cost, and it is deliberately no longer the model count.
+    // One liveness request per model, plus the ceiling question for the five that
+    // answered — a model that came back dead is not asked anything else, which is
+    // the rule that stops an unreachable model costing a second request.
+    // A round now spends more than one request per model — liveness, the ceiling
+    // harvest, and on a manual round one capability question per unmeasured axis —
+    // and which of those apply depends on what is already measured. So the bound
+    // is a ceiling per model rather than a fixed total, which is what the panel
+    // reports and what a shared bucket is actually charged.
+    assert.ok(
+      end.requests >= DERIVED.length && end.requests <= DERIVED.length * (1 + CAPABILITY_SAMPLE_BUDGET),
+      `the round reports REQUESTS: between one and one-plus-three per model (asked ${end.requests})`,
+    )
+    assert.deepEqual(
+      end.pending,
+      // deepseek-v4-flash-free is absent: the round killed it, and a model the
+      // picker no longer offers cannot owe a measurement.
+      ['big-pickle', 'ling-3.0-flash-fin-free', 'muse-spark-1.2-contributor-free', 'muse-spark-1.3-contributor-free', 'space-bunny-free'],
+      'and the models that still owe samples — which is the picker list minus what is settled or gone',
+    );
     assert.equal(end.current, null)
     assert.equal(end.results['big-pickle'].status, 'ok')
     assert.equal(end.results['big-pickle'].ms, 120)
@@ -1239,7 +3083,10 @@ test('probeProgress tracks the round live: current, done/total and per-model res
     // be collected and never read — the only test whose stated job is "tracks
     // the round live" gave up exactly where the live behaviour lives. These are
     // the assertions that were missing.
-    assert.equal(seen.length, DERIVED.length, 'one reading was taken per model, mid-round')
+    // Six liveness readings plus five ceiling ones — the model that came back dead
+    // is not asked anything else, which is the rule that keeps an unreachable
+    // model from costing a second request.
+    assert.equal(seen.length, DERIVED.length * 2, 'a reading per model per request, and the round now makes two')
     assert.deepEqual(
       seen.map((s) => s.at),
       seen
@@ -3109,4 +4956,391 @@ test('a model is routed the moment its probe answers, not when the round ends', 
       'one write per round, carrying every verdict at once',
     )
   })
+})
+
+test('GUARD: a round measures a declared capability once, persists it, and stops asking', async () => {
+  // The panel used to show a vision badge that was a copy of models.dev and a
+  // "tools work" claim that was an inference from the admission gate. Clicking
+  // "Probe now" could not fix either, because nothing in a round ever asked.
+  //
+  // This is the fix's cost contract as much as its behaviour: one request per
+  // unmeasured axis, ONCE, and never again — the second round below is the whole
+  // test, because a rule that spends the shared bucket on every click is not a
+  // measurement, it is a tax.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBody() }),
+      probe: async (model, question) => {
+        asked.push(`${model.id}:${question ?? 'baseline'}`)
+        if (question === 'capability:vision') return { kind: 'ok', api: 'openai-completions', capability: { axis: 'vision', ok: true, detail: 'named the top half' } }
+        if (question === 'capability:tools') return { kind: 'ok', api: 'openai-completions', capability: { axis: 'tools', ok: true, detail: 'called bash' } }
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+      },
+      listZenIds: async () => SERVED,
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    // A manual round has budget for more than the effort samples, and spends the
+    // remainder on the axes nobody had evidence for.
+    // `ling-3.0-flash-fin-free` is the one model here the seed table knows
+    // nothing about — measured 2026-10-07, its endpoint answered
+    // `Endpoint is unavailable.` on every attempt — so it is the one that must
+    // still be asked.
+    assert.ok(
+      asked.includes('ling-3.0-flash-fin-free:capability:tools'),
+      'a model with no evidence is asked about the axis every model claims',
+    )
+    assert.ok(
+      !asked.some((q) => q.startsWith('ling-3.0-flash-fin-free:capability:vision')),
+      'it declares text-only input, so there is no claim on screen to verify and nothing is asked',
+    )
+    for (const seeded of ['big-pickle', 'muse-spark-1.3-contributor-free']) {
+      assert.deepEqual(
+        asked.filter((q) => q.startsWith(`${seeded}:capability:`)),
+        [],
+        `a model already measured — by the seed table — costs nothing (${seeded})`,
+      )
+    }
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'ling-3.0-flash-fin-free')
+    assert.equal(record.capabilities?.tools?.ok, true, 'the verdict is persisted, so it survives a restart')
+    assert.equal(typeof record.capabilities?.tools?.fp, 'string')
+    assert.equal(record.capabilities?.tools?.at, clock.t)
+
+    const before = asked.length
+    pastProbeFloor(clock);
+    await catalog.forceProbes()
+    assert.deepEqual(asked.slice(before).filter((q) => q.includes('capability:')), [], 'a settled axis is never asked again')
+  })
+})
+
+test('GUARD: a capability question that taught nothing is not a verdict', async () => {
+  // The failure this exists for: a reasoning model that spends the budget on
+  // thinking and returns no text looks exactly like a model that cannot see, and
+  // an upstream that is down looks exactly like a model without tools. Recording
+  // either as `ok: false` would retire a capability permanently on the strength
+  // of a condition that has nothing to do with the model — so nothing is
+  // written, the panel reads "not measured", and the next round tries again.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    let asked = 0
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBody() }),
+      probe: async (_model, question) => {
+        if (typeof question === 'string' && question.startsWith('capability:')) {
+          asked += 1;
+          // No `capability` at all: the prober saw a reply with no text in it.
+          return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+        }
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+      },
+      listZenIds: async () => ['ling-3.0-flash-fin-free'],
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+    assert.ok(asked > 0, 'the axis was asked')
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'ling-3.0-flash-fin-free')
+    assert.equal(record.capabilities, undefined, 'nothing was persisted for a request that concluded nothing')
+
+    const card = catalog.current().capabilities.find((c) => c.id === 'ling-3.0-flash-fin-free')
+    assert.equal(card.evidence.tools, 'declared', 'and the panel says "not measured" rather than "cannot"')
+    // "Not measured" must also leave the request path exactly as it was: this
+    // model's window was never measured either, so the declaration is still what
+    // ships, and the card says so by showing the two numbers equal.
+    assert.equal(card.evidence.context, 'none', 'no record behind it, so no provenance to state')
+    // This fixture's record publishes no `limit` at all, so the derived window
+    // came from the template and there is nothing to compare: "not measured" and
+    // "nothing was published" are different states, and the card carries both.
+    assert.equal(card.declaredContext, undefined)
+    assert.equal(card.contextWindow, 200000, 'the template floor still ships, unchanged by a failed measurement')
+  })
+})
+
+test('GUARD: every model is asked for its ceiling, not only the first few', async () => {
+  // The round-wide request counter was compared against the PER-MODEL budget, so
+  // once the round had spent nine requests anywhere the ceiling and capability
+  // questions were skipped for the rest of the list — four models heard the
+  // question and seven did not, which looks exactly like "those routes state
+  // nothing" unless you read the counter. Live 2026-10-07: `longcat-2.5-preview-free`
+  // harvested its own 262,144 in that first batch and nobody else was asked.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const ids = SERVED
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBody() }),
+      probe: async (model, question) => {
+        asked.push(`${model.id}:${question ?? 'baseline'}`);
+        if (question === 'ceiling') return { kind: 'inconclusive', code: 'error', http: 400, reason: 'stub', ceilings: { output: 262144 } };
+        if (typeof question === 'string' && question.startsWith('capability:')) return { kind: 'ok', api: 'openai-completions', capability: { axis: question.slice(11), ok: true, detail: 'stub' } };
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+      },
+      listZenIds: async () => ids,
+    });
+    await catalog.forceRefresh();
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+
+    for (const id of ids) {
+      assert.ok(
+        asked.includes(`${id}:ceiling`),
+        `${id} was asked for its ceiling — every model gets the question, not the first four`,
+      );
+    }
+    // And the answer has to be USABLE: a stated ceiling must reach the advertised
+    // budget, which is the half that was silently broken by storing one
+    // fingerprint and checking another.
+    for (const id of ids) {
+      const record = await readProbeRecord(join(dir, 'catalog.json'), id);
+      assert.equal(record.limits?.output, 262144, `${id} recorded what the route named`);
+      assert.equal(typeof record.limits?.fp, 'string');
+      assert.ok(record.limits.fp !== '', 'and the fingerprint is the one the catalogue checks');
+    }
+    const card = catalog.current().capabilities.find((c) => c.id === 'muse-spark-1.3-contributor-free');
+    assert.equal(card.outputBudget, 262144, 'a harvested ceiling reaches the advertised budget')
+    assert.equal(card.stated?.output, 262144, 'and reaches the panel as the interval it is')
+    // …bounded by the window it has to fit inside, which is the other half of
+    // the rule and just as load-bearing: big-pickle declares a 200,000 window, so
+    // a 262,144 output ceiling is not reachable and the budget stops there.
+    const capped = catalog.current().capabilities.find((c) => c.id === 'big-pickle');
+    assert.equal(capped.outputBudget, 200000, 'and never exceeds the window it must fit in')
+    assert.equal(capped.stated?.output, 262144, 'while the panel still shows what the route said');
+  })
+})
+
+test('GUARD: a stored ceiling that cannot be applied is asked again, not trusted', async () => {
+  // Found live 2026-10-07: `longcat-2.5-preview-free` carried a limits entry
+  // written under the OLD fingerprint ("1000000:131072:text+image"), which
+  // `isMeasuredLimits` accepts — it only checks that `fp` is a non-empty string —
+  // and which the fingerprint comparison then drops on the way into the
+  // catalogue. So the model looked asked, was never applied, and would never be
+  // asked again: the budget came from the seed table and the panel showed no
+  // `stated`. The same shape as ADR §47 and §43 — the evidence exists and nothing
+  // connects it to the conclusion.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const asked = []
+    const catalog = catalogWith({
+      dir,
+      clock,
+      manualSampleBudget: MANUAL_SAMPLE_BUDGET,
+      fetchImpl: async () => fakeResponse({ body: apiBody() }),
+      probe: async (model, question) => {
+        asked.push(`${model.id}:${question ?? 'baseline'}`);
+        if (question === 'ceiling') return { kind: 'inconclusive', code: 'error', http: 400, reason: 'stub', ceilings: { output: 262144 } };
+        return { kind: 'ok', api: 'openai-completions', effort: { kind: 'baseline', tokens: 0 } };
+      },
+      listZenIds: async () => ['big-pickle'],
+    });
+    await catalog.forceRefresh();
+    // Seed a record shaped exactly like the one that went stale.
+    const first = await readProbeRecord(join(dir, 'catalog.json'), 'big-pickle');
+    void first;
+    pastProbeFloor(clock);
+    await catalog.forceProbes();
+    assert.ok(asked.includes('big-pickle:ceiling'), 'asked, and what the route named is stored under the fingerprint the catalogue checks');
+
+    const record = await readProbeRecord(join(dir, 'catalog.json'), 'big-pickle');
+    assert.equal(record.limits?.output, 262144);
+    assert.equal(record.limits?.fp, '200000:32000', 'contextFingerprint, not capabilityFingerprint')
+    const card = catalog.current().capabilities.find((c) => c.id === 'big-pickle');
+    assert.equal(card.stated?.output, 262144, 'and it reaches the panel, which is the only way a silent drop is visible')
+  })
+})
+
+test('GUARD: a reply cut off at the budget is counted, free, from real traffic', async () => {
+  // The whole output axis rests on a number nobody can verify by asking the
+  // model: does a reply ever want MORE than what we send? Synthetic generations
+  // answer it at tens of thousands of tokens each, and answer it unreliably —
+  // measured 2026-10-07, the same request produced 892 tokens once and 79,722
+  // the next. Real traffic already carries the answer in `stopReason`, on a
+  // request that was being sent anyway.
+  //
+  // The two kinds are counted apart, because they are different events: a reply
+  // cut at our output budget means the number is too small, while one cut by the
+  // CONTEXT clamp means the conversation ran out of room, which says nothing
+  // about the output budget.
+  await withTempDir(async (dir) => {
+    const clock = { t: 2_000_000 }
+    const catalog = catalogWith({
+      dir,
+      clock,
+      fetchImpl: async () => fakeResponse({ body: apiBody() }),
+      listZenIds: async () => SERVED,
+    });
+    await catalog.forceRefresh();
+    const space = 'space-bunny-free'
+    // Our own output budget: what pi-ai sent equals the model's maxTokens.
+    catalog.observeClamp(space, { emitted: 524288, starved: false, truncated: true })
+    catalog.observeClamp(space, { emitted: 524288, starved: false, truncated: true })
+    // The context clamp: pi-ai lowered the budget because the conversation grew.
+    catalog.observeClamp(space, { emitted: 120000, starved: false, truncated: true })
+    // Not a cut at all.
+    catalog.observeClamp(space, { emitted: 524288, starved: false, truncated: false })
+    const card = catalog.current().capabilities.find((c) => c.id === space)
+    assert.deepEqual(card.truncated, { output: 2, context: 1 }, 'two kinds, counted apart')
+
+    // The write is fire-and-forget by design (a reply must never wait on
+    // bookkeeping), so the test waits for it rather than the other way round.
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    const record = await readProbeRecord(join(dir, 'catalog.json'), space)
+    assert.equal(record.budgetHits?.output, 2)
+    assert.equal(record.budgetHits?.context, 1)
+    assert.equal(typeof record.budgetHits?.at, 'number')
+
+    // A model nothing has cut off says nothing at all, rather than claiming a
+    // count of zero the panel has no evidence for.
+    const untouched = catalog.current().capabilities.find((c) => c.id === 'big-pickle')
+    assert.equal(untouched.truncated, undefined)
+  })
+})
+
+test('GUARD: the panel names WHICH source each number came from, not just "measured"', async () => {
+  // Found by an audit of this codebase against a third-party implementation: the
+  // card carried four booleans computed as "differs from what models.dev
+  // published", so a ceiling the ROUTE stated in a refusal, a figure a VENDOR
+  // published, a reply somebody WATCHED finish, and a raise inferred from a clamp
+  // signature all rendered as the same word. That is the ambiguity that produced
+  // "一百万输出明显不对" — ours, not the publisher's.
+  //
+  // So the rule is: a number that was not changed says `declared`, and each
+  // source says its own name. Nothing here is a judgement about whether the
+  // numbers are right; it is a judgement about whether the panel says which one
+  // it is talking about.
+  const section = (output) => ({
+    'mimo-v2.6-flash-free': { ...modelsDict()['space-bunny-free'], id: 'mimo-v2.6-flash-free', name: 'Mimo', limit: { context: 200000, output } },
+    'big-pickle': { ...modelsDict()['space-bunny-free'], id: 'big-pickle', name: 'Pickle', limit: { context: 200000, output } },
+    'ling-3.1-flash-free': { ...modelsDict()['space-bunny-free'], id: 'ling-3.1-flash-free', name: 'Ling', limit: { context: 262144, output } },
+  })
+  const card = (id, output, opts) => {
+    const dict = section(output)
+    const first = derive(dict, { template: template() }).candidates
+    const models = derive(dict, {
+      template: template(),
+      measuredContext: measuredContextFor(first, dict, {}),
+      // The harvested ceiling has to reach the DERIVATION, or the advertised
+      // budget stays at the declaration and there is nothing for the provenance
+      // to describe.
+      ...(opts?.limits === undefined ? {} : { measuredLimits: new Map([[id, opts.limits]]) }),
+      ...opts,
+    }).candidates
+    return modelCapability(models.find((m) => m.id === id), { record: dict[id], ...opts })
+  }
+
+  // Unchanged: models.dev's number, and the panel says so.
+  assert.equal(card('ling-3.1-flash-free', 32768).evidence.output, 'declared')
+  // Raised because a generation was watched: that is the word for THIS source.
+  assert.equal(card('big-pickle', 32000).evidence.output, 'witnessed')
+  // Raised to a VENDOR's published ceiling, not to a measurement. This is the one
+  // the boolean could not express: the number is right and the old word was wrong.
+  assert.equal(card('mimo-v2.6-flash-free', 32000).evidence.output, 'vendor')
+  // A ceiling the ROUTE stated outranks a vendor page that agrees with it.
+  const harvested = { output: 262144, fp: contextFingerprint({ ...section(131072)['ling-3.1-flash-free'], id: 'ling-3.1-flash-free' }), at: 1 }
+  assert.equal(
+    card('ling-3.1-flash-free', 131072, { limits: harvested }).evidence.output,
+    'route',
+    'the route saying so about itself outranks every other source',
+  )
+  // A model that declares no image input makes no claim, which is neither
+  // "declared" nor "measured".
+  assert.equal(card('big-pickle', 32000).evidence.vision, 'declared', 'the template declares image input, so there is a claim to be right or wrong about')
+  assert.equal(card('ling-3.1-flash-free', 32768).evidence.vision, 'declared')
+})
+
+test('GUARD: a swept death expires, and a stale capability verdict is asked again', async () => {
+  // Three findings from the same audit, all of them "documented and never read":
+  //
+  //  · `nextProbeAt` was written into the record and nothing ever consulted it, so
+  //    every removal was permanent — including the ones that were wrong. A dead
+  //    verdict that has aged past the interval is asked once more, which is also
+  //    the only way a name Zen re-publishes can come back at all.
+  //  · vision and tools had no TTL while the effort axis always had one, so a
+  //    probe from months ago was indistinguishable from one taken today, and no
+  //    code path could downgrade a mark.
+  //  · a seed whose declaration moved used to be DISCARDED, which meant a
+  //    models.dev typo fix silently deleted the only generation anyone had
+  //    watched. It is demoted now: still applied, bounded by the inferred valve,
+  //    and labelled `inferred` so it stops claiming first-party evidence.
+  assert.equal(DEAD_RECHECK_MS, 7 * 24 * 60 * 60_000, 'a week is long enough that a dead model costs nothing')
+  assert.equal(CAPABILITY_TTL_MS, EFFORT_TTL_MS, 'both axes age on the same clock')
+
+  const record = { id: 'x-free', limit: { context: 1000, output: 500 } }
+  const fp = capabilityFingerprint(record)
+  // A realistic clock: the TTL arithmetic is meaningless around epoch-ish values,
+  // and a NEGATIVE timestamp would silently pass the `at > 0` guard that keeps a
+  // seed (which carries `at: 0`, meaning "a property of the table, not a moment")
+  // out of the age arithmetic.
+  const NOW = 1_800_000_000_000
+  const fresh = { ok: true, at: NOW - 1000, fp }
+  const stale = { ok: true, at: NOW - CAPABILITY_TTL_MS - 1, fp }
+  assert.equal(measuredCapabilityFor(record, 'x-free', 'tools', { 'x-free': { verdict: 'ok', at: 0, capabilities: { tools: fresh } } }, NOW).ok, true, 'current')
+  assert.equal(
+    measuredCapabilityFor(record, 'x-free', 'tools', { 'x-free': { verdict: 'ok', at: 0, capabilities: { tools: stale } } }, NOW),
+    undefined,
+    'past the TTL it reads as unmeasured, so the next round asks again',
+  )
+  assert.equal(
+    measuredCapabilityFor(record, 'x-free', 'tools', { 'x-free': { verdict: 'ok', at: 0, capabilities: { tools: fresh } } }).ok,
+    true,
+    'with no clock supplied the age is not guessed at — the verdict stands, and the ROUND (which does pass a clock) is what re-asks',
+  )
+  // The seed survives a moved declaration, weakened rather than dropped.
+  const moved = { id: 'mimo-v2.6-flash-free', limit: { context: 400000, output: 64000 } }
+  const applied = seededContextFor(moved, 'mimo-v2.6-flash-free')
+  assert.equal(applied?.source, 'inferred', 'a moved declaration turns first-party evidence into inferred')
+  assert.equal(applied?.raisedTo, 1048576, 'and the number is still there — a typo fix must not erase it')
+})
+
+test('GUARD: a route that says nothing is asked once a day, not once a restart', async () => {
+  // Found live on 2026-10-07, right after the daily ceiling harvest went in: the
+  // round asked all eleven models for their ceiling and recorded "the route named
+  // nothing" as `fp: ""` with `at: 0` — and `isMeasuredLimits` rejected the empty
+  // fingerprint, so the record did not survive a warm start. Every restart of DSH
+  // would pay a request per model to hear the same silence, on a shared anonymous
+  // bucket, where a restart is not what changed the answer.
+  //
+  // A silence is now DATED and kept for a day. It still cannot become a
+  // measurement: an empty fingerprint matches no `contextFingerprint`, and the
+  // panel projection checks the empty string separately — so what changed is only
+  // whether the next round has to pay to hear it twice.
+  //
+  // Pinned here at the layer that decides it. The round-level path is covered by
+  // the ceiling-harvest tests above; this rule is a predicate and a clock, and
+  // testing it through a full round would have made the test depend on how many
+  // questions the effort axis happens to ask first.
+  assert.equal(CEILING_SILENCE_TTL_MS, 24 * 60 * 60_000, 'a day: long enough to survive a restart, short enough to still be daily')
+
+  const silence = { fp: '', at: 2_000_000 }
+  assert.equal(isMeasuredLimits(silence), true, 'a dated silence survives a warm start, so a restart does not re-ask')
+  assert.equal(isMeasuredLimits({ fp: '', at: 0 }), false, 'an undated one is not — it predates this rule and should be asked once more')
+
+  // What the round decides with it, spelled out because the arithmetic is the rule.
+  const stillWorthAsking = (stored, now) =>
+    stored !== undefined && stored.fp === '' && stored.at > 0 && now - stored.at < CEILING_SILENCE_TTL_MS
+  assert.equal(stillWorthAsking(silence, 2_000_000 + 60 * 60_000), true, 'an hour later: a restart pays nothing')
+  assert.equal(stillWorthAsking(silence, 2_000_000 + CEILING_SILENCE_TTL_MS), false, 'a day later: asked again, so an upstream that starts naming a ceiling is noticed')
+  assert.equal(stillWorthAsking(undefined, 2_000_000), false, 'and with nothing stored it is always asked')
+
+  // A silence must never reach the panel as a number. `fp: ""` matches no
+  // contextFingerprint, so the ceiling checks skip it — this is the same gate,
+  // asserted on the value that would be dangerous if it ever slipped through.
+  const record = { id: 'x-free', limit: { context: 1000, output: 500 } }
+  assert.notEqual(
+    silence.fp,
+    contextFingerprint(record),
+    'an empty fingerprint is never the fingerprint of a real record',
+  )
 })

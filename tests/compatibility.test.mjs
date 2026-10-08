@@ -21,6 +21,8 @@ import {
   PROBE_MAX_TOKENS,
   patchNodeHttpForZen,
   probeModel,
+  zenProvider,
+  selfReportedLevels,
   ZEN_FAILURE_GUIDANCE,
   freeModels,
   isEncryptedContentError,
@@ -44,6 +46,7 @@ function readNodeHeader(headers, name) {
   return entry ? entry[1] : undefined
 }
 
+const { maxTokensFor, contextFingerprint: catalogFingerprint } = await import('../src/catalog.ts')
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url)))
 const libUrl = new URL('../lib/', import.meta.url)
 const hostFiles = (await readdir(libUrl)).filter((f) => f.endsWith('.js')).sort()
@@ -635,6 +638,25 @@ const okSse = [
 
 const sseReply = () => new Response(okSse, { headers: { 'Content-Type': 'text/event-stream' } })
 
+/**
+ * The same reply WITH a reasoning breakdown — the shape the route really sends.
+ *
+ * `okSse` above carries no `completion_tokens_details`, so it cannot tell a
+ * working measurement instrument from one that reports zero for everything; a
+ * fixture that only ever omits the field hides exactly the defect this exists
+ * to catch.
+ */
+const sseWithReasoning = (reasoningTokens) =>
+  new Response(
+    [
+      'data: {"choices":[{"index":0,"delta":{"content":"OK"},"finish_reason":null}]}',
+      `data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":129,"completion_tokens":98,"total_tokens":227,"completion_tokens_details":{"reasoning_tokens":${reasoningTokens}}}}`,
+      'data: [DONE]',
+      '',
+    ].join('\n\n'),
+    { headers: { 'Content-Type': 'text/event-stream' } },
+  )
+
 test('GUARD: the probe request carries the read+bash gate, streams, and asks for enough tokens', async () => {
   // A tool-less probe 403s on EVERY model at the anonymous tier (measured
   // 2026-09-27), so a probe that skipped the tools would report the whole
@@ -962,7 +984,10 @@ test('GUARD: a gate or a quota wall is never retried on another channel', async 
     let calls = 0
     const outcome = await probeModel(model, {
       provider: p,
-      apiKey: 'public',
+      // A REAL key on purpose: a 401 under the anonymous credential is not a
+      // bad key — there is no key — and re-reads as the free tier refusing. That
+      // remapping has its own test; this one is about the channel sweep.
+      apiKey: 'zen_live_a_real_key',
       fetchImpl: async () => {
         calls += 1
         return new Response(body, { status, headers: { 'Content-Type': 'application/json' } })
@@ -982,11 +1007,14 @@ test('GUARD: dead is only concluded when every channel that was asked finished',
   // wrong-channel 404 into a permanent removal.
   //
   // Silence vetoes; it does not merely lose an argument.
-  const GONE = () =>
-    new Response(JSON.stringify({ error: { message: 'Model does not exist' } }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    })
+  // A BARE 404, which is what this test is actually about: the status alone,
+  // no sentence naming the model. The wrong channel produces exactly this shape
+  // (ADR 0004 §22 measured the format-scoped variant, which
+  // `isModelUnavailableFailure` excludes separately).
+  //
+  // It used to say "Model does not exist" — a NAMED unavailability, which is a
+  // stronger and different case, now covered by its own test below.
+  const GONE = () => new Response('{}', { status: 404, headers: { 'Content-Type': 'application/json' } })
   const TRANSPORT = () => {
     const e = new TypeError('fetch failed')
     e.cause = Object.assign(new Error('socket disconnected'), { code: 'ECONNRESET' })
@@ -1038,6 +1066,43 @@ test('GUARD: dead is only concluded when every channel that was asked finished',
   }
 })
 
+test('GUARD: a NAMED unavailability survives a silent sibling channel', async () => {
+  // Measured 2026-10-06: `deepseek-v4-flash-free` answers
+  // `Upstream request failed: Model is unavailable.` (HTTP 400) on completions and
+  // a bare `Internal server error` (HTTP 500) on responses. Under the old
+  // ranking the 500 — which says nothing about the model — vetoed the named
+  // sentence, and a model whose free tier is over stayed in the picker for
+  // weeks, re-asked every round.
+  //
+  // The veto is not removed; it is narrowed to the signal it exists for. A bare
+  // 404/410 is what a WRONG channel produces and still needs a sibling to
+  // disagree; a body that names this model as unavailable is not something a
+  // wrong channel invents, and `FORMAT_SCOPED_PATTERN` already excludes the one
+  // sentence a wrong channel does produce.
+  const p = plugin.zenProvider(() => 'probe-session', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  let calls = 0;
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(JSON.stringify({ error: { message: 'Error from provider (Console): Upstream request failed: Model is unavailable.' } }), {
+            status: 400,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        : new Response('{"type":"error","error":{"message":"Internal server error"}}', {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+    },
+  });
+  assert.equal(outcome.kind, 'dead', 'the named sentence decides, and the generic 500 does not bury it');
+  assert.equal(outcome.named, true);
+  assert.equal(calls, 2, 'both channels were still asked');
+});
+
 test('GUARD: every channel saying dead still removes the model', async () => {
   // The other half of the veto. Silence blocking a conclusion must not become a
   // way to never conclude one: when both channels positively refuse, that is a
@@ -1064,34 +1129,23 @@ test('GUARD: every channel saying dead still removes the model', async () => {
   assert.equal(outcome.http, 404)
 })
 
-test('GUARD: placeholder efforts never reach the wire', async () => {
-  // "off" is offered as an explicit level, but pi-ai renders it as
-  // `reasoning: { effort: "none" }` when nothing is chosen and as
-  // `effort: "off"` when it is explicitly chosen on the responses channel.
-  // Neither value is ever sent by pi-ai's own records or by OpenCode, so the
-  // request path strips exactly those two back to "no reasoning object".
-  // Real levels pass through untouched.
+test('GUARD: the guard mirrors the map on both channels', async () => {
+  // The map is the single authority on what Off puts on the wire. The old guard
+  // was a SECOND authority, and the two disagreed: selecting Off on
+  // muse-spark-1.3-contributor-free removed the reasoning object, upstream
+  // accepted it, and the model reasoned 360 tokens — the MAXIMUM — with nothing
+  // reporting a problem. Measured 2026-10-06, `none` is refused there outright,
+  // so that guard was turning a loud refusal into silence.
   const p = plugin.zenProvider(
     () => 's',
     () => undefined,
   )
   const base = p.getModels().find((m) => m.api === 'openai-responses')
-  // A map with `off` absent (offered), like every derived record carries —
-  // and an id outside the muse-spark xhigh default, so nothing is chosen.
-  const { off: _dropped, ...rest } = base.thinkingLevelMap ?? {}
-  const model = { ...base, id: 'probe-responses-free', thinkingLevelMap: rest }
-  const ctx = { messages: [{ role: 'user', content: 'hi', timestamp: 1 }] }
-  // Run each case and read the captured body. The stub answers 400 so the
-  // stream settles immediately; onPayload has already run by then.
-  const bodies = {}
-  for (const [key, opts] of [
-    ['default', {}],
-    ['explicit-off', { reasoning: 'off' }],
-    ['real-level', { reasoning: 'low' }],
-  ]) {
+
+  const capture = async (model, opts) => {
     let body
     await p
-      .streamSimple(model, ctx, {
+      .streamSimple(model, { messages: [{ role: 'user', content: 'hi', timestamp: 1 }] }, {
         ...opts,
         maxRetries: 0,
         fetch: async (_url, init) => {
@@ -1100,12 +1154,317 @@ test('GUARD: placeholder efforts never reach the wire', async () => {
         },
       })
       .result()
-    bodies[key] = body
+    return body
   }
-  assert.equal(bodies.default.reasoning, undefined, 'no effort chosen sends no reasoning object')
-  assert.equal(bodies['explicit-off'].reasoning, undefined, 'explicit "off" sends no reasoning object')
-  assert.equal(bodies['real-level'].reasoning?.effort, 'low', 'a real level passes through')
+
+  // 1. map says `none` works -> the real value MUST survive. Asserting the map's
+  //    SHAPE instead would pass on both paths and prove nothing: this asserts the
+  //    outgoing bytes, which is the only thing that distinguishes them.
+  const honoured = { ...base, id: 'none-works-free', thinkingLevelMap: { ...base.thinkingLevelMap, off: 'none' } }
+  const withNone = await capture(honoured, { reasoning: 'off' })
+  assert.equal(withNone.reasoning?.effort, 'none', 'a measured "none" reaches the wire')
+
+  // 2. map claims no off, and the model HAS a published ladder: an unavailable
+  //    "off" is clamped by pi-ai to the least reasoning that does exist, rather
+  //    than silently becoming "send nothing". Verified separately that
+  //    clampThinkingLevel(space-bunny-free, 'off') === 'low'.
+  const unmeasured = { ...base, id: 'unmeasured-free', thinkingLevelMap: { ...base.thinkingLevelMap, off: null } }
+  const clamped = await capture(unmeasured, { reasoning: 'off' })
+  assert.equal(
+    clamped.reasoning?.effort,
+    'minimal',
+    'a stale off preference lands on the least reasoning the model publishes',
+  )
+
+  // 3. With `off: null`, pi-ai does not emit the placeholder AT ALL when
+  //    nothing is chosen (openai-responses.js:259 gates on `off !== null`), so
+  //    there is nothing for the guard to strip. `null` suppresses at the source;
+  //    the guard is a backstop for the explicit-choice path, not the mechanism.
+  const declared = { ...base, id: 'declared-free', thinkingLevelMap: { ...base.thinkingLevelMap, off: null } }
+  const suppressed = await capture(declared, {})
+  assert.equal(suppressed.reasoning, undefined, 'off:null suppresses the placeholder at the source')
+
+  // 4. A real level passes through untouched on both shapes.
+  const real = await capture(honoured, { reasoning: 'low' })
+  assert.equal(real.reasoning?.effort, 'low', 'a real level passes through')
 })
+
+test('a refusal that enumerates its vocabulary is harvested; a generic one is not', () => {
+  // The one piece of good news a refusal can carry. It is worthless as a verdict
+  // and valuable as a vocabulary, and a classifier that guessed from the generic
+  // form would invent a capability — which is the mistake this change set exists
+  // to remove.
+  assert.deepEqual(
+    selfReportedLevels(`{"error":{"message":"reasoning_effort 'none' is not supported for model 'f'. allowed values: ["low", "high", "max"]"}}`),
+    ['low', 'high', 'max'],
+  );
+  assert.deepEqual(
+    selfReportedLevels(`Upstream request failed: [airlock_error] invalid request: reasoning_effort 'zzz' is unsupported; allowed values: ["low","high","max"]`),
+    ['low', 'high', 'max'],
+  );
+  // Every other model returns this form, and it carries nothing.
+  assert.equal(selfReportedLevels('{"error":{"message":"Upstream request failed: [400] invalid_request_error: invalid request"}}'), undefined);
+  // The context-overflow body must not be mined for levels.
+  assert.equal(selfReportedLevels("[400] This endpoint's maximum context length is 262144 tokens."), undefined);
+  assert.equal(selfReportedLevels(''), undefined);
+});
+
+test('GUARD: a 500 records no effort sample at all', async () => {
+  // Measured 2026-10-06: big-pickle returned 500 on four consecutive requests
+  // carrying `minimal`, while omitting answered normally on the same endpoint
+  // (14 and 16 reasoning tokens). Only the `minimal` path was degraded.
+  //
+  // If a server error counted as a sample it would push the model toward
+  // "not working" and the fallback would record `off: null` — the exact
+  // no-Off-row failure the fallback exists to prevent. A model that is briefly
+  // unmeasurable must not be able to lose its control.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  for (const [label, status] of [['500', 500], ['429', 429], ['403', 403]]) {
+    const outcome = await probeModel(model, {
+      provider: {
+        streamSimple: () => ({ result: async () => { throw new Error('boom'); } }),
+      },
+      apiKey: 'public',
+      fetchImpl: async () => new Response('{"error":{"message":"nope"}}', { status }),
+    });
+    assert.notEqual(outcome.kind, 'ok', `${label} must not read as ok`);
+    assert.equal(outcome.effort, undefined, `${label} must carry no effort sample`);
+  }
+})
+
+test('GUARD: the probe records the reasoning count upstream actually reported', async () => {
+  // The instrument read `usage.reasoning` off the plugin's OWN narrowed copy of
+  // the usage object, and that copy never carried the field. So every
+  // observation read 0, the baseline could never exceed zero, and
+  // `effortVerdictFrom` refused to conclude anything — no Off row could ever be
+  // written, however many rounds the user spent.
+  //
+  // The number IS on the wire: pi-ai parses
+  // `completion_tokens_details.reasoning_tokens` into `usage.reasoning`, and the
+  // route reports it (measured 2026-10-06: mimo-v2.6-flash-free omitted → 37,
+  // `none` → 0). Asserting the NON-ZERO case is the whole point: a fixture
+  // without a breakdown, or an assertion of `kind` alone, passes on a probe
+  // that measures nothing.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  const measure = async (question, reasoningTokens) =>
+    await probeModel(model, {
+      provider: p,
+      apiKey: 'public',
+      question,
+      fetchImpl: async () => sseWithReasoning(reasoningTokens),
+    });
+
+  const baseline = await measure('baseline', 55);
+  assert.equal(baseline.kind, 'ok');
+  assert.deepEqual(baseline.usage?.reasoning, 55, 'the reported count must survive into the usage the round reads');
+
+  const candidate = await measure('none', 0);
+  assert.deepEqual(candidate.usage?.reasoning, 0, 'an exact zero must be told apart from "not reported"');
+});
+
+test('GUARD: a probe that injects a spelling files the sample as a CANDIDATE', async () => {
+  // What decides the bucket is whether THIS probe put a spelling on the wire,
+  // not whether the body happened to be empty before it did. The liveness
+  // request always carries `reasoning_effort: "low"` for a model with a ladder
+  // — the plugin hands every reasoning model the default ladder — so "was it
+  // empty" was never true, and every candidate reading was filed as a
+  // baseline. `effortTokens` then stayed empty forever and the round could not
+  // compare anything, no matter how many rounds ran.
+  //
+  // Asserting the outgoing field alone would pass either way (both paths send
+  // `none`); the bucket is the thing under test.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  const read = async (question) =>
+    await probeModel(model, {
+      provider: p,
+      apiKey: 'public',
+      question,
+      fetchImpl: async () => sseWithReasoning(question === 'none' ? 0 : 55),
+    });
+
+  // The round's own liveness request is the baseline — nothing was asked for.
+  const baseline = await read('baseline');
+  assert.equal(baseline.effort?.kind, 'baseline', 'an un-asked round is the omitted baseline');
+
+  // A spelling this probe injected, on a body that already carried `low`.
+  const candidate = await read('none');
+  assert.equal(candidate.effort?.kind, 'candidate', 'an injected spelling is a candidate sample');
+
+  // A fallback level is a candidate too, and it is a LEVEL answer rather than a
+  // `none` answer — the round names the level it asked about.
+  const level = await read('low');
+  assert.equal(level.effort?.kind, 'candidate', 'a fallback level is a candidate sample');
+});
+
+test('GUARD: an overload the upstream names is named, not filed as unknown', async () => {
+  // Measured 2026-10-06, one live request: `nemotron-3-ultra-free` answered
+  // HTTP 200 whose only SSE frame was
+  //   Streaming response failed: [503] Upstream error from Nvidia: Service
+  //   temporarily overloaded
+  // The status says nothing; the body says everything. Filed as `unknown`, a
+  // capacity problem reads as a mystery — and it is the one condition in this
+  // list the reader can simply wait out.
+  const body = JSON.stringify({
+    error: { type: 'server_error', message: 'Streaming response failed: [503] Upstream error from Nvidia: Service temporarily overloaded' },
+  });
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () => new Response('data: ' + body + String.fromCharCode(10, 10), { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  assert.equal(outcome.kind, 'inconclusive', 'an error frame inside a 200 is still no answer');
+  assert.equal(outcome.code, 'upstream-overloaded');
+  assert.equal(outcome.http, 200, 'and the status travels with it, so the row can show both');
+  // A 503 that is not an overload keeps its own meaning.
+  assert.equal(classifyZenFailure(503, '{"error":{"message":"upstream connect error"}}'), 'unknown');
+});
+
+test('GUARD: a 401 blaming the request shape is not read as a credential failure', async () => {
+  // Measured 2026-10-06 on `space-bunny-free` — the model this session runs on,
+  // which answers normally the whole time. Asked for `reasoning_effort:"none"` it
+  // refuses on every channel, and the responses channel says why in words:
+  //   401 Model space-bunny-free is not supported for format openai
+  //
+  // Read as a status, that is a credential failure, and `isCallerScoped` returns
+  // it immediately — discarding the other channel's answer, so the model sat in
+  // the panel as unmeasurable for rounds instead of falling back to a level that
+  // works. The body names the SHAPE, so the shape has to survive classification.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    question: 'none',
+    fetchImpl: async () =>
+      new Response('{"type":"error","error":{"message":"Model space-bunny-free is not supported for format openai"}}', {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+  });
+  assert.equal(outcome.formatScoped, true, 'the shape survives as a distinguishable fact');
+  assert.equal(
+    outcome.code,
+    'unknown',
+    'and it is not a credential failure — nothing about the key was wrong',
+  );
+  assert.notEqual(outcome.code, 'bad-key');
+  assert.notEqual(outcome.code, 'anon-gated');
+});
+
+test('GUARD: an overload costs one request, not one per channel', async () => {
+  // `upstream-overloaded` is a condition of the UPSTREAM, measured 2026-10-06 on
+  // `nemotron-3-ultra-free`: HTTP 200 whose only frame is a 503. Asking the
+  // other channel buys the same 503 for another request from a bucket shared per
+  // egress IP — and it is not evidence about the model either, so the panel must
+  // not paint the row as a model failure.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  let calls = 0;
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(
+        'data: ' + JSON.stringify({ error: { type: 'server_error', message: 'Streaming response failed: [503] Upstream error: Service temporarily overloaded' } }),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    },
+  });
+  assert.equal(outcome.code, 'upstream-overloaded');
+  assert.equal(calls, 1, 'the other channel is not asked for the same upstream answer');
+});
+
+test('GUARD: a model the upstream deprecates in words is removed, not retried', async () => {
+  // Measured 2026-10-07: `mimo-v2.5-free` answers
+  //   410 {"type":"ModelDeprecated","message":"… Model mimo-v2.5-free has been
+  //        deprecated. Use mimo-v2.6-flash-free instead."}
+  // on the completions channel, and a bare `Internal server error` 500 on the
+  // other. The 410 was already `dead` — but a SILENT sibling buried it (the
+  // veto is correct for a bare status, which is what a wrong channel produces),
+  // so a model the upstream had explicitly retired sat in the picker as a red
+  // "failure" for ever.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  let calls = 0;
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(
+            '{"type":"error","error":{"type":"ModelDeprecated","message":"Error from provider (Console): Model mimo-v2.5-free has been deprecated. Use mimo-v2.6-flash-free instead."}}',
+            { status: 410, headers: { 'Content-Type': 'application/json' } },
+          )
+        : new Response('{"type":"error","error":{"message":"Internal server error"}}', {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+    },
+  });
+  assert.equal(outcome.kind, 'dead', 'the upstream said it retired the model, in words');
+  assert.equal(outcome.named, true, 'and said so in the body, not only in the status');
+  assert.equal(calls, 2, 'both channels were still asked');
+});
+
+test('GUARD: an unreachable endpoint is a route problem, not a model failure', async () => {
+  // Measured 2026-10-07 on `ling-3.0-flash-fin-free`: HTTP 400,
+  // "Upstream request failed: Endpoint is unavailable." — and then a bare 500 on
+  // the other channel. The panel painted it a red model FAILURE for rounds,
+  // because a 400 says nothing and the sibling's 500 is silence.
+  //
+  // The route being down is not the model's fault, and the other channel will
+  // fail the same way, so asking it again spends a request to learn nothing.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  let calls = 0;
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(
+            '{"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: Endpoint is unavailable."}}',
+            { status: 400, headers: { 'Content-Type': 'application/json' } },
+          )
+        : new Response('{"type":"error","error":{"message":"Internal server error"}}', {
+            status: 500,
+            headers: { 'Content-Type': 'application/json' },
+          });
+    },
+  });
+  assert.equal(outcome.code, 'endpoint-unavailable', 'named for what it says');
+  assert.notEqual(outcome.kind, 'dead', 'and it is not evidence about the model');
+  assert.equal(calls, 1, 'the other channel is not asked; the endpoint is down for it too');
+});
+
+test('GUARD: a quota refusal stays a quota refusal even when the body blames the endpoint', async () => {
+  // Measured 2026-10-07 on `ling-3.1-flash-free`: HTTP 429 carrying
+  //   "Upstream request failed: Endpoint is unavailable."
+  // The same sentence, the same provider, as the genuine endpoint failure this
+  // note's sibling test feeds — which is why the two cannot be told apart from
+  // the body alone, and why the STATUS has to decide first.
+  const p = plugin.zenProvider(() => 's', () => undefined);
+  const model = p.getModels().find((m) => m.api === 'openai-completions');
+  const outcome = await probeModel(model, {
+    provider: p,
+    apiKey: 'public',
+    fetchImpl: async () =>
+      new Response(
+        '{"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: Endpoint is unavailable."}}',
+        { status: 429, headers: { 'Content-Type': 'application/json' } },
+      ),
+  });
+  assert.equal(outcome.code, 'quota-exhausted', '429 says quota whatever the body says');
+  assert.notEqual(outcome.code, 'endpoint-unavailable', 'and not a route failure');
+});
 
 test('probe verdicts: a text reply is ok, only a positive signal is dead', async () => {
   const p = plugin.zenProvider(
@@ -1433,4 +1792,202 @@ test('disposing the node:http patch unwraps it when nothing wrapped after', asyn
   } finally {
     http.request = before
   }
+})
+
+test('GUARD: the request timeout is not shorter than the reply it has to carry', async () => {
+  // 180s used to be the whole-request deadline in BOTH places it is set, and it
+  // decided how long a reply could be before any max-output number applied.
+  // Measured 2026-10-07: `mimo-v2.6-flash-free` asked for 34,000 and then
+  // 40,000 output tokens died at 181s with HTTP 200 and no usage frame; through
+  // the provider with a longer timeout the same request produced all 40,000 at
+  // ~152 tok/s. 180s bought about 27,000 tokens — less than the 32,000 the
+  // plugin used to advertise, which is why raising the ceiling changed nothing a
+  // user could observe.
+  //
+  // The host profile's copy is the one that WINS: dsh-llm-pi-ai's
+  // `profileOptions` copies `profile.timeoutMs` into every request's options,
+  // and the provider then keeps the caller's value. So a guard that read only
+  // the plugin's default would pass while the behaviour stayed broken — both
+  // numbers are pinned here, and both must equal the profile's
+  // `streamIdleTimeoutMs`, so the two clocks cannot drift apart again.
+  const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const provider = await readFile(new URL('../src/zen-provider.ts', import.meta.url), 'utf8')
+  const literal = /streamIdleTimeoutMs:\s*([\d_]+(?:\s*\*\s*[\d_]+)*)/.exec(source)?.[1] ?? ''
+  const idle = literal.split('*').map((part) => Number(part.trim().replace(/_/g, ''))).reduce((a, b) => a * b, 1)
+  assert.equal(idle, 600_000, 'the profile still carries a 10-minute stream idle timeout')
+  assert.match(
+    source,
+    /timeoutMs:\s*600 \* 1_000/,
+    'the HOST profile copy must be 600s — this is the one dsh-llm-pi-ai puts on the wire',
+  )
+  assert.match(
+    provider,
+    /timeoutMs:\s*options\?\.timeoutMs \?\? 600_000/,
+    "the provider's own default matches, and a caller's own timeout still wins",
+  )
+  assert.doesNotMatch(
+    `${source}\n${provider}`,
+    /180_000/,
+    'no 180s request deadline is left anywhere on the request path',
+  )
+})
+
+test('GUARD: a capability question puts a REAL image and REAL tools on the wire', async () => {
+  // The vision badge and the "tools work" claim both used to be declarations.
+  // Measuring them means the request has to carry what a real conversation
+  // carries — and the two obvious shortcuts are both wrong:
+  //
+  //   · the gate's own stubs describe themselves as "Unavailable in this
+  //     request. Do not call.", so measuring against them reports a model that
+  //     correctly obeys an instruction as a model that cannot use tools;
+  //   · a text-only question asks nothing about vision.
+  //
+  // So this asserts the SHAPE on the wire: a data-URL image part for the vision
+  // question, real function schemas for the tool question, and a budget big
+  // enough that a reasoning model's thinking cannot eat the whole answer
+  // (measured 2026-10-07: at 1024, mimo and muse-spark-1.2 returned no text at
+  // all; at 4096 they answered).
+  const p = plugin.zenProvider(() => 'probe-session', () => undefined)
+  // A model that DECLARES image input. pi-ai replaces the image part with
+  // "(image omitted: model does not support images)" for a text-only record —
+  // which is why the round only ever asks this of a model that claims vision,
+  // and why this test has to use one that does.
+  const model = p.getModels().find((m) => m.api === 'openai-completions' && m.input?.includes('image'))
+  assert.ok(model !== undefined, 'the builtin free set contains an image-capable completions model')
+  let body
+  const capture = async (_url, init) => {
+    body = JSON.parse(init.body)
+    return sseReply()
+  }
+
+  await probeModel(model, { provider: p, apiKey: 'public', question: 'capability:vision', fetchImpl: capture })
+  const userTurn = body.messages.find((m) => m.role === 'user')
+  assert.ok(Array.isArray(userTurn.content), 'the vision question sends the block form, not a bare string')
+  const image = userTurn.content.find((c) => c.type === 'image_url')
+  assert.ok(image !== undefined, 'an image part actually reaches the route')
+  assert.match(image.image_url.url, /^data:image\/png;base64,/, 'as a data URL, which is what DSH sends for a screenshot')
+  assert.equal(body.max_tokens, 4096, 'and with a budget a reasoning model cannot spend entirely on thinking')
+  assert.equal(body.reasoning_effort, 'low', 'the capability question asks about no spelling: `low` here is pi-ai defaulting the omitted field')
+
+  await probeModel(model, { provider: p, apiKey: 'public', question: 'capability:tools', fetchImpl: capture })
+  const names = (body.tools ?? []).map((t) => t.function?.name).filter((n) => typeof n === 'string')
+  assert.ok(names.includes('bash'), `the tool question carries a real bash schema (got ${JSON.stringify(names)})`)
+  assert.ok(names.includes('read'), 'and a real read schema — the two names the anonymous gate admits')
+  // REPLACED, not appended: a list holding both a "do not call bash" stub and a
+  // real bash is a contradiction the model has to resolve, and whichever way it
+  // resolves it, the result is not a measurement.
+  assert.equal(names.filter((n) => n === 'bash').length, 1, 'exactly one bash, so there is no stub to disagree with')
+  assert.deepEqual(
+    names,
+    ['bash', 'read'],
+    'and only the two real schemas are present',
+  )
+  const bash = (body.tools ?? []).find((t) => t.function?.name === 'bash')
+  assert.deepEqual(bash.function.parameters.required, ['command'])
+  assert.doesNotMatch(
+    bash.function.description,
+    /Do not call/,
+    'never the gate stub: a model told not to use a tool cannot be measured using it',
+  )
+})
+
+test('GUARD: a ceiling the ROUTE states is harvested, and an acceptance is not', async () => {
+  // The cheapest instrument in the plugin, and the one that was not being used: a
+  // refusal costs ZERO output tokens and returns a NUMBER. Measured 2026-10-07:
+  //   "[invalid_parameter] 参数校验失败: /max_tokens: 995834 is not less or equal
+  //    to 262144"                                    ← longcat, an OUTPUT ceiling
+  //   "...exceeds the model's maximum context length of 262139 tokens"
+  //                                                 ← big-pickle, a CONTEXT one
+  // and `big-pickle` is the model whose window was advertising four times its
+  // real ceiling because an ACCEPTANCE had been read as a measurement.
+  const output = plugin.statedCeilings(
+    '[invalid_parameter] 参数校验失败: \n/max_tokens: 995834 is not less or equal to 262144\n',
+  )
+  assert.deepEqual(output, { output: 262144 }, 'the ceiling is the far side of the comparison, not the ask')
+  const context = plugin.statedCeilings(
+    "[invalid_request_error] Requested token count exceeds the model's maximum context length of 262139 tokens. You requested about 300000 tokens.",
+  )
+  assert.deepEqual(context, { context: 262139 })
+  assert.equal(plugin.statedCeilings('This endpoint\'s maximum context length is 1048576 tokens. However, you requested about 1048659 tokens.').context, 1048576, 'and the wording mimo uses')
+
+  // A refusal that names nothing is a refusal about something else — a bad
+  // parameter, a dead model, a gate — and must never be harvested as a number.
+  for (const body of [
+    '{"type":"error","error":{"type":"error","message":"Internal server error"}}',
+    '{"error":{"type":"invalid_request_error","message":"[invalid_request_error] invalid request"}}',
+    '{"type":"error","error":{"type":"FreeTierError","message":"OpenCode\'s free tier can only be used from within OpenCode"}}',
+    '{"error":{"error":{"type":"ModelDeprecated","message":"Model x has been deprecated"}}}',
+    '',
+  ]) {
+    assert.equal(plugin.statedCeilings(body), undefined, `names no ceiling, so harvests none: ${body.slice(0, 40)}`)
+  }
+})
+
+test('GUARD: a harvested ceiling survives a restart and dies with its declaration', async () => {
+  const record = { id: 'longcat-2.5-preview-free', limit: { context: 1000000, output: 131072 } }
+  const fp = catalogFingerprint(record)
+  const stated = { output: 262144, fp, at: 1_700_000_000_000 }
+  assert.equal(maxTokensFor(record, 'longcat-2.5-preview-free', 1000000, stated), 262144, 'a route that states a ceiling moves the budget')
+
+  // A ceiling stated about a declaration this model no longer has is dropped:
+  // it belonged to the old record.
+  assert.equal(maxTokensFor(record, 'longcat-2.5-preview-free', 1000000, { ...stated, fp: '9:9:text' }), 262144, 'falls back to the seed, which is keyed on the same declaration')
+  assert.equal(maxTokensFor({ ...record, limit: { context: 1000000, output: 200000 } }, 'longcat-2.5-preview-free', 1000000, stated), 200000, 'a changed declaration discards the statement AND the seed')
+  assert.ok(maxTokensFor(record, 'longcat-2.5-preview-free', 1000000, { output: 999999999, fp, at: 1 }) <= 1000000, 'and it can never exceed the window it has to fit inside')
+})
+
+test('GUARD: a real reply is observed through the ITERATOR, not only through result()', async () => {
+  // The fifth instance of the shape this repository keeps meeting, and the worst
+  // one: an observation that worked in every test and in every probe, and fired
+  // in no conversation. dsh-llm-pi-ai's `toStreamChunks` does
+  // `for await (const event of events)` and never calls `result()`, so the
+  // wrapper that carried the clamp observation, the truncation counter and the
+  // first-token timing sat on a method the host does not call. Everything the
+  // plugin claims to know about REAL traffic was measured on nothing.
+  //
+  // Driven through the public provider, because the wrapper is a nested helper
+  // inside `zenProvider` and testing it directly would test a thing the host
+  // never touches.
+  const seen = [];
+  const seedProvider = zenProvider(() => 'seed', () => undefined)
+  const seedModels = seedProvider.getModels()
+  const catalog = {
+    // `zenProvider` reads the catalogue to build its baseline, so the stub has to
+    // answer that much — a fake that only implements the two observers would be
+    // testing a provider that cannot start.
+    current: () => ({ models: seedModels, visible: seedModels.map((m) => m.id) }),
+    effectiveModels: () => seedModels,
+    observeClamp: (id, observation) => seen.push(['clamp', id, observation]),
+    observeFirstToken: (id, ms) => seen.push(['ftft', id, ms]),
+  };
+  const SEPARATOR = String.fromCharCode(10, 10)
+  const sse = [
+    'data: {"choices":[{"index":0,"delta":{"content":"partial"},"finish_reason":null}]}',
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":40,"total_tokens":50}}',
+    'data: [DONE]',
+    '',
+  ].join(SEPARATOR)
+  const provider = zenProvider(() => 'probe-session', () => undefined, { catalog })
+  const model = provider.getModels().find((m) => m.api === 'openai-completions')
+  const stream = provider.streamSimple(
+    model,
+    { messages: [{ role: 'user', content: 'hello', timestamp: Date.now() }] },
+    {
+      apiKey: 'public',
+      maxTokens: 64,
+      reasoning: 'low',
+      maxRetries: 0,
+      fetch: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+    },
+  )
+  const events = []
+  for await (const event of stream) events.push(event.type)
+  assert.ok(events.includes('done'), 'the iterator passes every event through untouched')
+  const clamps = seen.filter(([kind]) => kind === 'clamp')
+  const timings = seen.filter(([kind]) => kind === 'ftft')
+  assert.equal(clamps.length, 1, 'one observation from the path a conversation actually takes')
+  assert.equal(clamps[0][2].truncated, true, 'a reply cut on the budget is recognised')
+  assert.equal(clamps[0][2].starved, false, 'and not mistaken for a starved one — it did answer')
+  assert.equal(timings.length, 1, 'the first token was timed')
+  assert.ok(timings[0][2] >= 0, 'with a real elapsed measurement')
 })

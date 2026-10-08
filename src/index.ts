@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { resolve as resolvePath } from "node:path";
 import { Buffer } from "node:buffer";
 import { cachePath, createCatalog } from "./catalog.js";
-import type { Catalog, FetchLike, FetchLikeResponse } from "./catalog.js";
+import type { Catalog, FetchLike, FetchLikeResponse, ProbeStart } from "./catalog.js";
 import {
   PROVIDER_ID,
   ZEN_API_KEY_ENV,
@@ -67,6 +67,7 @@ export {
   requestHeader,
   resolveZenApiKey,
   sessionHeader,
+  statedCeilings,
   stripStaleReasoning,
   swapCompactionPrompt,
   zenProvider,
@@ -241,6 +242,22 @@ function sameOrigin(req: RouteRequest): boolean {
   }
 }
 
+/**
+ * What a manual-probe start answers with, or `null` when the round started.
+ *
+ * A refused round must not answer like a started one. The floor between two
+ * manual rounds exists because each spends the shared anonymous bucket, so the
+ * refusal is a real answer with a real number in it — and the card needs both.
+ */
+export function probeStartResponse(
+  start: ProbeStart | undefined,
+): { status: number; body: Record<string, unknown> } | null {
+  if (start !== undefined && start.started === false && start.reason === "cooldown") {
+    return { status: 429, body: { error: "cooldown", retryAfterMs: start.retryAfterMs } };
+  }
+  return null;
+}
+
 function registerCatalogRoutes(ctx: HostContext, catalog: Catalog): void {
   try {
     ctx.inject(["webServer"], (child: never) => {
@@ -316,8 +333,23 @@ function registerCatalogRoutes(ctx: HostContext, catalog: Catalog): void {
           // Failures are swallowed, as before: the round is designed to conclude
           // nothing without that being an error (D5), and it must never reject
           // into a 5xx or an unhandled rejection now that nothing awaits it.
-          void catalog.forceProbes().catch(() => undefined);
-          sendJson(res, 202, catalogPayload(catalog));
+          //
+          // A REFUSED round is a different thing and is answered differently.
+          // The floor between two manual rounds exists because each one spends
+          // the shared bucket, and answering 202 to a click that never started
+          // one left the card spinning until its grace period expired with no
+          // word about why. 429 carries the number the user needs to see.
+          void catalog
+            .forceProbes()
+            .catch(() => undefined)
+            .then((start) => {
+              const refused = probeStartResponse(start);
+              if (refused !== null) {
+                sendJson(res, refused.status, refused.body);
+                return;
+              }
+              sendJson(res, 202, catalogPayload(catalog));
+            });
         };
         const disposers = [
           wctx.webServer.register({ kind: "prefix", path: CATALOG_ROUTE, handler: readHandler }),
@@ -394,10 +426,11 @@ export function apply(ctx: HostContext, config?: Config): void {
     now: Date.now,
     // Never rejects: `probeModel` converts every failure mode, including a
     // thrown transport error, into a three-state conclusion.
-    probe: async (model) =>
+    probe: async (model, question) =>
       await probeModel(model, {
         provider: provider as unknown as ProbeStreamer,
         apiKey: getConfigKey() ?? "public",
+        question,
       }),
     // A probe round asks the catalogue before it asks any model: one free GET
     // settles "does Zen still serve this id", so a withdrawn model costs no
@@ -407,6 +440,37 @@ export function apply(ctx: HostContext, config?: Config): void {
   registerCatalogRoutes(ctx, catalog);
 
   provider = zenProvider(() => undefined, getConfigKey, { catalog });
+  // The host reads `profile.configuredMaxTokens` to work out how much of the
+  // context window to hold back for the reply — and it is EMPTY here.
+  //
+  // The static-directory path fills it (`dsh-llm-pi-ai/lib/index.js:679`,
+  // `if (entry.maxTokens !== undefined) configuredMaxTokens.set(...)`), so only a
+  // dynamically registered provider misses it. Measured 2026-10-08, and the
+  // arithmetic closes exactly:
+  //
+  //   reserved = 0                       -> threshold = floor(0.8 x 1048576) = 838,860
+  //   reserved = 524,288 (this model's)  -> threshold = 1048576-524288-65536 = 458,752
+  //
+  // Meanwhile the route enforces `prompt + max_tokens <= contextWindow`, and
+  // pi-ai's clamp had settled at ~262,144 by the time these sessions died, so the
+  // real prompt ceiling was 786,432 — BELOW the 838,860 the host was watching for.
+  // The last accepted request sat at 786,319 + 262,144 = 1,048,463, 113 tokens
+  // under the line; the next one at 787,309 crossed it and was refused. With the
+  // threshold at 458,752, compaction fires long before any of that.
+  //
+  // So this is not a new number: it is the output budget the plugin already
+  // advertises on the picker, merely reported to the one component that needs it.
+  const configuredMaxTokens = new Map<string, number>();
+  const syncConfiguredMaxTokens = (models: readonly { id: string; maxTokens?: number }[]): void => {
+    for (const m of models) {
+      if (typeof m.maxTokens === "number" && Number.isFinite(m.maxTokens) && m.maxTokens > 0) {
+        configuredMaxTokens.set(m.id, Math.floor(m.maxTokens));
+      } else {
+        // A model whose budget is unknown must not keep a stale one.
+        configuredMaxTokens.delete(m.id);
+      }
+    }
+  };
   const filtered = {
     ...provider,
     getModels: () => {
@@ -421,7 +485,12 @@ export function apply(ctx: HostContext, config?: Config): void {
       // already ran, so this stays a single cheap check per read.
       const snapshot = catalog.current();
       if (snapshot.source !== "builtin-fallback") void catalog.runProbes().catch(() => undefined);
-      return provider.getModels().filter((m) => !isHidden(m.id));
+      const visible = provider.getModels().filter((m) => !isHidden(m.id));
+      // Synced on every read rather than once at build time: the catalogue is
+      // dynamic, so a model's budget can be raised by a measurement or a harvest
+      // after start-up, and the host reads this map per request.
+      syncConfiguredMaxTokens(visible);
+      return visible;
     },
     // Required by the pi-ai Provider interface, so it stays even though this
     // host never calls it (zen-provider.ts records the verification). It is a
@@ -440,9 +509,16 @@ export function apply(ctx: HostContext, config?: Config): void {
     displayName: "OpenCode Zen Free",
     piProvider: filtered,
     modelErrors: /* @__PURE__ */ new Map<string, string>(),
-    configuredMaxTokens: /* @__PURE__ */ new Map<string, number>(),
+    configuredMaxTokens,
     streamIdleTimeoutMs: 600 * 1_000,
-    timeoutMs: 180_000,
+    // This one reaches pi-ai as the SDK's whole-request `timeout`, and it was
+    // 180s — which decided the real length of a reply before any max-output
+    // number could. Measured 2026-10-07: asking mimo for 34,000 or 40,000 output
+    // tokens died at 181s with HTTP 200 and no usage, while the same request
+    // with a longer timeout produced all 40,000 at ~152 tok/s. 180s bought about
+    // 27,000 tokens — less than the 32,000 the plugin used to advertise. It now
+    // matches `streamIdleTimeoutMs` above, so the two clocks agree.
+    timeoutMs: 600 * 1_000,
     maxRequestImageBytes: 20 * 1024 * 1024,
     requestImagePixelBudget: 2048 * 2048,
     requestImageMaxBytes: 1024 * 1024,

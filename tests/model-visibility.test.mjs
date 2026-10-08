@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PROVIDER_ID, builtinFreeModels } from '../src/zen-provider.ts'
+import { probeStartResponse } from '../src/index.ts'
 
 const plugin = await import('../src/index.ts')
 
@@ -352,9 +354,55 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
       refreshed.body.visible,
     )
     const bunny = refreshed.body.models.find((m) => m.id === 'space-bunny-free')
-    assert.deepEqual(bunny, { id: 'space-bunny-free', image: true, thinking: 'max' })
+    // The card is a projection of the record the request path uses, so it carries
+    // the two numbers that shape every request and what models.dev published
+    // beside them — a reader must be able to see whether a number is a
+    // declaration or a measurement without leaving the panel. For space-bunny
+    // the two agree, which is the whole point of measuring: its declaration was
+    // correct, and the badge says so.
+    assert.deepEqual(bunny, {
+      id: 'space-bunny-free',
+      image: true,
+      thinking: 'max',
+      contextWindow: 1048576,
+      // `observedOutput` is ABSENT rather than undefined: the card travels as
+      // JSON, and an unanswered "what has this model actually written" must not
+      // survive as a key a reader could mistake for a zero.
+      outputBudget: 524288,
+      declaredContext: 1048576,
+      declaredOutput: 524288,
+      levels: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
+      off: null,
+      // Nothing was raised for this model: its window and budget are exactly what
+      // models.dev published, so the provenance says `declared` rather than
+      // claiming a measurement that never happened. Vision and tools say `route`
+      // because a probe really did answer those two questions.
+      evidence: { context: 'declared', output: 'declared', vision: 'route', tools: 'route' },
+    })
     const pickle = refreshed.body.models.find((m) => m.id === 'big-pickle')
-    assert.deepEqual(pickle, { id: 'big-pickle', image: false, thinking: null })
+    assert.equal(pickle.image, false)
+    assert.equal(pickle.thinking, null)
+    // Declared 200000/32000. The window is replaced by a measurement; the output
+    // budget is NOT, because no generation has been watched for this model — so
+    // the budget ships as models.dev declared it, and the row says so. `vision`
+    // is false AND unmeasured: the model declares no image input, so there is no
+    // claim on screen to verify.
+    assert.equal(pickle.declaredContext, 200000)
+    assert.equal(pickle.declaredOutput, 32000)
+    // The context seed for this model was WITHDRAWN on 2026-10-07: it rested on
+    // an acceptance, and the same endpoint has since named its own maximum as
+    // 262,139 while refusing requests as small as 210,000. Shipping 1,048,576
+    // would have advertised four times the model's real ceiling.
+    assert.equal(pickle.contextWindow, 200000, 'an acceptance is not a measurement; the declaration ships')
+    assert.equal(pickle.outputBudget, 48000, 'watched producing 48,000 of a declared 32,000')
+    assert.equal(pickle.observedOutput, 48000)
+    // Context reads UNMEASURED for the same reason the window is the declaration:
+    // nothing has been established about this model's ceiling that survives the
+    // endpoint naming a different one.
+    // Its context SEED was withdrawn on 2026-10-07 (it rested on an acceptance the
+    // endpoint later contradicted), so the window is models.dev's number again —
+    // and the provenance says `declared`, which is the honest word for it.
+    assert.deepEqual(pickle.evidence, { context: 'declared', output: 'witnessed', vision: 'none', tools: 'route' })
 
     // The derived record is a real model as far as the picker is concerned.
     const adapter = host.registered[0][1]
@@ -419,12 +467,15 @@ test('the progress reading reaches the wire with each failure reason intact', as
     assert.deepEqual(Object.keys(wire).sort(), [
       'current',
       'done',
+      'pending',
+      'requests',
       'results',
       'running',
       'startedAt',
       'targets',
       'total',
     ])
+    assert.equal(typeof wire.requests, 'number', 'the round reports what it spent, not only what it covered')
   } finally {
     host.dispose()
   }
@@ -439,12 +490,15 @@ test('GET on the probe route reports live progress without starting a round', as
     assert.equal(idle.status, 200)
     assert.deepEqual(idle.body, {
       running: false,
+      requests: 0,
       total: 0,
       done: 0,
       current: null,
       results: {},
       targets: [],
       startedAt: 0,
+      // The offline floor's two reasoning models: never measured, so still owed.
+      pending: ['muse-spark-1.2-contributor-free', 'muse-spark-1.3-contributor-free'],
     })
     // A read-only GET carries no origin fence (like the catalogue read);
     // only the POST that spends quota does.
@@ -478,6 +532,20 @@ test('the probe POST answers while the round is still running', async () => {
     host.dispose()
   }
 })
+
+test('a throttled manual round is refused loudly, not answered like a started one', () => {
+  // 202 means "accepted, not finished". It was also the answer to a click the
+  // floor had already refused, which is the whole complaint: the card waited out
+  // its grace period with nothing to show. 429 carries the remaining time, and
+  // the card words it.
+  assert.equal(probeStartResponse(undefined), null, 'a round that started is still 202');
+  assert.equal(probeStartResponse({ started: true }), null);
+  assert.equal(probeStartResponse({ started: false, reason: 'running' }), null, 'a round already in flight is not a refusal to wait for');
+  assert.deepEqual(probeStartResponse({ started: false, reason: 'cooldown', retryAfterMs: 243_000 }), {
+    status: 429,
+    body: { error: 'cooldown', retryAfterMs: 243_000 },
+  });
+});
 
 test('a same-origin POST must still name this machine (DNS rebinding)', async () => {
   // Origin and Host agreeing is not enough: under DNS rebinding an attacker's
@@ -513,4 +581,59 @@ test('a same-origin POST must still name this machine (DNS rebinding)', async ()
   assert.equal(reboundProbe.status, 403, 'and the quota-spending route is fenced the same way')
 
   host.dispose?.()
+})
+
+test('GUARD: the host is told this lane\'s output budget, or it watches the wrong line', async () => {
+  // Found 2026-10-08, three sessions deep. This route enforces
+  //   prompt + max_tokens <= contextWindow
+  // (measured: 2,150,000 chars of real content passes at max_tokens=32 and is
+  // refused at both 262144 and 524288, with identical boundaries — so the sum is
+  // what binds, and the boundary does NOT move with max_tokens).
+  //
+  // The host works out how full the context is from
+  //   reservedCompletionTokens = requestHeader().config.maxTokens ?? defaultMaxTokens ?? 0
+  // and then compacts at
+  //   thresholdTokens = floor(min(W * 0.8, W - reserved - 65536))
+  //
+  // `configuredMaxTokens` shipped EMPTY. The static-directory path fills it
+  // (`dsh-llm-pi-ai/lib/index.js:679`); a dynamically registered provider — which
+  // is what this plugin is — silently skipped that step. So reserved was 0, the
+  // threshold was floor(0.8 x 1048576) = 838,860, and by the time those sessions
+  // died pi-ai's clamp had settled at ~262,144, putting the real prompt ceiling
+  // at 786,432 — BELOW the threshold the host was watching for. Compaction could
+  // never fire: `compactIfNeeded` returned null on all 1,833 pre-steps.
+  //
+  // The arithmetic that closes: 786,319 + 262,144 = 1,048,463, 113 tokens under
+  // the line. The next request at 787,309 crossed it and was refused.
+  //
+  // The fix is not a new number — it is the budget the picker already advertises,
+  // reported to the one component that reads it.
+  const W = 1_048_576;
+  const BUDGET = 524_288;
+  const REAL_PROMPT_CEILING = 786_432; // 1048576 - 262144, the clamp's settled value
+  const thresholdWith = (reserved) => Math.floor(Math.min(W * 0.8, W - reserved - 65_536));
+  assert.equal(
+    thresholdWith(0) > REAL_PROMPT_CEILING,
+    true,
+    'the empty map put the threshold above the wall, which is the whole failure',
+  );
+  assert.equal(
+    thresholdWith(BUDGET),
+    458_752,
+    'reporting the budget drops it well below, with 327,680 tokens of margin',
+  );
+
+  // And the map must actually carry the value, kept in step with the catalogue.
+  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  assert.match(source, /syncConfiguredMaxTokens/, 'the map is populated, not left empty')
+  assert.doesNotMatch(
+    source,
+    /configuredMaxTokens:\s*\/\* @__PURE__ \*\/\s*new Map<string, number>\(\)/,
+    'the empty literal is gone — that literal is the defect',
+  )
+  assert.match(
+    source,
+    /Math\.floor\(m\.maxTokens\)/,
+    'and a positive integer is stored, which is what the host validates',
+  )
 })

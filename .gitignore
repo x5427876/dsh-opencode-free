@@ -2,3 +2,7 @@ node_modules/
 .artifacts/
 lib/
 *.tgz
+
+# Local model-catalogue snapshots downloaded by measurement scripts; re-fetchable.
+.scratch/verify/api*.json
+.scratch/verify/oc.json

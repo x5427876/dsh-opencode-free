@@ -115,20 +115,89 @@ picker to see the current ones; the latest live check results are in
   falls back to the model set that ships inside pi-ai and the detail page says
   so. A failed refresh never empties the list.
 - **Detail page.** Models are listed alphabetically with the ones you have
-  switched on at the top. Each has a switch that hides it from the picker, and
-  badges for vision (the model declares image input) and thinking (its strongest
-  published reasoning level; none when it publishes no levels).
+  switched on at the top. Each row carries a switch that hides it from the
+  picker, badges for vision, thinking and tool calls, and **the two limits the
+  request actually uses** — context window and maximum output. A badge or a
+  number marked with a tick was measured on this route; one without was copied
+  from models.dev. When a measurement replaced a declaration, the declaration is
+  struck through beside it (`context 200,000 → 1,048,576`), because a stale
+  number and a measured one look identical otherwise — which is exactly why the
+  panel used to be unable to tell you which it was showing.
 
 ### Reasoning and capabilities
 
-All models support reasoning and tool calls. DSH passes your reasoning level
-through, and the levels offered come from models.dev per model (Muse Spark gets
-`minimal`…`xhigh`, Space Bunny gets `low`…`max`). A level a model does not
-publish is never offered. `off` stays offered and sends no reasoning parameter,
-like OpenCode's "Default". If you choose nothing, Muse Spark uses `xhigh`.
+DSH passes your reasoning level through, and the ladder offered comes from
+models.dev per model (Muse Spark gets `minimal`…`xhigh`, Space Bunny gets
+`low`…`max`). A level a model does not publish is never offered.
 
-A screenshot is attached only to a model that declares image input. The context
-size and maximum output shown in the picker are that model's own.
+Tool calls work, and that is now a measurement rather than an admission
+requirement: asked to run one command, every model that answered this round
+answered with a real tool call and the right arguments — 9 of 9 on the live set
+(2026-10-07). The models that never answered failed identically with and
+without tools, which is an upstream condition rather than a missing capability.
+The free tier still admits a request only when it carries `read` and `bash`,
+which is a separate requirement and is not what this sentence means.
+
+`off` is the exception: it is **measured, not assumed**. The round asks the
+model for no reasoning and for its own lowest level, compares the reasoning
+tokens against that model's own baseline, and offers `off` only when the
+answer is a real reduction — the exact `none` where the model reaches zero,
+otherwise the lowest level that measurably helps. A model whose reasoning the
+route never reports gets no `off` row at all, rather than a row that does
+nothing. If you choose nothing, Muse Spark uses `xhigh`.
+
+Vision works too: a screenshot is attached only to a model that declares image
+input, and asking each of those models to name the colour of the top half of a
+two-tone image returned the right colour on every model that answered (5 of 5,
+2026-10-07).
+
+The context size and the output budget in the picker are measured, not copied —
+and they are two different kinds of number, which the picker labels separately.
+
+**Context** is a real ceiling, read off the endpoint's own refusal: Mimo V2.6
+Flash declares 200,000 and its endpoint says its maximum is 1,048,576. That one
+is a capability, and it is what decides when the conversation is compacted.
+
+**Output budget** follows models.dev — with one exception. The route enforces
+`max_tokens` (asked for 8 with a prompt that wanted thousands, the models that
+answered all stopped at exactly 8 with `finish_reason: "length"`), so a
+declaration that is too low really does cut a reply at the declaration with
+nothing reporting it. But that only proves the field is enforced, not that a
+model writes what it is given: on 2026-10-07 every route accepted budgets up to
+1,040,384, and no model has ever been seen writing anything like it. So the rule
+is that **only a stated ceiling or a watched generation moves this number**.
+Xiaomi publishes [MiMo-V2.6-Flash](https://mimo.mi.com/models/en-US/mimo-v2.6-flash)
+at 128K max output while models.dev says 32,000; Longcat's route names its own
+ceiling outright (`/max_tokens: 995834 is not less or equal to 262144`) while
+models.dev says half of it. Both statements cost nothing — a refusal returns a
+number — and both now bound the budget. A watched generation bounds it too:
+Mimo wrote 79,722 tokens when asked for 131,072, and Big Pickle 48,000. Every
+other model's budget is exactly what models.dev says, and the row shows an arrow
+only where that is not true.
+
+Worth knowing why some models have no figure: models choose when to stop, so the
+same request produced 892 tokens once and 79,722 the next. And for several of
+them the budget is not the constraint at all — throughput measured between 34 and
+365 tokens a second, so the ten-minute request timeout ends a reply between
+roughly 28,000 and 295,000 tokens, which for a model declaring 128,000 or
+262,144 means the clock binds first.
+
+The other half of that answer costs nothing and is collected automatically: when
+the route refuses a request, the numbers it names **are** its own limits — "does
+not exceed 262144" for output, "maximum context length of 262139" for context —
+and the check reads them out of the refusal and remembers them per model. A
+refusal produces no output tokens at all, so this is the one ceiling measurement
+that is free, and it is the one that catches a stale declaration: it is how
+Big Pickle's window was found to be four times what the model really has. A
+route that answers instead of refusing has stated nothing, which is recorded as
+such rather than as a guess.
+
+Time is the ceiling nobody sees. Mimo V2.6 Flash writes at about 150 tokens a
+second, so a single reply ends at roughly 90,000 tokens when the 10-minute
+request timeout arrives, whatever the budget says. Nothing reports that: a reply
+that stops at its own limit looks exactly like a finished one. It used to be
+worse, at 3 minutes — which was under the declared budget, so no budget could
+have helped until the timeout moved.
 
 ### Availability check
 
@@ -139,25 +208,41 @@ until the next round replaces it.
 
 - **When.** Once per local day, started when the model list is read, plus the
   **Probe now** button at any time. If you never open the model list, you never
-  pay.
+  pay. Two clicks inside five minutes: the second is refused and says how long
+  is left, rather than starting a round and leaving you watching a spinner.
 - **How.** The round first reads Zen's catalogue (one `GET`, no inference
   quota); a model Zen no longer lists is dropped without a completion being
-  sent. Each remaining model then gets one short request, one at a time,
-  because anonymous callers share one quota bucket. Models that answered are
-  asked again next round, so their latency stays current. Models you switched
-  off are not asked.
+  sent. Then each model is asked one at a time, because anonymous callers share
+  one quota bucket.
+  - **Once a day**, every model Zen still lists gets **one** short request —
+    including the ones you switched off, because a hidden model's status is
+    exactly what nobody would otherwise find out. A model that fails costs one
+    request, not more.
+  - **Probe now**, only the models you have switched on, and it keeps asking
+    each of them until the measurement is finished (up to nine requests), so
+    one click can finish the job instead of starting it. The report says what
+    that cost and how many models still owe samples. Part of that budget asks
+    the **capability** questions nobody had ever asked: give the model an image
+    and check it names the right colour, give it real tools and check it calls
+    one. Each axis is asked **once per model** and the answer is kept, so a model
+    you keep using costs nothing after the first round — and a round that learns
+    nothing writes nothing, leaving the badge unmarked rather than claiming the
+    model cannot do it.
 - **What removes a model.** Only a positive answer: Zen stops listing it, or the
   route says it will not serve it (`Model is unavailable.`,
-  `Model <id> is not supported`, `404`, `410`). Zen does not publish which
-  endpoint serves which model, so a model is asked on both endpoints this
-  provider implements before it counts as gone. models.dev's `deprecated` flag
+  `Model <id> is not supported`, `Model <id> has been deprecated`, `404`,
+  `410`). Zen does not publish which endpoint serves which model, so a model is
+  asked on both endpoints this provider implements before it counts as gone —
+  and a channel that answers nothing cannot overrule one that named the model,
+  or a wrong channel's `not supported for format` would retire every model. models.dev's `deprecated` flag
   never decides this: on this provider it can mean the free tier ended or only
   that the record is stale.
 - **What does not.** A gate refusal, exhausted quota, rejected key, dropped
-  network, or a whole endpoint being down. Those rounds learned nothing about
-  any model, so the rows turn grey "not measured" instead of red, and a banner
-  names which condition answered. A red row names its reason, with the HTTP
-  status and what to do in its tooltip.
+  network, an overloaded upstream, or a whole endpoint being down. Those rounds
+  learned nothing about any model, so the rows turn grey "not measured" instead
+  of red, and **the row names the condition inline** (`not measured · quota
+  spent`), with the HTTP status and what to do about it in its tooltip. A red
+  row is a statement about the model and always names its reason.
 - **A removal is final.** A model the route has refused is not asked again,
   because re-asking a settled question only spends quota. A Zen key does not
   bring it back: **a key changes your quota, not the model list**, and a model

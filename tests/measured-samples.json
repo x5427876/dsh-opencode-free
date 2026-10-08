@@ -1,0 +1,856 @@
+[
+ {
+  "model": "big-pickle",
+  "question": null,
+  "tokens": null,
+  "http": 400,
+  "n": 3
+ },
+ {
+  "model": "big-pickle",
+  "question": null,
+  "tokens": 45,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "baseline",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "big-pickle",
+  "question": "baseline",
+  "tokens": 14,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "baseline",
+  "tokens": 16,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "baseline",
+  "tokens": 55,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "high",
+  "tokens": 23,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "high",
+  "tokens": 38,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "low",
+  "tokens": 164,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "medium",
+  "tokens": 14,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "medium",
+  "tokens": 15,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "minimal",
+  "tokens": null,
+  "http": null,
+  "n": 8
+ },
+ {
+  "model": "big-pickle",
+  "question": "minimal",
+  "tokens": 0,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "big-pickle",
+  "question": "minimal",
+  "tokens": 8,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "big-pickle",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 8
+ },
+ {
+  "model": "big-pickle",
+  "question": "none",
+  "tokens": 37,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "big-pickle",
+  "question": "zzz",
+  "tokens": null,
+  "http": 400,
+  "n": 1
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": null,
+  "tokens": null,
+  "http": 500,
+  "n": 4
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "baseline",
+  "tokens": null,
+  "http": 200,
+  "n": 2
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "high",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "low",
+  "tokens": null,
+  "http": null,
+  "n": 7
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "max",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 3
+ },
+ {
+  "model": "fledge-alpha-free",
+  "question": "zzz",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "glm-4.7-free",
+  "question": null,
+  "tokens": null,
+  "http": 401,
+  "n": 1
+ },
+ {
+  "model": "ling-3.0-flash-fin-free",
+  "question": null,
+  "tokens": null,
+  "http": 400,
+  "n": 3
+ },
+ {
+  "model": "ling-3.0-flash-fin-free",
+  "question": "baseline",
+  "tokens": null,
+  "http": 400,
+  "n": 1
+ },
+ {
+  "model": "ling-3.0-flash-fin-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": null,
+  "tokens": null,
+  "http": null,
+  "n": 6
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": null,
+  "tokens": 25,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": null,
+  "tokens": 55,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": "baseline",
+  "tokens": null,
+  "http": 429,
+  "n": 1
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": "low",
+  "tokens": 69,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": 429,
+  "n": 1
+ },
+ {
+  "model": "ling-3.1-flash-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 3
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": null,
+  "tokens": null,
+  "http": 200,
+  "n": 2
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": null,
+  "tokens": 57,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "baseline",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "baseline",
+  "tokens": 36,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "baseline",
+  "tokens": 45,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "baseline",
+  "tokens": 77,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "low",
+  "tokens": 36,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "minimal",
+  "tokens": 36,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "none",
+  "tokens": 36,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "none",
+  "tokens": 71,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "longcat-2.5-preview-free",
+  "question": "none",
+  "tokens": 80,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": null,
+  "tokens": null,
+  "http": 400,
+  "n": 2
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": null,
+  "tokens": 16,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "high",
+  "tokens": 118,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "low",
+  "tokens": 4,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "medium",
+  "tokens": 26,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "minimal",
+  "tokens": 83,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "mimo-v2.5-free",
+  "question": "none",
+  "tokens": 0,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": null,
+  "http": null,
+  "n": 6
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 0,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 4,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 11,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 12,
+  "http": null,
+  "n": 6
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 13,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 15,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 18,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": null,
+  "tokens": 66,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "baseline",
+  "tokens": 37,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "high",
+  "tokens": 16,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "low",
+  "tokens": null,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "low",
+  "tokens": 11,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "low",
+  "tokens": 16,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "low",
+  "tokens": 18,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "low",
+  "tokens": 26,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "max",
+  "tokens": 0,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "max",
+  "tokens": 8,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "max",
+  "tokens": 13,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "medium",
+  "tokens": 15,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "minimal",
+  "tokens": 16,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "mimo-v2.6-flash-free",
+  "question": "none",
+  "tokens": 0,
+  "http": 200,
+  "n": 3
+ },
+ {
+  "model": "muse-spark-1.2-contributor-free",
+  "question": null,
+  "tokens": null,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "muse-spark-1.2-contributor-free",
+  "question": null,
+  "tokens": 182,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "muse-spark-1.2-contributor-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": null,
+  "tokens": null,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": null,
+  "tokens": 80,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "high",
+  "tokens": null,
+  "http": 200,
+  "n": 2
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "low",
+  "tokens": null,
+  "http": 200,
+  "n": 2
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "max",
+  "tokens": null,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "medium",
+  "tokens": null,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": 200,
+  "n": 3
+ },
+ {
+  "model": "muse-spark-1.3-contributor-free",
+  "question": "none",
+  "tokens": null,
+  "http": 400,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-super-free",
+  "question": null,
+  "tokens": null,
+  "http": 401,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": null,
+  "tokens": null,
+  "http": 400,
+  "n": 2
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "baseline",
+  "tokens": null,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "baseline",
+  "tokens": 49,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "high",
+  "tokens": 14,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "low",
+  "tokens": 16,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "max",
+  "tokens": 12,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "max",
+  "tokens": 40,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "medium",
+  "tokens": 22,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "minimal",
+  "tokens": null,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "minimal",
+  "tokens": 19,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "minimal",
+  "tokens": 88,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 4
+ },
+ {
+  "model": "nemotron-3-ultra-free",
+  "question": "none",
+  "tokens": 0,
+  "http": 200,
+  "n": 5
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": null,
+  "tokens": null,
+  "http": 400,
+  "n": 2
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "baseline",
+  "tokens": 30,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "high",
+  "tokens": 120,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "low",
+  "tokens": 93,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "medium",
+  "tokens": 85,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "minimal",
+  "tokens": 148,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "nemotron-3.5-lightning-free",
+  "question": "none",
+  "tokens": 0,
+  "http": 200,
+  "n": 3
+ },
+ {
+  "model": "space-bunny-free",
+  "question": null,
+  "tokens": null,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": null,
+  "tokens": 36,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": null,
+  "tokens": 42,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": null,
+  "tokens": 55,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "baseline",
+  "tokens": 35,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "low",
+  "tokens": 0,
+  "http": null,
+  "n": 2
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "low",
+  "tokens": 9,
+  "http": 200,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "low",
+  "tokens": 22,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "low",
+  "tokens": 37,
+  "http": null,
+  "n": 1
+ },
+ {
+  "model": "space-bunny-free",
+  "question": "none",
+  "tokens": null,
+  "http": null,
+  "n": 4
+ }
+]

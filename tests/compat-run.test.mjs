@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { runCompat } from '../scripts/compat-core.mjs'
 
+const NEWLINE = String.fromCharCode(10)
+
 const PIN = '0.2.1-alpha.1'
 
 /**
@@ -65,7 +67,14 @@ function world({
 }
 
 function free(extra = {}) {
-  return { cost: { input: 0, output: 0 }, ...extra }
+  // models.dev publishes `reasoning` explicitly; a record with reasoning_options
+  // but no flag claims nothing, and the derivation now takes that at face value.
+  const reasoning_options = extra.reasoning_options;
+  return {
+    cost: { input: 0, output: 0 },
+    ...(reasoning_options === undefined ? {} : { reasoning: true }),
+    ...extra,
+  }
 }
 function ok(stdout = 'OK\n') {
   return { stdout, stderr: '', exitCode: 0 }
@@ -242,7 +251,7 @@ test('the models verified are Zen\'s list intersected with what models.dev calls
   assert.deepEqual(report.catalogue.onlyBuiltin, ['retired-free'])
 })
 
-test('each model is asked at its lowest published effort; a model without levels uses the default and says so', async () => {
+test('each model is asked at its lowest OFFERED effort; a non-reasoning model says so', async () => {
   const { deps, runs } = world({
     zenIds: ['effort-free', 'toggle-free', 'bare-free'],
     modelsDev: {
@@ -253,14 +262,18 @@ test('each model is asked at its lowest published effort; a model without levels
     builtinIds: [],
   })
   const { report } = await runCompat({ dsh: PIN }, deps)
+  // The LOWEST OFFERED effort, which is no longer the lowest PUBLISHED one: the
+  // ladder is not filtered by models.dev, because no ladder level has ever been
+  // refused by any model on either channel. A model that publishes no reasoning
+  // at all still gets nothing, which is the case that must stay honest.
   assert.deepEqual(runs().map((r) => [r.model, r.effort]), [
-    ['effort-free', 'low'],
-    ['toggle-free', undefined],
+    ['effort-free', 'minimal'],
+    ['toggle-free', 'minimal'],
     ['bare-free', undefined],
   ])
   assert.deepEqual(report.models.map((m) => [m.id, m.effort, m.effortNote]), [
-    ['effort-free', 'low', ''],
-    ['toggle-free', null, 'no published levels (無等級可選)'],
+    ['effort-free', 'minimal', ''],
+    ['toggle-free', 'minimal', ''],
     ['bare-free', null, 'no published levels (無等級可選)'],
   ])
 })
@@ -395,7 +408,7 @@ test('the JSON parses back to the report and the matrix carries the same header 
     if (model.layer !== null) assert.ok(row.includes(model.layer))
     if (model.reason !== '') assert.ok(row.includes(model.reason.slice(0, 20)))
   }
-  assert.match(md.split('\n').find((line) => line.startsWith('| ok-free |')), /\| low \|/)
+  assert.match(md.split(NEWLINE).find((line) => line.startsWith('| ok-free |')), /\| minimal \|/)
   assert.match(md, /Unverified: late-free/)
   assert.match(md, /exit code 2/i)
 })

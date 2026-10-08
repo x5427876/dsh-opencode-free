@@ -57,6 +57,7 @@ export const DEFAULT_TTL_MS = 86_400_000;
  */
 export const FORCED_PROBE_MIN_INTERVAL_MS = 5 * 60_000;
 
+
 export const CATALOG_TTL_ACTIVE_MS = 6 * 60 * 60_000;
 /**
  * How long a Zen availability answer is trusted before it is re-asked.
@@ -136,13 +137,469 @@ function reasoningOptionTypes(record: CatalogRecord): string[] {
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 /**
- * `getSupportedThinkingLevels` treats `xhigh` and `max` as opt-in — absent from
- * the map means NOT offered — but includes `off`/`minimal`/`low`/`medium`/`high`
- * unless they are explicitly mapped to `null`. A faithful map therefore has to
- * null out the ones models.dev does not publish; leaving them absent would
- * offer a level the model rejects.
+ * models.dev effort spellings that pi-ai's vocabulary lacks, and what they mean.
+ *
+ * `"none"` is the one that occurs: `north-mini-code-free` publishes
+ * `["none","high"]`. The old membership test discarded it as "not a level",
+ * which removed that model's only off member. Adding a spelling here is a
+ * one-line change; the same filter used to make it vanish silently.
+ */
+export const FOREIGN_EFFORT_SPELLINGS: Record<string, string> = { none: "off" };
+
+/**
+ * `xhigh` and `max` are opt-in for pi-ai: absent from the map means NOT
+ * offered. They are left that way here so the refusal surface stays limited to
+ * levels with positive evidence.
  */
 const OPT_IN_THINKING_LEVELS = new Set<string>(["xhigh", "max"]);
+
+/**
+ * What was MEASURED about one model's Off control, on one channel.
+ *
+ * `"none-works"` — `reasoning_effort:"none"` reached zero reasoning tokens.
+ * `"level-works"` — `none` is unusable here but a named level is: big-pickle
+ *   honours `minimal` (0/8 across six samples) while rejecting `none` outright;
+ *   space-bunny and both muse-spark models honour their lowest declared level at
+ *   ~4.6-4.9x less reasoning than omission.
+ * `"noop"` — accepted with HTTP 200, reasoning still present (longcat).
+ * `"rejected"` — HTTP 400.
+ *
+ * `api` is what makes a stale measurement detectable rather than permanent: Off
+ * is `reasoning_effort` on completions and `reasoning.effort` on responses, and a
+ * measurement of one is evidence about the other only by coincidence.
+ */
+export interface MeasuredEffort {
+  readonly kind: "none-works" | "level-works" | "noop" | "rejected";
+  /** The level name when `kind === "level-works"`; omitted otherwise. */
+  readonly level?: string | undefined;
+  /** Fingerprint of the record's `reasoning_options`, so a revision voids it. */
+  readonly fp: string;
+  /** Channel it was measured on. */
+  readonly api: string;
+  readonly at: number;
+}
+
+/**
+ * The shape of `reasoning_options`, reduced.
+ *
+ * Exported for diagnostics only — the Off rule must never consult it. Measured on
+ * the live set: `[]` contained three models that accepted `none` and one that
+ * rejected it; `[{type:"toggle"}]` contained one that honoured it and one that
+ * ignored it. The shape carries no predictive power, so deriving an Off value from
+ * it is a guess with no evidence behind it.
+ */
+export function reasoningControlShape(record: CatalogRecord): "effort" | "empty" | "toggle" | "silent" {
+  const options = record.reasoning_options;
+  if (!Array.isArray(options)) return "silent";
+  let sawEffort = false;
+  let sawToggle = false;
+  for (const option of options) {
+    if (!isPlainObject(option)) continue;
+    if (option.type === "effort") sawEffort = true;
+    else if (option.type === "toggle") sawToggle = true;
+  }
+  if (sawEffort) return "effort";
+  if (sawToggle) return "toggle";
+  return options.length === 0 ? "empty" : "silent";
+}
+
+/** Stable fingerprint of exactly what an effort measurement is about. */
+export function reasoningFingerprint(record: CatalogRecord): string {
+  const options = Array.isArray(record.reasoning_options) ? record.reasoning_options : null;
+  return `${record.reasoning === false ? "no" : "yes"}:${options === null ? "absent" : JSON.stringify(options)}`;
+}
+
+/**
+ * Which instrument produced the effort samples on a record.
+ *
+ * Reading 1 never read `usage.reasoning` (the field `usageOf` did not copy), so
+ * every sample it wrote was a hard 0 — a constant, not a measurement. Those
+ * samples cannot be recognised from their VALUE: a model asked for `low` and
+ * reporting zero reasoning is possible, so "0" is a legitimate observation and
+ * guessing would be the very mistake this axis exists to remove.
+ *
+ * They are recognisable by their INSTRUMENT. A measurement format change
+ * invalidates the measurements taken under the old one, exactly as a changed
+ * `reasoning_options` invalidates a fingerprint; this is the same idea with the
+ * other operand. Nothing is lost: the old instrument could not produce a
+ * confirmed verdict at all, so no real measurement is thrown away — only
+ * baselines that would otherwise poison the median forever (a single stored 0
+ * alongside real samples keeps `median(baseline)` at 0, which `effortVerdictFrom`
+ * reads as "no claim", for ever).
+ */
+export const EFFORT_READING = 2;
+
+/**
+ * How many consecutive agreeing samples an effort verdict needs before it may be
+ * persisted.
+ *
+ * Measured 2026-10-06, `big-pickle` accepted `reasoning_effort:"none"` on six of
+ * nine identical requests and returned HTTP 400 on the other three, while
+ * `reasoning_content` was present on every 200. One sample therefore records the
+ * wrong row about a third of the time, and — unlike an `inconclusive` — nothing
+ * downstream can detect it, because the probe returned a clean 200.
+ *
+ * Three is the smallest count that turns an intermittent failure into a
+ * negligible one without making the round unconverge.
+ */
+export const EFFORT_CONCORDANCE = 3;
+
+
+/** The recent samples a verdict is judged against, oldest first. */
+export type EffortSamples = readonly MeasuredEffort["kind"][];
+
+/**
+ * Which spelling the probe is currently asking about.
+ *
+ * The round does not ADD a probe when `none` proves unusable — it changes what
+ * the request it was already making asks. Measured 2026-10-06, big-pickle never
+ * accumulates three agreeing samples for `none`, so it would sit unmeasured
+ * forever and the user would never get the Off row that `minimal` demonstrably
+ * provides (0 reasoning tokens across six samples). One request per round either
+ * way; only the question changes.
+ */
+export type EffortQuestion = "baseline" | "none" | (string & {});
+
+/**
+ * A candidate counts as a working Off below this fraction of the same model's
+ * omitted baseline, taken in the same round.
+ *
+ * Measured 2026-10-06 on the two models that can be reached:
+ *   big-pickle  minimal 0-8   against omitted 14-16  ->  0.00-0.57
+ *   longcat     minimal 36     against omitted 36-45  ->  0.80-1.00
+ * longcat's `minimal` output is byte-identical to omitting, so it genuinely
+ * does nothing there; big-pickle's is a 95-100% reduction.
+ *
+ * A RATIO, not an absolute count. The absolute counts would separate this pair
+ * too (8 against 36) and that is the trap: longcat's floor of 36 sits ABOVE
+ * big-pickle's omitted baseline of 14, so any fixed absolute number collides the
+ * moment a third model appears.
+ *
+ * 0.43 is DERIVED, not determined: it is the max-margin cut in log space of the
+ * measured bracket, and ANY value in (0.231, 0.800) classifies the whole
+ * dataset correctly. It is recorded as a judgement call so the next measurement
+ * does not get to choose it symmetrically. At 0.43 the margins are 1.86x on
+ * each side — nothing in the dataset lands closer.
+ */
+export const EFFORT_WORKING_RATIO = 0.43;
+
+/**
+ * Decisive rejections before the probe moves to the next candidate.
+ *
+ * One, not three. big-pickle's `none` sits at a ratio of 12.4 — a rejection so
+ * far outside the bracket that repeating it only spends quota to confirm what is
+ * already settled. `longcat` is the counter-example that keeps the fallback at
+ * all: its `none` is 1.578 and its lowest level is 0.800, so both candidates
+ * must be spent before the model can honestly be left with no Off row.
+ */
+export const EFFORT_FALLBACK_AFTER = 1;
+
+/** Samples per side before a verdict is drawn. A median needs more than one. */
+export const EFFORT_SAMPLES = 3;
+/**
+ * How many candidate samples a verdict costs before it can be persisted.
+ *
+ * Not `EFFORT_CONCORDANCE`: a candidate verdict only exists once
+ * `EFFORT_SAMPLES` samples have been judged against the model's own baseline
+ * (the median, not a per-sample test), and then `EFFORT_CONCORDANCE` of those
+ * verdicts must agree. Replay 2026-10-06: five candidate samples are consumed
+ * before a model confirms — samples 1 and 2 cannot be judged at all, and 3, 4
+ * and 5 are the first three verdicts.
+ */
+export const EFFORT_CANDIDATE_SAMPLES = EFFORT_SAMPLES + EFFORT_CONCORDANCE - 1;
+/**
+ * Requests one model may cost inside a single MANUAL round.
+ *
+ * The daily round keeps one request per model: nobody asked for it, and it spends
+ * the same bucket. A manual round is the user saying "measure these now", and one
+ * request left every model one sample short of a median — a completed round, an
+ * unchanged picker, and no way to tell progress from failure.
+ *
+ * Sized from the evidence thresholds rather than guessed: three baseline samples
+ * (a median needs more than one), one refusal (`EFFORT_FALLBACK_AFTER` is what
+ * moves a model off `none` onto its own lowest level), and five candidate ones at
+ * that level (the first two cannot be judged, and three judged verdicts must
+ * agree). `effortMeasurementPending` stops the loop the moment a model has its
+ * answer, so this is a CEILING, not a bill — a model whose `none` is the answer
+ * spends eight, and one whose `none` is refused spends the ninth on the fallback.
+ */
+export const MANUAL_SAMPLE_BUDGET = EFFORT_SAMPLES + EFFORT_FALLBACK_AFTER + EFFORT_CANDIDATE_SAMPLES;
+
+/**
+ * Requests one round may spend on the CAPABILITY axes — the ceiling question and
+ * the two declared-capability questions — per model.
+ *
+ * Deliberately NOT part of `samplesPerModel`. That number is the EFFORT axis's
+ * budget, and the daily round runs it at 1, so sharing the counter meant the
+ * ceiling and capability questions never fired outside a manual round: the block
+ * broke on `shots >= samplesPerModel` before its first request. ADR 0004 §49
+ * described the harvest as part of every round; the code said otherwise, and the
+ * code was right about what shipped and wrong about what was documented.
+ *
+ * Three is the whole budget, so a model that appears on Zen tonight is fully
+ * measured by tomorrow's daily round and costs nothing again on any round after
+ * that — the gate is the evidence, not the budget.
+ */
+export const CAPABILITY_SAMPLE_BUDGET = 3;
+
+/**
+ * Which spelling to ask about next.
+ *
+ * The baseline is asked for rather than assumed, because a threshold on an
+ * absolute count is not defensible across models. It costs nothing extra: the
+ * round alternates the question inside the one request it was already making,
+ * so the per-round cost is unchanged and the pairing is consecutive.
+ */
+/**
+ * The level to fall back on for a model whose `none` is unusable.
+ *
+ * The model's OWN lowest published level, not a fixed one. Measured 2026-10-06:
+ * space-bunny-free publishes `low…max` and its `low` brings reasoning to
+ * 0/9/22/37 against an omitted baseline of 35 — a working Off. Asking it for
+ * `minimal` instead measures a level it never published and finds nothing, so
+ * the row is withheld from a model that has one. A model publishing no ladder at
+ * all falls back to `minimal`, which is where big-pickle's 0/8 was measured.
+ */
+export function fallbackLevelFor(record: CatalogRecord): string {
+  const published: string[] = [];
+  for (const option of Array.isArray(record.reasoning_options) ? record.reasoning_options : []) {
+    if (!isPlainObject(option) || option.type !== "effort") continue;
+    for (const value of Array.isArray(option.values) ? option.values : []) {
+      if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) published.push(value);
+    }
+  }
+  // Lowest by the vocabulary's own order, not by declaration order.
+  for (const level of THINKING_LEVELS) {
+    if (level === "off") continue;
+    if (published.includes(level)) return level;
+  }
+  return "minimal";
+}
+
+/**
+ * How long a CONFIRMED effort verdict stands before it is re-litigated.
+ *
+ * Thirty days, and the clock only runs while nothing interesting happened. The
+ * point of a TTL here is not freshness — it is BOUNDING. A verdict that keeps
+ * absorbing samples has a median over an ever-growing set, which is a different
+ * statistic from the median of three that produced it: big-pickle's `minimal`
+ * alternates 0 and 8, and a slowly growing median can drift across the boundary
+ * and silently demote a control the model demonstrably supports.
+ */
+export const EFFORT_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * How long a vision/tools verdict stays authoritative.
+ *
+ * The effort axis has always had a TTL and the capability axes did not, which made
+ * a probe from months ago indistinguishable from one taken today: a model that
+ * gained tool support, or lost it, kept its mark for ever, and nothing could ever
+ * downgrade it. Thirty days matches the effort axis, so "stale" means the same
+ * thing on both.
+ */
+export const CAPABILITY_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/** Whether a confirmed effort verdict still stands. */
+export function effortVerdictFresh(
+  record: ProbeRecord | undefined,
+  fingerprint: string,
+  now: number,
+): boolean {
+  const effort = record?.effort;
+  if (effort === undefined) return false;
+  if (effort.fp !== fingerprint) return false;
+  if (record?.effortFrozenAt === undefined) return false;
+  return now - record.effortFrozenAt < EFFORT_TTL_MS;
+}
+
+/**
+ * Whether one more request would still teach this round something.
+ *
+ * The round asks a model the same question until the axis has an answer, not
+ * until a round ends: a round that spent one request per model left every model
+ * one sample short of a median, so a manual click could not change a capability
+ * row at all — the user saw a completed round and an unchanged picker.
+ *
+ * This is the loop condition, and it is derived from the evidence thresholds
+ * rather than a hard-coded count, so it stays correct when those move.
+ */
+export function effortMeasurementPending(
+  model: Model<Api>,
+  record: ProbeRecord | undefined,
+  question: EffortQuestion,
+): boolean {
+  // No Off axis to measure: a non-reasoning model has no map, so no sample of
+  // its effort could ever change what the user is offered.
+  if (!model.reasoning || model.thinkingLevelMap === undefined) return false;
+  if (question === "settled") return false;
+  if (question === "baseline") return (record?.effortBaselineTokens?.length ?? 0) < EFFORT_SAMPLES;
+  return (record?.effortTokens?.length ?? 0) < EFFORT_CANDIDATE_SAMPLES;
+}
+
+/**
+ * Whether this model's reasoning can be measured at all.
+ *
+ * A baseline of zero makes the axis STRUCTURALLY undecidable: the ratio test is
+ * `candidate < 0.43 × baseline`, and nothing is below 0.43 × 0, so neither "works"
+ * nor "noop" is reachable — and a question whose answer cannot land must not be
+ * asked at all.
+ *
+ * Measured 2026-10-06: `fledge-alpha-free` sends no `completion_tokens_details`
+ * (ADR 0004 §33), so its baseline reads 0. Stopping the LOOP was not enough: the
+ * round still opened with one shot, that shot asked the spelling, and its reading
+ * was filed — so the sample array grew by one every round for ever. Deciding it
+ * here instead means the round asks for LIVENESS only, exactly like a settled
+ * model, and nothing accumulates.
+ */
+function effortAxisUndecidable(record: ProbeRecord | undefined): boolean {
+  const baseline = record?.effortBaselineTokens;
+  return baseline !== undefined && baseline.length >= EFFORT_SAMPLES && median(baseline) === 0;
+}
+
+/**
+ * Models whose reasoning measurement is still open, in catalogue order.
+ *
+ * The panel needs to say "these still need measuring" rather than make the user
+ * infer it from a missing row, and it must be the SAME predicate the loop uses —
+ * an id whose axis is undecidable or settled is not pending either.
+ */
+export function pendingEffortIds(state: CatalogState): string[] {
+  // The SAME list the picker offers. `state.models` is the pre-gate catalogue,
+  // so a model Zen no longer lists would otherwise be reported as "still being
+  // measured" — the panel would then ask the user to keep clicking for a model
+  // that is not in their picker at all and never will be (live 2026-10-06: 28
+  // pending, 23 of them not-listed).
+  return effectiveList(state.models, state.zenIds, state.probes)
+    .filter((model) => !effortVerdictFresh(state.probes[model.id], "", 0))
+    .filter((model) => {
+      const record = state.probes[model.id];
+      const raw = state.cache?.models?.[model.id];
+      const question = nextEffortQuestion(record, raw === undefined ? "minimal" : fallbackLevelFor({ ...raw, id: model.id }));
+      if (question === "settled") return false;
+      return effortMeasurementPending(model, record, question);
+    })
+    .map((model) => model.id);
+}
+
+export function nextEffortQuestion(
+  record: ProbeRecord | undefined,
+  fallback = "minimal",
+  settled = false,
+): EffortQuestion {
+  if (effortAxisUndecidable(record)) return "settled";
+  // A confirmed verdict stands. The model is still probed for LIVENESS — that is
+  // unchanged and still how a `dead` verdict is earned — but no further effort
+  // sample is taken, because a verdict that keeps absorbing samples has a median
+  // over an ever-growing set. That is a different statistic from the three that
+  // produced it, and a slowly drifting median can silently demote a control the
+  // model demonstrably supports.
+  if (settled) return "settled";
+  // The liveness request IS the omitted request on a no-ladder model — its
+  // hardcoded `reasoning: "low"` clamps to omission there — so the baseline
+  // usually arrives without a round being spent on asking for it.
+  if ((record?.effortBaselineTokens?.length ?? 0) < EFFORT_SAMPLES) return "baseline";
+  if (typeof record?.effortQuestion === "string" && record.effortQuestion !== "none" && record.effortQuestion !== "baseline") {
+    return record.effortQuestion;
+  }
+  return (record?.effortDiscord ?? 0) >= EFFORT_FALLBACK_AFTER ? fallback : "none";
+}
+
+/**
+ * Whether a candidate brought reasoning down to the floor.
+ *
+ * Returns `undefined` when there is no baseline, which the caller must read as
+ * "no claim" rather than as a negative: a model we have not measured against
+ * itself has told us nothing about whether a level works.
+ */
+export function effortWorking(candidate: number, baseline: number | undefined): boolean | undefined {
+  if (baseline === undefined || baseline <= 0) return undefined;
+  return median([candidate]) < EFFORT_WORKING_RATIO * median([baseline]);
+}
+
+/**
+ * The median of a sample set.
+ *
+ * Classification runs on a MEDIAN, never per sample. Per-sample classification
+ * measures the classifier's fragility rather than the model's: big-pickle's
+ * `minimal` alternates 0 and 8, and a `=== 0` test flips on that even though
+ * both values sit two orders of magnitude below its baseline.
+ */
+function median(values: readonly number[]): number {
+  const sorted = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (sorted.length === 0) return Number.NaN;
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+/**
+ * The verdict for a candidate, judged on the medians of what has been seen.
+ *
+ * `undefined` means no claim: without enough of either side there is nothing to
+ * compare, and "we did not look" must never read as "it does not work".
+ */
+export function effortVerdictFrom(
+  candidateSamples: readonly number[] | undefined,
+  baselineSamples: readonly number[] | undefined,
+): boolean | undefined {
+  if (baselineSamples === undefined || baselineSamples.length === 0) return undefined;
+  if (candidateSamples === undefined || candidateSamples.length === 0) return undefined;
+  const base = median(baselineSamples);
+  const cand = median(candidateSamples);
+  if (!Number.isFinite(base) || !Number.isFinite(cand) || base <= 0) return undefined;
+  return cand < EFFORT_WORKING_RATIO * base;
+}
+
+/**
+ * Whether a fresh sample agrees with what came before.
+ *
+ * A sample that DISAGREES resets the tally rather than being averaged or
+ * out-voted: `big-pickle`'s six-to-three record would decide "accepted" by
+ * majority, which is precisely the reading its own data refutes — when it does
+ * accept `none`, the reasoning is still present.
+ *
+ * An `inconclusive` produces no sample at all and so leaves the tally untouched:
+ * a gated IP is not evidence about the model.
+ */
+export function effortVerdict(
+  previous: EffortSamples | undefined,
+  candidate: MeasuredEffort["kind"],
+): { kind: "sample"; samples: EffortSamples } | { kind: "discord"; samples: EffortSamples } | { kind: "confirmed" } {
+  const prior = Array.isArray(previous) ? previous : [];
+  const agrees = prior.length > 0 && prior.every((sample) => sample === candidate);
+  if (!agrees) {
+    // Keep only the newest: a stale disagreement must not delay forever.
+    return { kind: "discord", samples: [candidate] };
+  }
+  const samples = [...prior, candidate];
+  if (samples.length >= EFFORT_CONCORDANCE) return { kind: "confirmed" };
+  return { kind: "sample", samples };
+}
+
+/** Defensive read of a persisted effort measurement, in `isMeasuredChannel`'s style. */
+export function isMeasuredEffort(value: unknown): value is MeasuredEffort {
+  if (!isPlainObject(value)) return false;
+  if (value.kind !== "none-works" && value.kind !== "level-works" && value.kind !== "noop" && value.kind !== "rejected") {
+    return false;
+  }
+  if (typeof value.fp !== "string" || typeof value.at !== "number" || !isMeasuredChannel(value.api)) return false;
+  if (value.kind !== "level-works") return true;
+  return typeof value.level === "string" && (THINKING_LEVELS as readonly string[]).includes(value.level);
+}
+
+/**
+ * A persisted question is one this module can ask again.
+ *
+ * `none` and `baseline` are the round's own markers; anything else must be a
+ * level name pi-ai knows, because a question nobody can re-ask is a stuck model.
+ * The old reader allowed only `none` and `minimal`, so a fallback LEVEL — `low`
+ * on space-bunny-free — was dropped on restart and the model was asked `none`
+ * again, the very request its models.dev ladder refuses.
+ */
+function isEffortQuestion(value: unknown): value is EffortQuestion {
+  if (value === "none" || value === "baseline") return true;
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 
 /**
  * D6: the thinking levels models.dev publishes for this model, as pi-ai's
@@ -167,30 +624,109 @@ const OPT_IN_THINKING_LEVELS = new Set<string>(["xhigh", "max"]);
  * offer levels upstream rejects, which surfaces as an
  * `UNSUPPORTED_REASONING_EFFORT` failure rather than as a clamp.
  */
-export function thinkingLevelMapFor(record: CatalogRecord): Record<string, string | null> | undefined {
-  const options = record.reasoning_options;
-  if (!Array.isArray(options)) return undefined;
+export function thinkingLevelMapFor(
+  record: CatalogRecord,
+  channel: Api,
+  measured?: MeasuredEffort,
+  /** Levels the MODEL ITSELF named, from a refusal that enumerated them. */
+  selfReported?: readonly string[],
+): Record<string, string | null> | undefined {
+  // R0 — no reasoning claim: say nothing at all. An ABSENT `reasoning` is as
+  // little a claim as `false` is, and `getSupportedThinkingLevels` already
+  // answers ["off"] for a non-reasoning model, so a map here would be decoration.
+  if (record.reasoning !== true) return undefined;
+
   const published = new Set<string>();
-  for (const option of options) {
-    if (!isPlainObject(option) || option.type !== "effort") continue;
-    const values = option.values;
-    if (!Array.isArray(values)) continue;
-    for (const value of values) {
-      if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) {
-        published.add(value);
+  let hasLadder = false;
+  const options = record.reasoning_options;
+  if (Array.isArray(options)) {
+    for (const option of options) {
+      if (!isPlainObject(option) || option.type !== "effort") continue;
+      hasLadder = true;
+      const values = option.values;
+      if (!Array.isArray(values)) continue;
+      for (const value of values) {
+        if (typeof value !== "string") continue;
+        // Foreign spellings are DATA, not filtered out. Dropping "none" here is
+        // what silently discarded north-mini-code-free's only off member.
+        if ((THINKING_LEVELS as readonly string[]).includes(value)) published.add(value);
+        else if (FOREIGN_EFFORT_SPELLINGS[value] !== undefined) {
+          published.add(FOREIGN_EFFORT_SPELLINGS[value]);
+        }
       }
     }
   }
-  if (published.size === 0) return undefined;
+
+  // ALWAYS a map for a reasoning model. Returning `undefined` is NOT "no claim" —
+  // pi-ai reads an absent map as "offer everything", which is how seven live
+  // models were offered four levels models.dev publishes nothing for.
   const map: Record<string, string | null> = {};
+
+  // The single Off rule. `shape` is deliberately never consulted: measured on the
+  // live set, two models with the identical `[{type:"toggle"}]` shape behaved
+  // oppositely, and three of four `reasoning_options: []` models accepted "none"
+  // while the fourth rejected it with a hard 400.
+  if (published.has("off")) {
+    // R1 — the published vocabulary HAS an off member and names it.
+    map.off = "none";
+  } else if (measured !== undefined && measured.api === channel) {
+    // R3 — measured on THIS channel to reach zero.
+    map.off =
+      measured.kind === "none-works"
+        ? "none"
+        : measured.kind === "level-works" && measured.level !== undefined
+          ? measured.level
+          : null;
+  } else {
+    // Unmeasured, or measured on the other channel: no claim.
+    map.off = null;
+  }
+
+  // The ladder rows are NOT filtered by models.dev.
+  //
+  // Measured 2026-10-06, across eight models and both channels: NO ladder level
+  // has ever been refused — not a declared one, and not an undeclared one.
+  // `big-pickle` accepts `low` (164 reasoning tokens), `muse-spark-1.3` accepts a
+  // `max` it never published (516, the highest on that model, corroborated by
+  // its own 400 listing the allowed set), and `mimo-v2.6-flash-free` accepts
+  // `minimal` and `high`.
+  //
+  // The asymmetry with `off` is the whole reason the two are handled apart. An
+  // IGNORED ladder level is inert: the user gets the default, which is what the
+  // provider-default row also gives. An ignored `off` is the opposite of its
+  // promise — maximum thinking where the user asked for none — so `off` is
+  // gated on measurement and a ladder level is not.
+  //
+  // xhigh/max stay opt-in, as pi-ai intends: they are offered only where a
+  // DECLARATION named them, or a measurement showed one doing something.
+  //
+  // A model's OWN self-report is deliberately NOT one of those. It is evidence
+  // about VALIDITY — the spelling is accepted instead of 400'd — and that is
+  // exactly what it says. It is not evidence about AVAILABILITY, and the two come
+  // apart: a tier can accept `max` and route the request to `xhigh` instead,
+  // answering 200 with the reasoning count of a mode the user did not choose.
+  //
+  // Measured 2026-10-06 and confirmed by the operator: `max` is not open to
+  // individuals on this route. The refusal that names it lists
+  // `[minimal, low, medium, high, xhigh, max]`, and one `max` request came back
+  // 200 — with NO token count recorded, so nothing ever distinguished "honored"
+  // from "silently downgraded". models.dev does not publish `max` for this model
+  // either, which is what a tier that does not expose it looks like.
+  //
+  // The recorded vocabulary is kept: it is what makes a refusal useful later, and
+  // §19 already showed that a declaration's SHAPE carries no predictive power —
+  // a model's enumeration is a shape too, and it must not grant a capability.
+  //
+  // `selfReported` is a parameter this function accepts and deliberately does
+  // not consult for what to OFFER. It is kept on the signature because
+  // `derive` carries it as evidence and dropping it here would make the two look
+  // unrelated when they are the same record.
+  const named = new Set(published);
   for (const level of THINKING_LEVELS) {
-    // `off` stays absent (offered) rather than nulled: the user asked to keep
-    // it as an explicit choice. The placeholder effort this would otherwise
-    // put on the wire is stripped back to "no reasoning object" by the
-    // plugin's onPayload guard (see zen-provider.ts), so offering it is safe.
     if (level === "off") continue;
-    if (published.has(level)) map[level] = level;
-    else if (!OPT_IN_THINKING_LEVELS.has(level)) map[level] = null;
+    if (named.has(level)) map[level] = level;
+    else if (!OPT_IN_THINKING_LEVELS.has(level)) map[level] = level;
+    // else: xhigh/max absent means NOT offered, which is pi-ai's own rule.
   }
   return map;
 }
@@ -219,6 +755,22 @@ export interface DeriveOptions {
   readonly knownApis?: ReadonlyMap<string, Api>;
   /** An already identity-mapped record supplying the fallback field values. */
   readonly template: Model<Api>;
+  /**
+   * Per-model Off evidence, keyed by model id. Supplied rather than read from
+   * state so `derive()` stays pure and fixture-testable.
+   */
+  readonly measuredEffort?: ReadonlyMap<string, MeasuredEffort>;
+  /**
+   * Measured context windows, keyed by id. Supplied rather than read from state
+   * so `derive()` stays pure and fixture-testable, exactly like `measuredEffort`.
+   */
+  readonly measuredContext?: ReadonlyMap<string, MeasuredContext>;
+  /**
+   * Ceilings the ROUTE has stated about itself, keyed by id. Same reason, and it
+   * travels beside `measuredEffort` rather than inside it: this axis is about
+   * the request's own limits, not about the model's reasoning.
+   */
+  readonly measuredLimits?: ReadonlyMap<string, MeasuredLimits>;
 }
 
 export interface DerivedCatalog {
@@ -232,8 +784,8 @@ export interface DerivedCatalog {
  *
  *   - image input      ← `modalities.input` (pi-ai knows only text/image, so
  *                        audio/video/pdf are dropped, not silently kept)
- *   - context window   ← `limit.context`
- *   - max output       ← `limit.output`
+ *   - context window   ← `limit.context`, lifted where the endpoint stated its own
+ *   - max output       ← `limit.output`, lifted where the route accepted more
  *   - thinking levels  ← `reasoning_options[].values`
  *
  * A field models.dev does not publish falls back to the template, and the
@@ -246,6 +798,9 @@ function buildModel(
   record: CatalogRecord,
   template: Model<Api>,
   knownApis?: ReadonlyMap<string, Api>,
+  measured?: MeasuredEffort,
+  measuredContext?: MeasuredContext,
+  measuredLimits?: MeasuredLimits,
 ): Model<Api> {
   const id = typeof record.id === "string" && record.id !== "" ? record.id : "";
   const api = channelFor(record, knownApis);
@@ -254,19 +809,27 @@ function buildModel(
   const declaredInput = Array.isArray(modalities.input)
     ? modalities.input.filter((entry): entry is "text" | "image" => entry === "text" || entry === "image")
     : [];
-  const levels = thinkingLevelMapFor(record);
+  const levels = thinkingLevelMapFor(record, api, measured);
+  const contextWindow =
+    contextWindowFor(record, measuredContext) ?? finitePositive(limit.context) ?? template.contextWindow;
   return {
     ...template,
     id,
     name: typeof record.name === "string" && record.name !== "" ? record.name : id,
     api,
-    reasoning: typeof record.reasoning === "boolean" ? record.reasoning : template.reasoning,
-    input: declaredInput.length > 0 ? declaredInput : template.input,
+    // Absence is NOT `true`. The template resolves to mimo-v2.6-flash-free
+    // (reasoning true, input text+image), so inheriting it answered "models.dev
+    // did not tell us" with "inherit the most capable thing we know" — the same
+    // error as an undefined map, one field over.
+    reasoning: record.reasoning === true,
+    input: declaredInput.length > 0 ? declaredInput : ["text"],
     // Free by construction here (isFree already proved it); stated explicitly
     // so a stray inherited tier cannot reintroduce a non-zero rate.
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: finitePositive(limit.context) ?? template.contextWindow,
-    maxTokens: finitePositive(limit.output) ?? template.maxTokens,
+    contextWindow,
+    // The window first, because the output ceiling is bounded by it: a ceiling
+    // above the context it must fit inside is not a bigger ceiling, it is a lie.
+    maxTokens: maxTokensFor(record, id, contextWindow, measuredLimits) ?? template.maxTokens,
     thinkingLevelMap: (levels ?? undefined) as Model<Api>["thinkingLevelMap"],
     // `compat` is transport-specific. Carrying the template's completions
     // overrides onto a responses model would misconfigure it, so a channel
@@ -296,7 +859,16 @@ export function derive(section: CatalogRecord, options: DeriveOptions): DerivedC
     if (!isFree(record)) continue;
     // D1: `deprecated` is kept (a probe judges it); anything else is discarded.
     if (!isCatalogueStatus(record)) continue;
-    candidates.push(buildModel(record, options.template, options.knownApis));
+    candidates.push(
+      buildModel(
+        record,
+        options.template,
+        options.knownApis,
+        options.measuredEffort?.get(id),
+        options.measuredContext?.get(id),
+        options.measuredLimits?.get(id),
+      ),
+    );
   }
   // Sorted HERE, at the one place the list is born, so the snapshot, the
   // visible set and the picker all inherit the same order instead of each
@@ -430,6 +1002,18 @@ export interface CatalogCacheRecord {
   readonly models: CatalogRecord;
   /** Conclusive verdicts only; empty means "no history", i.e. all unprobed. */
   readonly probes: ProbeMap;
+  /**
+   * Ask-again cadence per model.
+   *
+   * Deliberately NOT inside `ProbeRecord`: a round that reached nothing must
+   * write nothing there, and a model we never reached has no verdict to give it.
+   */
+  /**
+   * Models whose stored verdict was NOT adopted, because a median-based verdict
+   * with no samples behind it cannot be reproduced. In-memory only: every write
+   * site names its fields, so this never reaches disk.
+   */
+  readonly droppedVerdicts?: readonly string[];
   /** When the last probe ROUND ran, whether or not it concluded anything. */
   readonly lastProbeAt: number;
   /**
@@ -469,6 +1053,14 @@ export interface ProbeRecord {
    */
   readonly swept?: boolean;
   /**
+   * When a swept `dead` verdict may be asked again.
+   *
+   * Written when the death is recorded, and READ by {@link isSettled}. It was
+   * documented here from the start and never consulted, which made every removal
+   * permanent — including the ones that were wrong.
+   */
+  readonly nextProbeAt?: number;
+  /**
    * The channel this model actually ANSWERED on, when a probe found one.
    *
    * Everything else about a model's channel is inference: a pi-ai builtin table
@@ -483,6 +1075,118 @@ export interface ProbeRecord {
    * carries one — a refusal says nothing about which channel would have worked.
    */
   readonly api?: string;
+  /**
+   * What was MEASURED about this model's Off control, if anything has been.
+   *
+   * Absent means "unmeasured", which is NOT the same as "measured negative" —
+   * conflating those two is the bug this whole axis exists to fix. `fp` and `api`
+   * are what make a stale measurement detectable rather than permanent.
+   */
+  readonly effort?: MeasuredEffort;
+  /**
+   * Levels this model enumerated in a refusal.
+   *
+   * Kept even though the round recorded nothing else from that request: the
+   * refusal is worthless as a verdict and valuable as a vocabulary, and the two
+   * must not be conflated.
+   */
+  readonly selfReported?: readonly string[];
+  /**
+   * When this model's effort verdict was last confirmed.
+   *
+   * Set only on confirmation, and it stops sample accumulation: a verdict that
+   * keeps absorbing samples has a median over a growing set, which is a different
+   * statistic from the three that produced it.
+   */
+  readonly effortFrozenAt?: number;
+  /**
+   * What was MEASURED about this model's context window, if anything has been.
+   *
+   * Written only by the clamp observation, and only after repeated agreement —
+   * a single silent reply is not evidence, and one gated round is not either.
+   */
+  readonly context?: MeasuredContext;
+  /**
+   * What was MEASURED about this model's declared capabilities, per axis.
+   *
+   * The two axes here are the ones a request can answer: give a model an image
+   * and ask what it sees, give it real tools and ask it to call one. Context and
+   * output are absent by design — they are not questions, they are ceilings.
+   *
+   * Written only when a measurement CONCLUDED. An upstream that was down, a
+   * bucket that was spent, or a reply that was all thinking and no text writes
+   * nothing, because "we could not find out" and "it cannot do this" are
+   * different facts and only the first one is true most often.
+   */
+  readonly capabilities?: Partial<Record<CapabilityAxis, CapabilityVerdict>>;
+  /**
+   * Ceilings the ROUTE has stated about this model, harvested from refusals.
+   *
+   * This is the mechanism that replaces a table of guesses: the numbers come
+   * from the route itself, at the moment it refused, and they are fingerprinted
+   * against the declaration they were stated about so a changed declaration
+   * discards them. `namedAt` records when — a ceiling stated last month may have
+   * moved, and the panel shows the age rather than implying permanence.
+   */
+  readonly limits?: MeasuredLimits;
+  /**
+   * Which instrument wrote the effort samples here. See {@link EFFORT_READING};
+   * a record without it is read as unmeasured on that axis.
+   */
+  readonly effortReading?: number;
+  /**
+   * The recent effort samples, oldest first. Persisted rather than held in
+   * memory so a restart does not restart the count — the cost of a lost tally is
+   * a few more rounds, and it is only ever spent on a model whose verdict is
+   * still unconfirmed.
+   */
+  readonly effortSamples?: EffortSamples;
+  /** Which spelling the probe is currently asking about. */
+  readonly effortQuestion?: EffortQuestion;
+  /** Discordant rounds seen on the current question; drives the fallback. */
+  readonly effortDiscord?: number;
+  /**
+   * The model's reasoning tokens when nothing was asked for, as of the last
+   * baseline round. A candidate is judged against THIS rather than against an
+   * absolute count.
+   */
+  readonly effortBaseline?: number;
+  /** Every candidate sample seen for the current question, kept to judge on. */
+  readonly effortTokens?: readonly number[];
+  /** Every omitted sample seen, the reference the candidate is judged against. */
+  readonly effortBaselineTokens?: readonly number[];
+  /**
+   * Consecutive clamp observations seen since the last write. A confidence
+   * gauge, not a verdict: a round that reaches nothing else still carries it
+   * forward, so a restart resumes the count instead of restarting it — which is
+   * the conservative direction, since `clampVerdict` raises only on agreement
+   * and losing the count would only ever repeat the observation.
+   */
+  readonly contextHits?: number;
+  /**
+   * Replies this model has had CUT OFF at the budget, counted from real traffic.
+   *
+   * `output` is the question the whole output axis turns on: the plugin sends a
+   * number, and this says whether a reply has ever wanted more of it. `context`
+   * is counted apart because it is a different event — the conversation ran out
+   * of room, which says nothing about the output budget being small.
+   *
+   * It costs nothing to keep: the transport sees `stopReason` on a request that
+   * was being sent anyway. The alternative is a synthetic generation, and those
+   * cost tens of thousands of tokens to answer a question real traffic answers for
+   * free.
+   */
+  readonly budgetHits?: { readonly output?: number; readonly context?: number; readonly at?: number };
+  /**
+   * Milliseconds to the FIRST stream event on a real reply, newest first.
+   *
+   * Total latency says how long the model took to finish; this says how long you
+   * waited before it started. A model that thinks for four seconds and then
+   * answers in one is not slow to use — it is slow to start — and the panel can
+   * only say that if it measured the two separately. Free: the transport sees
+   * the first event on a request that was being made anyway.
+   */
+  readonly firstTokenMs?: readonly number[];
 }
 
 export type ProbeMap = Record<string, ProbeRecord>;
@@ -511,6 +1215,52 @@ export function applyMeasuredChannel(models: readonly Model<Api>[], probes: Prob
 }
 
 /**
+ * The evidence a model's Off row is allowed to rest on.
+ *
+ * A record is dropped when its fingerprint or its channel no longer matches: the
+ * measurement is OF a claim, and if the claim changed or was made on another
+ * channel, the answer is about a question no longer being asked. Dropping it
+ * leaves the derived map in its unmeasured state, which is the honest default —
+ * an unmatched measurement must never widen what is offered.
+ *
+ * Two callers, one rule: the round when it records the answer, and the warm read
+ * when it adopts a cache that already holds one. Without both, the measurement is
+ * on disk and ignored — the exact failure `applyMeasuredChannel`'s comment warns of.
+ */
+export function measuredEffortFor(model: Model<Api>, probes: ProbeMap): MeasuredEffort | undefined {
+  const effort = probes[model.id]?.effort;
+  if (effort === undefined) return undefined;
+  if (effort.api !== model.api) return undefined;
+  return effort;
+}
+
+/**
+ * Collect the per-model evidence `derive()` needs, in one pass.
+ *
+ * `section` is the raw models dictionary rather than the derived list, because
+ * the fingerprint is computed from the record as models.dev publishes it — the
+ * thing the measurement is actually about.
+ */
+export function measuredEffortMap(
+  models: readonly Model<Api>[],
+  section: CatalogRecord,
+  probes: ProbeMap,
+): Map<string, MeasuredEffort> {
+  const out = new Map<string, MeasuredEffort>();
+  for (const model of models) {
+    const effort = measuredEffortFor(model, probes);
+    if (effort === undefined) continue;
+    const raw = section[model.id];
+    // The fingerprint guard: an older measurement about a revised declaration is
+    // discarded rather than applied.
+    if (!isPlainObject(raw)) continue;
+    if (effort.fp !== reasoningFingerprint({ ...raw, id: model.id })) continue;
+    out.set(model.id, effort);
+  }
+  return out;
+}
+
+/**
  * What the transport layer reports for one probe. Structurally compatible with
  * `zen-provider`'s `ProbeOutcome`; declared here so this module keeps no
  * dependency on the transport and no import cycle is introduced. A prober may
@@ -527,6 +1277,36 @@ export interface ProbeResult {
   readonly api?: Api;
   /** Machine-readable failure code; the panel localizes it rather than guessing. */
   readonly code?: string;
+  /**
+   * What an `ok` observed about `reasoning_effort:"none"`, since the probe
+   * sends it at the payload boundary. Deliberately coarse: the round, not the
+   * prober, decides when enough of these agree to persist.
+   */
+  readonly effort?: { readonly kind: "baseline" | "candidate"; readonly tokens: number };
+  /**
+   * What a CAPABILITY question concluded, on a reply that carried an answer.
+   *
+   * Absent means the request taught nothing — no text, a refusal, a spent
+   * bucket — and the round writes nothing for it. That is the same distinction
+   * the effort axis makes between a sample and an absence, and it is what keeps
+   * an upstream outage from being persisted as a missing capability.
+   */
+  readonly capability?: { readonly axis: CapabilityAxis; readonly ok: boolean; readonly detail: string };
+  /**
+   * Ceilings the ROUTE stated about itself in the refusal that ended this
+   * probe, when it named any. Harvested from every failure, because it is free:
+   * the request was being sent anyway, and a refusal returns a number where an
+   * acceptance returns nothing.
+   */
+  readonly ceilings?: { readonly output?: number; readonly context?: number };
+  /**
+   * Levels this model enumerated in a refusal.
+   *
+   * Kept even though the round recorded nothing else from that request: the
+   * refusal is worthless as a verdict and valuable as a vocabulary, and the two
+   * must not be conflated.
+   */
+  readonly selfReported?: readonly string[];
   /** HTTP status the transport saw; 0 means no response ever arrived. */
   readonly http?: number;
   /**
@@ -537,25 +1317,178 @@ export interface ProbeResult {
    * Carried into the round record so the panel can say which.
    */
   readonly marker?: string | null | undefined;
+  /**
+   * The body said the request SHAPE is not supported for this model
+   * ("… not supported for format openai").
+   *
+   * Distinct from a refusal about the caller, and the round needs the
+   * difference to attribute it: a shape the PLUGIN injected is evidence about
+   * that spelling, while the same sentence for a channel the plugin GUESSED is
+   * evidence about the channel.
+   */
+  readonly formatScoped?: boolean;
 }
 
-/** Read persisted verdicts defensively: a damaged entry is dropped, not fatal. */
-function readProbes(value: unknown): ProbeMap {
-  if (!isPlainObject(value)) return {};
+/**
+ * A stored verdict's KIND is derived from its own samples, every time it is
+ * read.
+ *
+ * For a while the round re-derived that kind from the question spelling
+ * ("were we asking about `none`, or about a level?") instead of taking it from
+ * the confirmed sample, so a confirmed `noop` could be stored as
+ * `level-works`. Live 2026-10-06: `longcat-2.5-preview-free` carried
+ * `[1,36,36,36,36]` against a `[36,36,36]` baseline — median 36 against a
+ * threshold of 15.48, no reduction at all — and was handed an Off row at
+ * `minimal`.
+ *
+ * The verdict is a pure function of those samples, and the samples sit right
+ * beside it, so there is nothing to wait for and no request to spend: recompute.
+ * A model whose verdict is stored without samples yields no recomputation and
+ * no claim, which is the same place the unsupported check above already sends
+ * it.
+ */
+function correctedEffortKind(entry: Record<string, unknown>): MeasuredEffort | undefined {
+  if (!isMeasuredEffort(entry.effort)) return undefined;
+  const effort = entry.effort;
+  // A refusal is decided by refusals, not by a median; there is nothing to
+  // recompute and nothing that could contradict it.
+  if (effort.kind === "rejected") return effort;
+  const tokens = Array.isArray(entry.effortTokens) ? entry.effortTokens : undefined;
+  const baseline = Array.isArray(entry.effortBaselineTokens) ? entry.effortBaselineTokens : undefined;
+  const verdict = effortVerdictFrom(tokens, baseline);
+  // No samples to judge from: make no claim rather than carry one we cannot check.
+  if (verdict === undefined) return undefined;
+  if (verdict) {
+    // It reduces reasoning. `level-works` and `none-works` are the same finding
+    // spoken in the words of the level that was asked.
+    return effort.level === undefined ? { ...effort, kind: "none-works" } : { ...effort, kind: "level-works" };
+  }
+  // It reduces nothing. That is `noop`, whatever spelling was asked.
+  return { ...effort, kind: "noop", level: undefined };
+}
+
+/**
+ * Read persisted verdicts defensively: a damaged entry is dropped, not fatal.
+ *
+ * Every evidence field the round writes MUST be read here, and the reader is
+ * the second half of that contract. Three were missing, which made the write
+ * side a fiction: `effortFrozenAt` (the marker that stops a confirmed verdict
+ * from being re-litigated) and every `effortQuestion` other than
+ * `none`/`minimal` (a fallback LEVEL — `low` on space-bunny-free — was silently
+ * dropped, so a restart sent the model back to `none`).
+ *
+ * `selfReported` is read back for the same reason even though it no longer
+ * decides anything: it is the only record of what a model's refusal said it
+ * accepts, and that is worth keeping for a cross-check that does not exist yet.
+ */
+/**
+ * Defensive read of a persisted capability verdict.
+ *
+ * An axis is kept only if it carries all three parts of a measurement. A half
+ * written entry is not a weak verdict, it is a claim with no evidence attached —
+ * and the panel would render it as measured.
+ */
+function readCapabilities(value: unknown): Partial<Record<CapabilityAxis, CapabilityVerdict>> | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const out: Partial<Record<CapabilityAxis, CapabilityVerdict>> = {};
+  for (const axis of ["vision", "tools"] as const) {
+    const entry = value[axis];
+    if (!isPlainObject(entry)) continue;
+    if (typeof entry.ok !== "boolean") continue;
+    if (typeof entry.at !== "number" || !Number.isFinite(entry.at)) continue;
+    if (typeof entry.fp !== "string" || entry.fp === "") continue;
+    out[axis] = { ok: entry.ok, at: entry.at, fp: entry.fp };
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
+function readProbes(value: unknown): { probes: ProbeMap; droppedVerdicts: string[] } {
+  const droppedVerdicts: string[] = [];
+  if (!isPlainObject(value)) return { probes: {}, droppedVerdicts };
   const probes: ProbeMap = {};
   for (const [id, entry] of Object.entries(value)) {
     if (!isPlainObject(entry)) continue;
     if (entry.verdict !== "ok" && entry.verdict !== "dead") continue;
     if (typeof entry.at !== "number" || !Number.isFinite(entry.at)) continue;
+    // Effort samples written by an older instrument are not weak evidence, they
+    // are a constant; see EFFORT_READING. Dropped here so the model is measured
+    // again rather than judged against numbers that were never read from a
+    // response. The verdict itself is kept when there is one: the old instrument
+    // could not confirm one, so a record carrying `effort` already says it came
+    // from this one.
+    const readableEffort = entry.effortReading === EFFORT_READING || isMeasuredEffort(entry.effort);
+    // A median-based verdict whose samples are gone is not a verdict any more —
+    // it is an assertion nobody can reproduce. 0.3.1 confirmed those verdicts and
+    // then cleared `effortTokens`, so every one of them is unsupported (live
+    // 2026-10-06: longcat-2.5-preview-free confirmed at a level the recorded
+    // measurement says does nothing). Dropping it here re-measures the model on
+    // the next round instead of trusting a number whose evidence was deleted by
+    // the code that produced it.
+    //
+    // `rejected` is exempt: it is decided by refusals, not by a median, so it
+    // legitimately has no samples.
+    const unsupported =
+      isMeasuredEffort(entry.effort) &&
+      entry.effort.kind !== "rejected" &&
+      (!Array.isArray(entry.effortTokens) || entry.effortTokens.length === 0);
+    if (unsupported) droppedVerdicts.push(id);
     probes[id] = {
+      ...(unsupported ? {} : { effort: correctedEffortKind(entry) }),
       verdict: entry.verdict,
       at: entry.at,
       ...(typeof entry.reason === "string" && entry.reason !== "" ? { reason: entry.reason } : {}),
       ...(entry.swept === true ? { swept: true } : {}),
+      ...(typeof entry.nextProbeAt === "number" && Number.isFinite(entry.nextProbeAt)
+        ? { nextProbeAt: entry.nextProbeAt }
+        : {}),
       ...(isMeasuredChannel(entry.api) ? { api: entry.api } : {}),
+      ...(isMeasuredContext(entry.context) ? { context: entry.context } : {}),
+      ...(readCapabilities(entry.capabilities) === undefined ? {} : { capabilities: readCapabilities(entry.capabilities) }),
+      // A `fp: ""` entry is the recorded fact that the route named nothing when
+      // it was asked. It IS read back, so a restart does not re-ask, but it can
+      // never become a measurement: an empty fingerprint matches no
+      // `contextFingerprint`, so every ceiling check skips it, and the panel
+      // projection checks the empty string separately.
+      ...(isMeasuredLimits(entry.limits) ? { limits: entry.limits } : {}),
+      ...(readBudgetHits(entry.budgetHits) === undefined ? {} : { budgetHits: readBudgetHits(entry.budgetHits) }),
+      ...(Array.isArray(entry.firstTokenMs)
+        ? { firstTokenMs: entry.firstTokenMs.filter((n) => typeof n === "number" && Number.isFinite(n) && n >= 0).slice(0, 5) }
+        : {}),
+      ...(Array.isArray(entry.selfReported)
+        ? { selfReported: entry.selfReported.filter((level): level is string => typeof level === "string") }
+        : {}),
+      ...(typeof entry.effortReading === "number" && Number.isFinite(entry.effortReading)
+        ? { effortReading: entry.effortReading }
+        : {}),
+      ...(readableEffort && Array.isArray(entry.effortSamples)
+        ? { effortSamples: entry.effortSamples.filter((k) => typeof k === "string") as EffortSamples }
+        : {}),
+      ...(readableEffort && isEffortQuestion(entry.effortQuestion) ? { effortQuestion: entry.effortQuestion } : {}),
+      ...(readableEffort && !unsupported && typeof entry.effortFrozenAt === "number" && Number.isFinite(entry.effortFrozenAt)
+        ? { effortFrozenAt: entry.effortFrozenAt }
+        : {}),
+      ...(readableEffort && typeof entry.effortDiscord === "number" && Number.isFinite(entry.effortDiscord)
+        ? { effortDiscord: entry.effortDiscord }
+        : {}),
+      ...(readableEffort && typeof entry.effortBaseline === "number" && Number.isFinite(entry.effortBaseline)
+        ? { effortBaseline: entry.effortBaseline }
+        : {}),
+      ...(typeof entry.contextHits === "number" && Number.isFinite(entry.contextHits)
+        ? { contextHits: entry.contextHits }
+        : {}),
+      ...(readableEffort && Array.isArray(entry.effortTokens)
+        ? { effortTokens: entry.effortTokens.filter((n) => typeof n === "number" && Number.isFinite(n)) }
+        : {}),
+      ...(readableEffort && Array.isArray(entry.effortBaselineTokens)
+        ? { effortBaselineTokens: entry.effortBaselineTokens.filter((n) => typeof n === "number" && Number.isFinite(n)) }
+        : {}),
     };
   }
-  return probes;
+  // The ids whose verdict could not be adopted. Collected HERE because the
+  // sanitised map has already lost the evidence that they had one: whoever
+  // restores the catalogue must be able to tell "never measured" from "we just
+  // decided we do not know", and only this list says which.
+  return { probes, droppedVerdicts };
 }
 
 /** D5: `$DSH_HOME/dsh-opencode-free/catalog.json` (same convention as dsh-pocket). */
@@ -574,12 +1507,14 @@ export async function readCache(path: string): Promise<CatalogCacheRecord | null
     // carrying the old `opencode` provider record is rejected outright rather
     // than adopted as a catalogue.
     if (!isPlainObject(parsed.models)) return null;
+    const read = readProbes(parsed.probes);
     return {
       version: CACHE_VERSION,
       etag: typeof parsed.etag === "string" ? parsed.etag : undefined,
       fetchedAt: typeof parsed.fetchedAt === "number" ? parsed.fetchedAt : 0,
       models: parsed.models,
-      probes: readProbes(parsed.probes),
+      probes: read.probes,
+      droppedVerdicts: read.droppedVerdicts,
       lastProbeAt:
         typeof parsed.lastProbeAt === "number" && Number.isFinite(parsed.lastProbeAt)
           ? parsed.lastProbeAt
@@ -722,16 +1657,236 @@ export interface CatalogSnapshot {
 }
 
 /**
- * The three facts the detail-page panel renders per row. `thinking` is the
- * strongest published thinking level (`"Max"`, `"XHigh"`, …) or `null` when
- * the model publishes no level list — the panel shows no thinking badge then,
- * rather than guessing. The raw level id travels here; display capitalization
- * is the panel's business.
+ * The axes a round can MEASURE, as opposed to declare.
+ *
+ * `vision` and `tools` are the two the panel has always shown or implied without
+ * ever checking: the vision badge is a declaration copied from models.dev, and
+ * "tool calls work" was, until 2026-10-07, an inference from the admission gate.
+ * Both are answerable with one request, so both are worth a slot.
+ *
+ * Context and output are NOT here: they are not questions a cheap request can
+ * ask, they are ceilings measured against the request body. They carry their own
+ * seed tables ({@link SEED_CONTEXT}, {@link SEED_OUTPUT}) and their own runtime
+ * observation (`observeClamp`).
+ */
+export type CapabilityAxis = "vision" | "tools";
+
+/**
+ * What one measurement of an axis concluded.
+ *
+ * `ok` false is deliberately rare: the round records `false` only when the model
+ * ANSWERED and the answer was wrong (it named the wrong colour, or replied in
+ * prose instead of calling the tool). A model that could not be reached records
+ * nothing at all — the same rule the effort axis follows, and for the same
+ * reason: absent is "we do not know", and reading it as "no" would retire a
+ * capability on the strength of an upstream outage.
+ */
+export interface CapabilityVerdict {
+  readonly ok: boolean;
+  readonly at: number;
+  /** Fingerprint of the record this was measured against. */
+  readonly fp: string;
+}
+
+/**
+ * Stable fingerprint of what a capability measurement is ABOUT.
+ *
+ * A vision verdict is about a model that accepts images, so it is discarded when
+ * the declared modalities change; a tool verdict is about nothing the declaration
+ * says, but it is kept on the same fingerprint so one rule covers both.
+ */
+export function capabilityFingerprint(record: CatalogRecord): string {
+  const limit = isPlainObject(record.limit) ? record.limit : {};
+  const modalities = isPlainObject(record.modalities) ? record.modalities : {};
+  const input = Array.isArray(modalities.input) ? modalities.input.join("+") : "-";
+  return `${String(limit.context ?? "-")}:${String(limit.output ?? "-")}:${input}`;
+}
+
+/**
+ * Capabilities this plugin has MEASURED on the live route, by model id.
+ *
+ * Only `true` is ever seeded. Measured 2026-10-07, one request each, and the
+ * requests are the ones the panel's claims had been standing in for:
+ *
+ *   tools — asked to run `echo capability-probe` with three REAL schemas (the
+ *     admission gate's stubs say "Do not call", which would make a compliant
+ *     model look incapable). 9 of the live models emitted a correct tool call.
+ *   vision — a 64x64 PNG, magenta over lime, asked to name the TOP half. Every
+ *     model that declares image input and answered said `magenta`, while the
+ *     no-image control said "no image was attached" (mimo) and `blue`
+ *     (space-bunny) — the wrong answer, which is what proves the image carried it.
+ *
+ * `ling-3.0-flash-fin-free` and `fledge-alpha-free` learned nothing (an endpoint
+ * that has answered `Endpoint is unavailable.` since 2026-10-06, and an upstream
+ * 500), so they are ABSENT rather than seeded false — the same distinction the
+ * effort axis makes between "unmeasured" and "measured negative".
+ */
+const SEED_CAPABILITIES: Readonly<
+  Record<string, { readonly vision?: true; readonly tools?: true }>
+> = {
+  "mimo-v2.6-flash-free": { vision: true, tools: true },
+  "space-bunny-free": { vision: true, tools: true },
+  "longcat-2.5-preview-free": { vision: true, tools: true },
+  "muse-spark-1.2-contributor-free": { vision: true, tools: true },
+  "muse-spark-1.3-contributor-free": { vision: true, tools: true },
+  "nemotron-3.5-lightning-free": { tools: true },
+  "nemotron-3-ultra-free": { tools: true },
+  "ling-3.1-flash-free": { tools: true },
+  "big-pickle": { tools: true },
+};
+
+/**
+ * The measured verdict for one axis, from the round first and the seed second.
+ *
+ * `now` exists for the TTL: a verdict older than {@link CAPABILITY_TTL_MS reads as
+ * unmeasured, so the axis is asked again on the next manual round. It is not
+ * deleted — a stale entry is still a fact, it is just no longer current, and the
+ * difference matters when someone asks "how old is that tick?".
+ */
+export function measuredCapabilityFor(
+  record: CatalogRecord | undefined,
+  id: string,
+  axis: CapabilityAxis,
+  probes: ProbeMap | undefined,
+  now?: number,
+): CapabilityVerdict | undefined {
+  if (record === undefined) return undefined;
+  const fp = capabilityFingerprint(record);
+  const fresh = (verdict: CapabilityVerdict | undefined): CapabilityVerdict | undefined => {
+    if (verdict === undefined) return undefined;
+    // A seed carries `at: 0` — it is a property of the shipped table, not of a
+    // moment — so the TTL cannot apply to it without expiring a fact that was
+    // never dated.
+    if (now !== undefined && verdict.at > 0 && now - verdict.at > CAPABILITY_TTL_MS) return undefined;
+    return verdict;
+  };
+  const live = fresh(probes?.[id]?.capabilities?.[axis]);
+  if (live !== undefined && live.fp === fp) return live;
+  const seeded = SEED_CAPABILITIES[id]?.[axis];
+  // A seed carries no timestamp of its own: it is a property of the shipped
+  // table, which changes in a commit, not a fact about a moment. `at: 0` is what
+  // keeps it out of any "measured N days ago" arithmetic.
+  return seeded === true ? { ok: true, at: 0, fp } : undefined;
+}
+
+/**
+ * The facts the detail-page panel renders per row.
+ *
+ * `thinking` is the strongest published thinking level (`"Max"`, `"XHigh"`, …)
+ * or `null` when the model publishes no level list — the panel shows no thinking
+ * badge then, rather than guessing. The raw level id travels here; display
+ * capitalization is the panel's business.
+ *
+ * The two NUMBERS are the point of the change. `contextWindow` and `maxOutput`
+ * are read off the same `Model<Api>` pi-ai clamps the request with, so the panel
+ * cannot describe a limit the request path does not use — and `declaredContext`
+ * /
+ * `declaredOutput` travel beside them so a reader can see when the shipped number
+ * is not the published one.
+ *
+ * `measured` says, per axis, whether the number or badge in this row was
+ * verified on the route or copied from models.dev. A panel that shows a declared
+ * 200,000 next to a measured 1,048,576 with nothing to tell them apart is worse
+ * than one that shows only the declaration: both look equally true.
  */
 export interface ModelCapability {
   readonly id: string;
   readonly image: boolean;
   readonly thinking: string | null;
+  /** What pi-ai will clamp this conversation against. */
+  readonly contextWindow: number | undefined;
+  /**
+   * The `max_tokens` budget pi-ai will put on the wire.
+   *
+   * Named for what it is. It is the largest budget the route takes, NOT an
+   * output length any model has produced — presenting it as "maximum output" is
+   * how a 1,040,384 budget came to read as a million-token reply nobody has
+   * ever seen (ADR 0004 §43).
+   */
+  readonly outputBudget: number | undefined;
+  /**
+   * The largest reply this plugin has watched this model produce, when one has
+   * been watched. Absent means never watched — NOT "cannot write", and NOT
+   * "writes exactly the budget".
+   */
+  readonly observedOutput: number | undefined;
+  /** What models.dev published, for the two numbers above. */
+  readonly declaredContext: number | undefined;
+  readonly declaredOutput: number | undefined;
+  /** The ladder actually offered, including `off` when it is offered. */
+  readonly levels: readonly string[];
+  /** The Off spelling that is MEASURED to stop reasoning, else null. */
+  readonly off: string | null;
+  /**
+   * Ceilings the ROUTE has stated about this model, when it has named any.
+   *
+   * These are the interval's other end. A budget is only meaningful as a range:
+   * a reply has been watched at `observedOutput`, and the route says nothing
+   * above `statedOutput`. Neither is the ceiling — one is the low bound, the
+   * other the high bound — and a row that shows only the budget hides that.
+   */
+  readonly stated?: { readonly output?: number; readonly context?: number; readonly at: number };
+  /**
+   * Replies this model has had cut off at the budget, from REAL traffic.
+   *
+   * The whole output axis rests on a number nobody can verify by asking the
+   * model — whether a reply ever wants more than we send. This counts the times
+   * one did, for free, on requests that were happening anyway. Zero is the
+   * useful reading: it means the budget has not bound, so raising it would have
+   * bought nothing, and the honest thing to say is that.
+   */
+  readonly truncated?: { readonly output?: number; readonly context?: number };
+  /** Median first-token latency over real replies, when any were recorded. */
+  readonly firstTokenMs?: number;
+  /** Per axis: was this verified on the route, or copied from a declaration? */
+  /**
+   * Where each number on this row COMES FROM — which is not the same question as
+   * "is it true".
+   *
+   * There were four booleans here once, computed as "differs from what models.dev
+   * published", and they collapsed four different kinds of evidence into one word:
+   * a ceiling the route stated in its own refusal, a ceiling a vendor published on
+   * its model page, a reply somebody watched a model finish, and a raise inferred
+   * from a clamp signature all rendered as 已实测. That is the ambiguity that
+   * produced "一百万输出明显不对" — and it was ours, not the publisher's.
+   *
+   * `declared` means the panel is showing models.dev's number unaltered, which is
+   * a legitimate answer and is now distinguishable from "we changed it".
+   */
+  readonly evidence: {
+    readonly context: Evidence;
+    readonly output: Evidence;
+    /** `none` when the model makes no such claim (no image input declared). */
+    readonly vision: Evidence;
+    readonly tools: Evidence;
+  };
+}
+
+/**
+ * One model's provenance for one axis.
+ *
+ * Ordered by how much the statement can be trusted to still hold, which is also
+ * the order the panel prefers when two sources supply the same number.
+ */
+export type Evidence =
+  /** The route said so about itself, in a refusal that named a limit. */
+  | "route"
+  /** The model vendor published it. */
+  | "vendor"
+  /** A generation this plugin watched to its end. */
+  | "witnessed"
+  /** Inferred from a clamp signature — a positive claim about an UNDER-stated value. */
+  | "inferred"
+  /** models.dev's number, unaltered. */
+  | "declared"
+  /** There is no claim on screen for this axis. */
+  | "none";
+
+const EVIDENCE_TRUST: readonly Evidence[] = ["route", "vendor", "witnessed", "inferred", "declared"];
+
+/** The most-trusted of several sources; `none` only when all of them are. */
+function preferredEvidence(values: readonly Evidence[]): Evidence {
+  return EVIDENCE_TRUST.find((candidate) => values.includes(candidate)) ?? "none";
 }
 
 /** Strongest-first thinking levels; `off` is never a badge. */
@@ -765,12 +1920,163 @@ export function topThinkingLevel(model: Model<Api>): string | null {
   return null;
 }
 
+/**
+ * The capability axes a round would ask about for this model right now, in a
+ * fixed order.
+ *
+ * Vision is only asked of a model that DECLARES image input: there is no badge
+ * on screen for a model that claims no vision, so there is nothing on screen to
+ * hold to an answer. Tools is asked of every model, because the anonymous gate
+ * already assumes every request carries them — that assumption is exactly what
+ * was never checked.
+ *
+ * A model with evidence is never asked again. That is what makes this affordable:
+ * the cost is one request per axis per model, ONCE, and the seed table means the
+ * models already measured on 2026-10-07 cost nothing at all.
+ */
+export function capabilityQuestionsFor(
+  model: Model<Api>,
+  record: CatalogRecord | undefined,
+  probes: ProbeMap | undefined,
+  now?: number,
+): CapabilityAxis[] {
+  const out: CapabilityAxis[] = [];
+  const declaresImage = Array.isArray(model.input) && model.input.includes("image");
+  if (declaresImage && measuredCapabilityFor(record, model.id, "vision", probes, now) === undefined) out.push("vision");
+  if (measuredCapabilityFor(record, model.id, "tools", probes, now) === undefined) out.push("tools");
+  return out;
+}
+
+/**
+ * Where the advertised OUTPUT number came from.
+ *
+ * The winner is whichever source supplied the largest figure, because that is the
+ * number pi-ai will send — and ties go to the more trustworthy source, so a
+ * ceiling the route states beats a vendor page that happens to agree.
+ */
+export function outputEvidenceFor(
+  record: CatalogRecord | undefined,
+  id: string,
+  shown: number,
+  limits?: MeasuredLimits | undefined,
+): Evidence {
+  if (record === undefined) return "none";
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.output : undefined);
+  if (declared === undefined) return "none";
+  const seed = SEED_OUTPUT[id];
+  const seedApplies = seed !== undefined && seed.declared === declared;
+  const routeStated =
+    limits !== undefined && limits.fp === contextFingerprint(record) ? finitePositive(limits.output) : undefined;
+  const claims: Evidence[] = ["declared"];
+  if (seedApplies && seed?.named !== undefined && seed.named === shown) claims.push("vendor");
+  if (seedApplies && seed?.observed !== undefined && seed.observed === shown) claims.push("witnessed");
+  if (routeStated !== undefined && routeStated === shown) claims.push("route");
+  return preferredEvidence(claims);
+}
+
+/**
+ * Where the advertised CONTEXT number came from.
+ *
+ * `inferred` is the clamp-signature raise, which is a positive claim about a value
+ * being understated — kept apart from `route` because the route never said it.
+ */
+export function contextEvidenceFor(
+  record: CatalogRecord | undefined,
+  shown: number,
+  measured?: MeasuredContext | undefined,
+): Evidence {
+  if (record === undefined) return "none";
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.context : undefined);
+  if (declared === undefined) return "none";
+  if (declared === shown) return "declared";
+  if (measured === undefined || measured.fp !== contextFingerprint(record)) return "declared";
+  return measured.source === "inferred" ? "inferred" : "route";
+}
+
+/** The median of a newest-first sample list, or undefined when there is none. */
+function firstTokenMedian(samples: readonly number[] | undefined): number | undefined {
+  if (samples === undefined || samples.length === 0) return undefined;
+  const sorted = [...samples].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
 /** Project one effective record to the panel's capability card. */
-export function modelCapability(model: Model<Api>): ModelCapability {
+export function modelCapability(
+  model: Model<Api>,
+  context?: {
+    /** The raw models.dev record, for the declared values and the fingerprints. */
+    readonly record?: CatalogRecord | undefined;
+    readonly probes?: ProbeMap | undefined;
+    /** The window measurement, so the card can say WHERE the number came from. */
+    readonly measured?: MeasuredContext | undefined;
+    readonly measuredEffort?: MeasuredEffort | undefined;
+    readonly limits?: MeasuredLimits | undefined;
+    /** Truncation counters from real traffic, when the probe record has them. */
+    readonly budgetHits?: ProbeRecord["budgetHits"];
+    /** Wall clock, so a verdict older than the TTL reads as unmeasured. */
+    readonly now?: number;
+    /** Newest-first first-token samples from real replies. */
+    readonly firstTokenMs?: readonly number[] | undefined;
+  },
+): ModelCapability {
+  const record = context?.record;
+  const limits = context?.limits;
+  const limit = isPlainObject(record?.limit) ? record.limit : {};
+  const map = model.thinkingLevelMap as Record<string, string | null> | undefined;
+  const levels = map !== null && typeof map === "object" ? Object.keys(map).filter((level) => typeof map[level] === "string") : [];
+  const vision = measuredCapabilityFor(record, model.id, "vision", context?.probes, context?.now);
+  const tools = measuredCapabilityFor(record, model.id, "tools", context?.probes, context?.now);
+  // `off` is `null` in the map when it is offered but unproven, so a string is
+  // the only reading that says "this spelling is known to stop reasoning".
+  const off = map !== null && typeof map === "object" && typeof map.off === "string" ? map.off : null;
   return {
     id: model.id,
     image: Array.isArray(model.input) && model.input.includes("image"),
     thinking: topThinkingLevel(model),
+    contextWindow: model.contextWindow,
+    outputBudget: model.maxTokens,
+    observedOutput: observedOutputFor(record ?? {}, model.id, model.maxTokens),
+    declaredContext: finitePositive(limit.context),
+    declaredOutput: finitePositive(limit.output),
+    levels,
+    off,
+    // Only when it names something: `fp: ""` is the record of a route that said
+    // nothing, and it must not reach the panel as a number.
+    ...(limits?.fp === "" || limits === undefined
+      ? {}
+      : {
+          stated: {
+            ...(limits.output === undefined ? {} : { output: limits.output }),
+            ...(limits.context === undefined ? {} : { context: limits.context }),
+            at: limits.at,
+          },
+        }),
+    // Absent unless something was actually cut off: a row that says "0 times"
+    // is a claim about traffic the panel has no other evidence of.
+    ...(context?.budgetHits === undefined || (context.budgetHits.output ?? 0) + (context.budgetHits.context ?? 0) === 0
+      ? {}
+      : {
+          truncated: {
+            ...(context.budgetHits.output === undefined || context.budgetHits.output === 0 ? {} : { output: context.budgetHits.output }),
+            ...(context.budgetHits.context === undefined || context.budgetHits.context === 0 ? {} : { context: context.budgetHits.context }),
+          },
+        }),
+    // Median of the last few first-token samples: one cold request should not
+    // become a model's reputation, and a stale entry ages out on its own.
+    ...(firstTokenMedian(context?.firstTokenMs) === undefined
+      ? {}
+      : { firstTokenMs: firstTokenMedian(context?.firstTokenMs) }),
+    evidence: {
+      context: contextEvidenceFor(record, model.contextWindow, context?.measured),
+      output: outputEvidenceFor(record, model.id, model.maxTokens, limits),
+      // A model that declares no image input makes no such claim, so there is
+      // nothing on screen to be right or wrong about — that reads `none`, and it
+      // is not a failure. A declared-but-unprobed one reads `declared`, which is
+      // the honest word for "models.dev says so and nobody has checked".
+      vision: model.input.includes("image") ? (vision !== undefined ? "route" : "declared") : "none",
+      tools: tools !== undefined ? "route" : "declared",
+    },
   };
 }
 
@@ -787,7 +2093,7 @@ export interface CreateCatalogOptions {
    * this module keeps no transport dependency; when absent, probing is simply
    * unavailable and every probe entry point is a no-op.
    */
-  readonly probe?: ((model: Model<Api>) => Promise<ProbeResult>) | undefined;
+  readonly probe?: ((model: Model<Api>, question?: EffortQuestion) => Promise<ProbeResult>) | undefined;
   /**
    * The ids Zen currently serves, from one `GET /zen/v1/models` — the same cheap
    * availability check 9router performs for its free provider, and the reason
@@ -799,6 +2105,14 @@ export interface CreateCatalogOptions {
    * back to probing everything it would otherwise have probed.
    */
   readonly listZenIds?: (() => Promise<readonly string[] | null>) | undefined;
+  /**
+   * Requests one model may cost inside a MANUAL round.
+   *
+   * A knob rather than a constant so tests can pin it to one and exercise the
+   * round's sampling logic without a budget-sized probe bill per click; the
+   * shipped default is {@link MANUAL_SAMPLE_BUDGET}. Nothing in the host sets it.
+   */
+  readonly manualSampleBudget?: number | undefined;
   /**
    * Is this model switched OFF in the picker? A round asks only about the
    * models the user has on: a probe costs a request from a bucket shared by
@@ -837,10 +2151,13 @@ export interface CatalogState {
   /** When Zen last answered the availability question; 0 = never this boot. */
   gateCheckedAt: number;
   probes: ProbeMap;
+
   lastProbeAt: number;
   probeUntrusted: boolean;
   probeRun: {
     running: boolean;
+    /** Requests sent so far this round; the models-vs-requests counterpart of `done`. */
+    requests: number;
     total: number;
     done: number;
     current: string | null;
@@ -881,12 +2198,546 @@ export function initialState(builtinBaseline: readonly Model<Api>[]): CatalogSta
     lastFetchWasNotModified: false,
     gateCheckedAt: 0,
     probes: {},
-    lastProbeAt: 0,
+      lastProbeAt: 0,
     probeUntrusted: false,
-    probeRun: { running: false, total: 0, done: 0, current: null, results: {}, targets: [], startedAt: 0 },
+    probeRun: {
+      running: false,
+      requests: 0,
+      total: 0,
+      done: 0,
+      current: null,
+      results: {},
+      targets: [],
+      startedAt: 0,
+    },
     probeInflight: null,
   };
 }
+/**
+ * What was MEASURED about a model's context window, and what the plugin may
+ * therefore do about it.
+ *
+ * `raisedTo` is a PROPOSAL the measurement produced, not a substituted value:
+ * models.dev's declaration is always the default, and this only ever raises.
+ */
+export interface MeasuredContext {
+  /** The window to advertise in place of the declared one. */
+  readonly raisedTo: number;
+  /** Fingerprint of `limit`, so a revised declaration voids the measurement. */
+  readonly fp: string;
+  readonly at: number;
+  /**
+   * How the number was obtained, which decides how far it may be trusted.
+   *
+   * `measured` — the endpoint stated this limit about itself, in its own refusal
+   * body ("This endpoint's maximum context length is 1048576 tokens") or by
+   * accepting a request of that size. First-party, so it is bounded only by the
+   * absolute ceiling.
+   *
+   * `inferred` — derived from the clamp signature, i.e. from observing that a
+   * conversation hit the floor. That signal also fires on a HEALTHY model whose
+   * context is genuinely full, so it stays behind the `declared x 4` valve.
+   * Absent (older records) reads as `inferred`, the conservative side.
+   */
+  readonly source?: "measured" | "inferred";
+}
+
+/** Stable fingerprint of the limits a context measurement is about. */
+export function contextFingerprint(record: CatalogRecord): string {
+  const limit = isPlainObject(record.limit) ? record.limit : {};
+  return `${String(limit.context ?? "-")}:${String(limit.output ?? "-")}`;
+}
+
+/**
+ * Ceilings the route has stated about one model, and when it last said so.
+ *
+ * `fp` is the fingerprint of the declaration the statement was made against —
+ * the same {@link contextFingerprint} the context axis uses, because both
+ * statements are about the same record. A changed declaration discards them
+ * rather than keeping a number that was stated about something else.
+ */
+export interface MeasuredLimits {
+  readonly output?: number;
+  readonly context?: number;
+  readonly fp: string;
+  readonly at: number;
+}
+
+/** Defensive read of the truncation counters; a count is never inferred. */
+function readBudgetHits(value: unknown): ProbeRecord["budgetHits"] | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const count = (n: unknown): number | undefined =>
+    typeof n === "number" && Number.isFinite(n) && n >= 0 ? Math.floor(n) : undefined;
+  const output = count(value.output);
+  const context = count(value.context);
+  if (output === undefined && context === undefined) return undefined;
+  return {
+    ...(output === undefined ? {} : { output }),
+    ...(context === undefined ? {} : { context }),
+    ...(typeof value.at === "number" && Number.isFinite(value.at) ? { at: value.at } : {}),
+  };
+}
+
+/**
+ * Defensive read of harvested ceilings; a partial one is no measurement.
+ *
+ * A DATED silence is kept: "asked at T, the route named nothing" is a real fact
+ * about the route, and it is the only thing that stops the next round from
+ * paying for the same question again. It can never become a measurement — an
+ * empty fingerprint matches no `contextFingerprint`, so every consumer that
+ * applies a ceiling skips it — and the projection checks the empty string
+ * separately so it never reaches the panel as a number.
+ */
+export function isMeasuredLimits(value: unknown): value is MeasuredLimits {
+  if (!isPlainObject(value)) return false;
+  if (typeof value.fp !== "string") return false;
+  if (typeof value.at !== "number" || !Number.isFinite(value.at)) return false;
+  if (value.fp === "") return value.at > 0;
+  const output = value.output;
+  const context = value.context;
+  const ok = (n: unknown): boolean => n === undefined || (typeof n === "number" && Number.isFinite(n) && n > 0);
+  return ok(output) && ok(context) && (output !== undefined || context !== undefined);
+}
+
+/**
+ * Whether the witnessed generation behind the advertised figure was taken against
+ * the declaration models.dev publishes today.
+ *
+ * False does not mean the number is wrong — it was watched happening. It means
+ * the pointer moved since, and nobody has re-watched. The panel says so rather
+ * than presenting an unre-checked figure as current.
+ */
+export function observedOutputIsStale(record: CatalogRecord, id: string): boolean {
+  const seed = SEED_OUTPUT[id];
+  if (seed === undefined || seed.observed === undefined) return false;
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.output : undefined);
+  return seed.declared !== undefined && seed.declared !== declared;
+}
+
+/** Defensive read of a persisted context measurement. */
+export function isMeasuredContext(value: unknown): value is MeasuredContext {
+  if (!isPlainObject(value)) return false;
+  return (
+    typeof value.raisedTo === "number" &&
+    Number.isFinite(value.raisedTo) &&
+    value.raisedTo > 0 &&
+    typeof value.fp === "string" &&
+    typeof value.at === "number"
+  );
+}
+
+/** Consecutive clamp observations required before a window may be raised. */
+export const CLAMP_HITS_REQUIRED = 2;
+
+/**
+ * The bound a raise may reach, as a multiple of what was declared.
+ *
+ * This is the false-positive safety valve. A wrong raise cannot make the clamp
+ * stop firing, which would cost capability; it can only send a request that is
+ * too large and have it refused VISIBLY, which the user can act on. That
+ * bounded, loud failure is what makes an unknown error rate shippable.
+ */
+export const CLAMP_RAISE_FACTOR = 4;
+export const CLAMP_RAISE_CEILING = 1_048_576;
+
+/**
+ * Context windows this plugin has MEASURED, by the model id they were measured
+ * on. Not a band, not a heuristic — a value the upstream stated about itself.
+ *
+ * Measured 2026-10-06 by over-sending one request per model and reading the
+ * endpoint's own answer; the verbatim bodies are in
+ * `.scratch/probe/context-results-sweep.json` and ADR 0004 §四:
+ *
+ *   mimo-v2.6-flash-free / mimo-v2.5-free
+ *     `[400] This endpoint's maximum context length is 1048576 tokens. However,
+ *      you requested about 1048659 tokens (1048516 of text input, 79 of tool
+ *      input, 64 in the output).`
+ *     (byte-identical on both, so it is the DECLARATION that is stale, not one
+ *     model that moved)
+ *
+ *   nemotron-3.5-lightning-free
+ *     the same sentence with 1000000 — while `ling-3.1-flash-free`, declaring the
+ *     SAME 262144, really has 262144. Same declaration, different truth, which
+ *     is why the decimal-vs-binary heuristic was thrown out and the table is
+ *     keyed by id.
+ *
+ *   big-pickle — **WITHDRAWN 2026-10-07.** This entry existed on an ACCEPTANCE
+ *     ("1048576 accepted, 1572864 and 2097152 refused, all generic") and was
+ *     read as a lower bound worth shipping. Four hours later the same endpoint,
+ *     asked for 2,000,000, said it outright:
+ *       `[invalid_request_error] Requested token count exceeds the model's
+ *        maximum context length of 262139 tokens.`
+ *     and by the next probe it was refusing requests as small as 210,000 while
+ *     still answering 200,000 a few minutes earlier. So the acceptance was one
+ *     lucky sample from an unstable route, and shipping it advertised a window
+ *     up to FOUR TIMES the model's own — which is not a mild overstatement: DSH
+ *     would compact at ~839K estimated tokens and every request past the real
+ *     ceiling would be refused. An acceptance is not a measurement, on either
+ *     axis. The entry is gone, and the declaration ships.
+ *
+ *     The general rule this earns: **seed a window from a number the endpoint
+ *     STATES about itself, or do not seed it.** Refusals name limits for free
+ *     (they cost zero output tokens and return a number); acceptances name
+ *     nothing, and a route that is quietly failing will happily accept a few
+ *     times before it stops.
+ *
+ * `clampProposalFor` caps every entry, so a stale table can never advertise more
+ * than four times what models.dev claims; a raised window that is too large
+ * produces a VISIBLE upstream 400, while the un-raised state is silent death
+ * (max_tokens collapses to 1, HTTP 200, zero characters — measured, ADR §九).
+ * That asymmetry is the whole reason this table exists.
+ *
+ * Every entry is fingerprinted against `limit`, so a changed declaration
+ * discards it rather than keeping a number that was measured about something
+ * else — the same rule the live measurements obey.
+ */
+const SEED_CONTEXT: Readonly<Record<string, { readonly declared: number; readonly measured: number }>> = {
+  // Every entry below is a number the endpoint STATED about itself in a refusal.
+  // `big-pickle` was here on an acceptance and was withdrawn the same day — see
+  // the table's own documentation, which is the shortest post-mortem this repo has.
+  "mimo-v2.6-flash-free": { declared: 200000, measured: 1048576 },
+  "mimo-v2.5-free": { declared: 200000, measured: 1048576 },
+  "nemotron-3.5-lightning-free": { declared: 262144, measured: 1000000 },
+};
+
+/** The seed for one model, or undefined when it declares something else now. */
+export function seededContextFor(record: CatalogRecord, id: string): MeasuredContext | undefined {
+  const seed = SEED_CONTEXT[id];
+  if (seed === undefined) return undefined;
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.context : undefined);
+  // A measurement is about the MODEL, and the declaration is only a pointer to
+  // which model this id meant. When the pointer moves we cannot tell a typo fix
+  // from a different model behind the same id — so the measurement is not thrown
+  // away (that is how a models.dev typo fix silently deleted the only witnessed
+  // number in the table), it is DEMOTED: first-party becomes inferred, which puts
+  // it behind the `declared x 4` valve and the ceiling, and the panel says
+  // `inferred` instead of claiming a first-party statement that was never made
+  // about this declaration.
+  if (declared !== seed.declared) {
+    return { raisedTo: seed.measured, fp: contextFingerprint(record), at: 0, source: "inferred" };
+  }
+  // The endpoint stated this about itself, or accepted a request of this size —
+  // see SEED_CONTEXT. It is first-party evidence, so it is not held to the
+  // inferred-raise valve.
+  return { raisedTo: seed.measured, fp: contextFingerprint(record), at: 0, source: "measured" };
+}
+
+/** The window a confirmed clamp would raise a model to. */
+export function clampProposalFor(declared: number): number {
+  if (!Number.isFinite(declared) || declared <= 0) return 0;
+  return Math.min(declared * CLAMP_RAISE_FACTOR, CLAMP_RAISE_CEILING);
+}
+
+/**
+ * The OUTPUT BUDGET to put on the wire, by the model id it was measured on — the
+ * `limit.output` counterpart of {@link SEED_CONTEXT}.
+ *
+ * Read the name carefully: this is a budget, not an output length. It is the
+ * largest `max_tokens` the route would take without refusing, and that is exactly
+ * what this field should be, because pi-ai sends it
+ * (`options.maxTokens ?? model.maxTokens`, and DSH sends no `maxTokens` of its
+ * own for this provider) and the route ENFORCES it. When the declaration is too
+ * low the reply is cut at the declaration with `finish_reason: "length"` and
+ * nothing anywhere says why — so the budget must not be smaller than the route
+ * permits.
+ *
+ * **It is not evidence that the model can WRITE that much**, and calling it that
+ * was a real mistake (ADR 0004 §43). Two measurements keep the two apart:
+ *
+ *   · the route honours the field — asked for 8 with a prompt that wanted
+ *     thousands, `mimo`, `space-bunny-free`, `longcat-2.5-preview-free`,
+ *     `nemotron-3-ultra-free` and `big-pickle` all returned exactly 8/64 tokens
+ *     with `finish_reason: "length"`. So a refusal at N is evidence and an
+ *     acceptance at N is a budget, not a promise.
+ *   · what a model actually PRODUCES is {@link observedOutputFor}, and today that
+ *     exists for one model only: mimo, 40,000 tokens, `stopReason: "length"`,
+ *     about 152 tokens/second.
+ *
+ * What the 2026-10-07 acceptance sweep DID establish, kept here because it is the
+ * reason the declaration can be wrong at all: asked for `max_tokens: 8` with a
+ * prompt that wanted thousands, `mimo-v2.6-flash-free`, `space-bunny-free`,
+ * `longcat-2.5-preview-free`, `nemotron-3-ultra-free`, `big-pickle` and
+ * `nemotron-3.5-lightning-free` all returned exactly the number asked for with
+ * `finish_reason: "length"`. The route enforces this field, so a budget that is
+ * too low really does cut a reply at the declaration and nothing reports it.
+ *
+ * What it did NOT establish, and why it is not in the table: that any of those
+ * models writes a million tokens. Acceptance is a fact about the request. The
+ * sweep's own rows are in `.scratch/verify/output-ceiling2-results.txt`; the
+ * argument against shipping them is ADR 0004 §44.
+
+ * Measured 2026-10-07 on the live set, one request per step, reading the number
+ * off the outgoing body rather than off the declaration: the prompt is one word,
+ * so the ask decides only the CEILING and each step costs ~30 output tokens.
+ * Verbatim rows in `.scratch/verify/output-ceiling2-results.txt`:
+ *
+ * pi-ai clamps what it sends with `min(maxTokens, context − estimate − 4096)`, so
+ * the bytes never carry more than this function returns: a conversation with room
+ * asks for the whole budget, and a long one automatically asks for less.
+ *
+ * What this does NOT claim: that any model writes that much. Time is the real
+ * ceiling — mimo writes about 152 tokens/second, so the ten-minute request
+ * timeout ends a reply near 91,000 tokens whatever the budget says.
+ */
+/**
+ * Evidence for one model's output ceiling, and there are THREE kinds, because
+ * three different institutions are entitled to state one and they disagree.
+ *
+ *   `named`    — a ceiling the VENDOR published, or the ROUTE stated in a
+ *                 refusal. Both are first-party statements about the thing
+ *                 itself, and both cost nothing to obtain: a refusal returns a
+ *                 number for zero output tokens.
+ *   `observed` — a generation this plugin watched to its budget, or watched end
+ *                 a long reply on its own. Lower bound evidence, and the only
+ *                 kind that proves the model actually writes.
+ *
+ * The BUDGET follows `named` first and `observed` second, and never exceeds
+ * either: a budget above a ceiling the route refuses is a guaranteed failure, and
+ * a budget below what the model writes truncates it. A model with neither keeps
+ * models.dev's declaration (ADR 0004 §48).
+ */
+const SEED_OUTPUT: Readonly<
+  Record<string, { readonly declared: number; readonly named?: number; readonly observed?: number }>
+> = {
+  // DELIVERY evidence only — a generation this plugin watched to its budget, with
+  // `stopReason: "length"`. Both measured 2026-10-07 with the integer prompt
+  // ("print the integers from 1 to 100000"), asking for more than the model
+  // declares:
+  //
+  //   mimo-v2.6-flash-free  ask 64000 → produced 64000, length, 346s, 185 tok/s
+  //   big-pickle            ask 48000 → produced 48000, length, 132s, 365 tok/s
+  //
+  // Three measurement traps cost more requests than these two observations did,
+  // and all three are reasons a naive version of this table would be wrong:
+  //
+  //   1. A MODEL CHOOSES WHEN TO STOP. The same model, the same ask, one sample
+  //      produced 892 tokens with `stop` and the next produced 64,000 with
+  //      `length`. A single short reply is evidence about that sample, not about
+  //      the ceiling — so every entry here is a WITNESSED generation, and the
+  //      protocol retries rather than trusting one.
+  //   2. THE ADMISSION GATE PUTS TOOLS ON EVERY REQUEST, and a model that calls
+  //      one ends its generation: `longcat-2.5-preview-free` produced 121 tokens
+  //      with `stopReason: "toolUse"` on a 64,000 budget, which reads exactly
+  //      like a route that caps output. The measurement says so in a system
+  //      message instead.
+  //   3. RATE IS THE CEILING NOBODY SEES. 34 tok/s (nemotron-3.5) to 365
+  //      (big-pickle): inside the ten-minute request timeout that is roughly
+  //      28,000 to 295,000 tokens, so for several models the DECLARED budget
+  //      (128,000 / 262,144 / 524,288) is not the constraint — the clock is.
+  //
+  // The 2026-10-07 acceptance sweep (every route taking `max_tokens` from 8 up to
+  // 1,040,384) is deliberately NOT here. It proved the route enforces the field —
+  // which is why a declaration that is too low really does cut a reply — but an
+  // accepted budget is not a thing any model was seen to write, and shipping it
+  // as one is the mistake this table was corrected for (ADR 0004 §44).
+  //
+  // No other model has an entry because none has been watched past its
+  // declaration. Several stopped on their own well below it, which is a fact
+  // about those samples and not a ceiling.
+  "mimo-v2.6-flash-free": {
+    declared: 32000,
+    // Xiaomi's own model page, fetched 2026-10-07:
+    //   https://mimo.mi.com/models/en-US/mimo-v2.6-flash
+    //   "Context Window 1M tokens" / "Max Output 128K tokens"
+    // 128K = 131072. It is a vendor statement, so it outranks anything measured
+    // here — and it independently confirms the CONTEXT seed (1M = 1048576) that
+    // came from the endpoint's own refusal.
+    named: 131072,
+    // What the route accepts: asked for 1,048,577, 2,000,000 and 8,000,000 and
+    // got three 200s. There is no output cap on this route at all, so the vendor
+    // number — not the acceptance — is what bounds the budget.
+    //
+    // 79,722 and not 64,000: both were watched, and the larger one is the one
+    // that answers "how long a reply has this model actually written". Asked for
+    // 131,072 it wrote 79,722 and stopped BY ITSELF (762s), so nothing truncated
+    // it; the 64,000 sample ended on the budget instead. The budget is unchanged
+    // (131,072 comes from the vendor either way) — this only corrects the figure
+    // the panel reports, which is a lower bound and should be the strongest one
+    // we have rather than a rounder one.
+    observed: 79722,
+  },
+  "big-pickle": { declared: 32000, observed: 48000 },
+  "longcat-2.5-preview-free": {
+    declared: 131072,
+    // Watched 2026-10-07: asked for 64000, produced 64000 with `stopReason:
+    // "length"` in 947s (~67 tok/s). So the route names 262144 AND the model
+    // demonstrably writes 64000 — the budget does not move (the named ceiling is
+    // higher), but the panel can stop implying this model has never been watched
+    // writing a long reply.
+    observed: 64000,
+    // The route, in its own words, 2026-10-07:
+    //   "[invalid_parameter] 参数校验失败: /max_tokens: 995834 is not less or
+    //    equal to 262144"
+    // So 262144 is enforced by the upstream, and models.dev publishes half of
+    // it. Sending more is refused; sending 131072 truncates a reply that wants
+    // more. No production has been witnessed past 32770 — the model stops when it
+    // has said what it came to say — which is why there is no `observed` here
+    // even though the budget still moves.
+    named: 262144,
+  },
+};
+
+/**
+ * The largest reply this plugin has actually SEEN this model produce.
+ *
+ * This is the number that answers "how much can this model write", and it is not
+ * the number above. Measured 2026-10-07: `mimo-v2.6-flash-free`, asked for
+ * 40,000 output tokens, produced 40,000 with `stopReason: "length"` at about 152
+ * tokens/second. Every other model in the table has NO entry, because no
+ * generation has been watched for them — which is the whole reason the budget
+ * and the observation are kept apart. Absent means "never watched", not "cannot".
+ */
+export function observedOutputFor(
+  record: CatalogRecord,
+  id: string,
+  budget: number | undefined,
+): number | undefined {
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.output : undefined);
+  const seed = SEED_OUTPUT[id];
+  // A witness SURVIVES a moved declaration, deliberately: it was watched
+  // happening, and the cost of forgetting it is a models.dev typo fix erasing the
+  // only production anyone has ever watched. What the move does cost is
+  // PROVENANCE, which is what {@link observedOutputIsStale} reports — the number
+  // stays, and the panel says it has not been re-checked against this
+  // declaration.
+  if (seed === undefined || seed.observed === undefined) return undefined;
+  // Bounded by the budget we would send, and NOTHING else.
+  //
+  // There used to be a guard here that dropped an observation BELOW the
+  // declaration, on the reasoning that a smaller number would be "a demotion
+  // dressed as a measurement". It hid the truth on the one model with the most
+  // evidence: `longcat-2.5-preview-free` was watched writing 64,000 against a
+  // declared 131,072, and the panel showed nothing at all — as though nobody had
+  // ever watched it write. And it could not have protected anything: the budget
+  // is `max(declaration, named, observed)`, so an observation below the
+  // declaration cannot lower it. The guard blocked facts, not risk.
+  if (budget !== undefined && seed.observed > budget) return budget;
+  return seed.observed;
+}
+
+/**
+ * The `max_tokens` budget to send: models.dev's declaration, raised only where a
+ * generation has been WATCHED reaching past it.
+ *
+ * The rule, in one line: **only delivery evidence moves this field.** An accepted
+ * budget does not, a refusal does not, and "the route would probably take more"
+ * does not — because none of those is a thing the model was seen to write, and a
+ * number this plugin cannot point at an observation for is a number it is making
+ * up. One model has such an observation today, and one model is therefore the one
+ * whose budget differs from its declaration.
+ *
+ * `window` is the window this plugin advertises for the same model, passed in
+ * rather than read so the two numbers cannot disagree — a budget above the
+ * context it has to fit in is unreachable by construction.
+ */
+export function maxTokensFor(
+  record: CatalogRecord,
+  id: string,
+  window: number | undefined,
+  limits?: MeasuredLimits | undefined,
+): number | undefined {
+  const declared = finitePositive(isPlainObject(record.limit) ? record.limit.output : undefined);
+  if (declared === undefined) return declared;
+  // A number the ROUTE stated about itself outranks every seed: it is
+  // first-party, current, and it cost nothing. It is also the only one that can
+  // exist for a model the plugin has never seen before.
+  const stated =
+    limits !== undefined && limits.fp === contextFingerprint(record) ? finitePositive(limits.output) : undefined;
+  const seed = SEED_OUTPUT[id];
+  const seeded = seed !== undefined && seed.declared === declared ? seed : undefined;
+  const ceiling = Math.max(stated ?? 0, seeded?.named ?? 0, seeded?.observed ?? 0);
+  if (ceiling === 0) return declared;
+  const bounded = window === undefined ? ceiling : Math.min(ceiling, window);
+  return bounded > declared ? bounded : declared;
+}
+
+/**
+ * The advertised context window.
+ *
+ * C1: models.dev's value is the value. It is never substituted from a band, and
+ * decimal-vs-binary formatting was measured to carry no predictive power —
+ * ling-3.1-flash-free declares 262144 and is exactly right, while
+ * nemotron-3.5-lightning-free declares the same 262144 and really has 1000000.
+ *
+ * C4: a measured, fingerprinted raise may lift it, and only upward.
+ */
+export function contextWindowFor(record: CatalogRecord, measured?: MeasuredContext): number | undefined {
+  const limit = isPlainObject(record.limit) ? record.limit : {};
+  const declared = finitePositive(limit.context);
+  if (measured === undefined || declared === undefined) return declared;
+  if (measured.fp !== contextFingerprint(record)) return declared;
+  // The two evidence strengths get two different ceilings. The x4 valve exists
+  // to stop an INFERRED raise from retiring capability on a healthy model; it has
+  // no business clipping a number the endpoint stated about itself. Measured
+  // 2026-10-07: the endpoint's own sentence says 1048576 for
+  // `mimo-v2.6-flash-free`, and the plugin was advertising 800000 — 248K of
+  // real context withheld by a valve built for a different kind of evidence.
+  const cap =
+    measured.source === "measured"
+      ? CLAMP_RAISE_CEILING
+      : Math.min(declared * CLAMP_RAISE_FACTOR, CLAMP_RAISE_CEILING);
+  const bounded = Math.min(measured.raisedTo, cap);
+  return bounded > declared ? bounded : declared;
+}
+
+/**
+ * What one request observed about the clamp.
+ *
+ * `floorHit` is read straight off the outgoing body — the number pi-ai emitted
+ * AFTER `clampMaxTokensToContext` ran — so it is a fact about the request, not an
+ * inference about why it was small.
+ */
+export interface ClampObservation {
+  /** The emitted `max_tokens` / `max_completion_tokens`, if the body carried one. */
+  readonly emitted: number | undefined;
+  /** `stopReason === "length"` with no usable content. */
+  readonly starved: boolean;
+  /**
+   * `stopReason === "length"` WITH usable content: a reply that was cut off
+   * mid-answer.
+   *
+   * This is the only free measurement of whether the budget the plugin advertises
+   * is actually BINDING in real use — every synthetic probe either stops early
+   * or costs tens of thousands of tokens to find out, while this rides on a
+   * request that was being made anyway. Whether the budget or the CONTEXT clamp
+   * did the cutting is decided by comparing `emitted` with the model's own.
+   */
+  readonly truncated?: boolean;
+}
+
+/**
+ * Whether one observation is the clamp signature, and whether it is enough.
+ *
+ * The signature is arithmetic, not an error-body inference: `clampMaxTokensToContext`
+ * is `min(maxTokens, max(1, contextWindow - estimate - 4096))`, so an emitted
+ * value of exactly 1 means the conversation passed the declared window minus
+ * 4096. That is one-directional — an OVERSTATED window cannot make the clamp
+ * fire at all — so a hit is positive evidence of an understated window and
+ * nothing else.
+ *
+ * `starved` is the second conjunct because `max_tokens: 1` was measured to
+ * return HTTP 200 with zero characters and no error anywhere: without it the
+ * signature would also match a request that simply ran out of room honestly.
+ *
+ * Repeated agreement is required because a single observation cannot
+ * distinguish an understated window from a genuinely full conversation, and
+ * because a probe here has been seen returning 200 while proving nothing.
+ */
+export function clampVerdict(
+  previous: ProbeRecord | undefined,
+  observation: ClampObservation,
+  declared: number,
+): { kind: "none" } | { kind: "hit"; hits: number } | { kind: "confirmed"; raisedTo: number } {
+  if (!observation.starved || observation.emitted !== 1) return { kind: "none" };
+  const hits = (previous?.contextHits ?? 0) + 1;
+  if (hits < CLAMP_HITS_REQUIRED) return { kind: "hit", hits };
+  // Only ever upward, and never past the cap. A model whose context really was
+  // full keeps a correct window: raising it there would only send a request
+  // that is too large and get it refused visibly.
+  const proposal = clampProposalFor(declared);
+  return proposal > declared ? { kind: "confirmed", raisedTo: proposal } : { kind: "hit", hits: 0 };
+}
+
 export interface Catalog {
   current(): CatalogSnapshot;
   /** Post-Zen-gate models — the single list the picker and the panel share. */
@@ -898,7 +2749,15 @@ export interface Catalog {
   /** One ordered probe round; at most one per local day (D2). */
   runProbes(): Promise<void>;
   /** Ignores the daily gate; used by the panel button (D8). */
-  forceProbes(): Promise<void>;
+  forceProbes(): Promise<ProbeStart>;
+  /**
+   * Requests one model may cost inside a MANUAL round.
+   *
+   * A knob rather than a constant so tests can pin it to one and exercise the
+   * round's sampling logic without spending a budget per click; the shipped
+   * default is {@link MANUAL_SAMPLE_BUDGET}. Nothing in the host sets it.
+   */
+  readonly manualSampleBudget?: number | undefined;
   /** `null` means Zen failed: keep the current gate rather than narrowing. */
   applyZenGate(ids: readonly string[] | null): void;
   /**
@@ -907,6 +2766,25 @@ export interface Catalog {
    * gauge, not a verdict, so it is never persisted and never narrows anything.
    */
   probeProgress(): ProbeProgress;
+  /**
+   * Report what one real request observed about the clamp.
+   *
+   * The seam exists because the observation can only be made where the bytes
+   * are: the transport reads the emitted `max_tokens` and the terminal
+   * `stopReason`, and neither is visible to the catalogue. Fire-and-forget by
+   * design — a request must never wait on bookkeeping — and it can only ever
+   * RAISE a window, so a spurious observation costs a visible upstream refusal
+   * rather than capability.
+   */
+  observeClamp(id: string, observation: ClampObservation): void;
+  /**
+   * Record how long this model's real replies took to produce their first token.
+   *
+   * Separate from {@link observeClamp} because it is a measurement, not a
+   * verdict: nothing branches on it, and the newest sample is kept alongside the
+   * last few so the panel can show a median instead of one unlucky request.
+   */
+  observeFirstToken(id: string, ms: number): void;
 }
 
 /**
@@ -920,8 +2798,44 @@ export interface Catalog {
  * `http` (0 when no status ever arrived). A red badge that only says "failed"
  * is the thing this type exists to prevent.
  */
+/**
+ * What a manual round actually did.
+ *
+ * The floor between two manual rounds is a quota decision, but it used to be an
+ * invisible one: `forceProbes()` returned nothing and the route answered 202
+ * either way, so a refused click looked exactly like a started one and the panel
+ * waited out its grace period in silence. The caller needs the difference, and
+ * the user needs the number.
+ */
+export type ProbeStart =
+  | { readonly started: true }
+  | { readonly started: false; readonly reason: "cooldown"; readonly retryAfterMs: number }
+  | { readonly started: false; readonly reason: "running" | "unavailable" };
+
+/**
+ * What a round is allowed to ask about.
+ *
+ * `visible` — the models the user has switched on. A manual round spends up to
+ * `MANUAL_SAMPLE_BUDGET` requests on each of them, and the answers are the ones
+ * somebody is watching for.
+ *
+ * `served` — every model the Zen gate still lists, hidden ones included. The
+ * daily round spends ONE request each and nobody asked for it; its value is
+ * catalogue hygiene, which a hidden model needs just as much as a visible one.
+ */
+export type ProbeScope = "visible" | "served";
+
 export interface ProbeProgress {
   readonly running: boolean;
+  /**
+   * Requests this round actually sent.
+   *
+   * Not the same as `done`: a round may take several samples of one model, so
+   * the tally counts models and this counts what the shared anonymous bucket
+   * paid. Someone who presses "Probe now" is spending that bucket and is
+   * entitled to the number.
+   */
+  readonly requests: number;
   readonly total: number;
   readonly done: number;
   readonly current: string | null;
@@ -937,6 +2851,15 @@ export interface ProbeProgress {
   readonly targets: readonly string[];
   /** When the current (or last) round started; 0 means no round has ever run. */
   readonly startedAt: number;
+  /**
+   * Models whose reasoning measurement is still open.
+   *
+   * "Still measuring" is a claim about the future, so it is computed by the same
+   * predicate the loop uses rather than inferred from a missing verdict: absence
+   * also means the axis is undecidable, and that model is not one the panel
+   * should keep asking the user to click for.
+   */
+  readonly pending: readonly string[];
 }
 
 /** One model's outcome in a round: answered (with latency) or not (with why). */
@@ -957,6 +2880,8 @@ export type ProbeProgressResult =
       readonly removed?: boolean | undefined;
       /** Which anonymous-gate marker the refusal carried, when it named one. */
       readonly marker?: string | undefined;
+      /** The body said the request SHAPE is not supported for this model. */
+      readonly formatScoped?: boolean;
     };
 
 /**
@@ -1126,10 +3051,37 @@ export function probeRowFor(
  * rather than a model that is gone — and a permanent verdict on a wrong channel
  * is how a working model goes missing for good.
  */
-function isSettled(id: string, probes: ProbeMap): boolean {
+/**
+ * A death is final, and `nextProbeAt` is the field that says when it stops being
+ * final.
+ *
+ * The field was documented and never read, so a model that was wrongly retired —
+ * swept on a channel the route happened to be serving wrong, while an upstream
+ * outage was in progress — stayed suppressed for ever with no path back. A dead
+ * verdict that is older than the interval is asked once more, which costs one
+ * request for the models nobody is using and is the only way a name Zen has
+ * re-published can come back at all.
+ */
+export const DEAD_RECHECK_MS = 7 * 24 * 60 * 60_000;
+
+/**
+ * How long "asked, and the route named nothing" is worth keeping.
+ *
+ * A round used to ask every model for its ceiling and then DROP the silence on
+ * the next warm start, so every restart of DSH spent a request per model
+ * re-asking a question whose answer has been silence 10 times out of 11 — on a
+ * shared anonymous bucket, where the route's silence does not change because the
+ * process restarted. A day is long enough to catch an upstream that starts
+ * declaring a ceiling, and short enough that the daily round still means daily.
+ */
+export const CEILING_SILENCE_TTL_MS = 24 * 60 * 60_000;
+
+function isSettled(id: string, probes: ProbeMap, now: number): boolean {
   const record = probes[id];
   if (record === undefined || record.verdict !== "dead") return false;
-  return record.swept === true;
+  if (record.swept !== true) return false;
+  const due = record.nextProbeAt;
+  return typeof due === "number" && due > now ? true : typeof due !== "number" || now - record.at < DEAD_RECHECK_MS;
 }
 
 /**
@@ -1145,16 +3097,45 @@ function isSettled(id: string, probes: ProbeMap): boolean {
  * because the panel's tally has to add up and a silent hole in the list is
  * exactly what a reader cannot explain.
  */
+/**
+ * A model's row for THIS round.
+ *
+ * A round may take several samples of one model, so the shot count and the row
+ * count stopped being the same thing: `done` was incremented per SAMPLE (the
+ * panel read "53/27"), and each shot overwrote the row, so a model that
+ * produced three good baseline samples and then hit a 429 was painted red — the
+ * round's actual finding about it discarded by its last request.
+ *
+ * So: the tally counts MODELS (a row per model, which is what `total` counts),
+ * and the row reports the round's finding about that model — ok if any sample
+ * answered, because that is what the round learned. `dead` and a removal stay
+ * loud; only a later failure stops being able to bury an earlier answer.
+ */
+function roundRowSoFar(last: ProbeProgressResult, okShots: number, elapsed: number): ProbeProgressResult {
+  if (okShots === 0 || last.status === "ok") return { ...last, ms: elapsed };
+  return { status: "ok", ms: elapsed };
+}
+
 export function planRound(
   models: readonly Model<Api>[],
   live: readonly Model<Api>[],
   servedSet: ReadonlySet<string> | null,
   probes: ProbeMap,
   hidden: ((id: string) => boolean) | undefined,
+  now: number,
+  scope: ProbeScope = "visible",
 ): { targets: Model<Api>[]; notListed: Model<Api>[] } {
-  const isShown = (id: string): boolean => hidden?.(id) !== true;
+  // `served` — the daily round — asks about every model Zen still lists, hidden
+  // or not: its job is to keep the catalogue honest, and a hidden model whose
+  // free tier has ended is exactly the thing nobody will discover by looking at
+  // the picker. `visible` — the manual round — stays on what the user has
+  // switched on, because that round spends a budget per model and the answers
+  // are ones they are actually watching for.
+  const isShown = (id: string): boolean => scope === "served" || hidden?.(id) !== true;
   return {
-    targets: live.filter((model) => isShown(model.id) && !isSettled(model.id, probes)),
+    targets: live.filter(
+      (model) => isShown(model.id) && !isSettled(model.id, probes, now),
+    ),
     notListed:
       servedSet === null
         ? []
@@ -1162,8 +3143,102 @@ export function planRound(
   };
 }
 
+/**
+ * The one derivation of the catalogue: models.dev's dictionary plus whatever
+ * this process has measured.
+ *
+ * Two callers, and they must not drift: the warm start, and the end of a probe
+ * round — a verdict the round just wrote changes what the user is offered, so
+ * the list has to be rebuilt from it rather than waiting for the next sync or a
+ * restart. Everything a measurement can add (the Off row, a harvested
+ * vocabulary) is applied HERE, which is why neither caller may do it itself.
+ */
+function deriveWithEvidence(state: CatalogState, deps: CatalogDeps, section: CatalogRecord): DerivedCatalog {
+  const base = derive(section, { knownApis: deps.knownApis, template: deps.template });
+  const evidence = measuredEffortMap(base.candidates, section, state.probes);
+  // A live measurement outranks the recorded one: it is newer and it was taken
+  // against this very record. The seed fills in only what nobody has measured.
+  const windows = measuredContextFor(base.candidates, section, state.probes);
+  const limits = measuredLimitsFor(base.candidates, section, state.probes);
+  return evidence.size === 0 && windows.size === 0 && limits.size === 0
+    ? base
+    : derive(section, {
+        knownApis: deps.knownApis,
+        template: deps.template,
+        measuredEffort: evidence,
+        measuredContext: windows,
+        measuredLimits: limits,
+      });
+}
+
+/**
+ * Measured windows for the candidates: the live measurement where there is one,
+ * the recorded one otherwise.
+ *
+ * Mirrors {@link measuredEffortMap} so both axes read the same way — a live
+ * verdict outranks a recorded one, and both are checked against the record they
+ * are about before they are applied.
+ */
+export function measuredContextFor(
+  models: readonly Model<Api>[],
+  section: CatalogRecord,
+  probes: ProbeMap,
+): Map<string, MeasuredContext> {
+  const out = new Map<string, MeasuredContext>();
+  for (const model of models) {
+    const raw = section[model.id];
+    if (!isPlainObject(raw)) continue;
+    const record = { ...raw, id: model.id } as CatalogRecord;
+    const live = probes[model.id]?.context;
+    out.set(model.id, live !== undefined && live.fp === contextFingerprint(record) ? live : (seededContextFor(record, model.id) ?? { raisedTo: 0, fp: "", at: 0 }));
+  }
+  for (const [id, entry] of out) if (entry.raisedTo === 0) out.delete(id);
+  return out;
+}
+
+/**
+ * Ceilings the route has stated about each candidate, fingerprinted against the
+ * record they were stated about.
+ *
+ * A statement whose fingerprint no longer matches is dropped rather than applied:
+ * it was about a declaration this model no longer has, and the ceiling it named
+ * belonged to that one.
+ */
+export function measuredLimitsFor(
+  models: readonly Model<Api>[],
+  section: CatalogRecord,
+  probes: ProbeMap,
+): Map<string, MeasuredLimits> {
+  const out = new Map<string, MeasuredLimits>();
+  for (const model of models) {
+    const raw = section[model.id];
+    if (!isPlainObject(raw)) continue;
+    const limits = probes[model.id]?.limits;
+    if (!isMeasuredLimits(limits)) continue;
+    if (limits.fp !== contextFingerprint({ ...raw, id: model.id })) continue;
+    out.set(model.id, limits);
+  }
+  return out;
+}
+
 // Warm start: a valid state.cache restores the catalogue without any network.
-function adopt(
+/**
+ * Restore a cached record into the running state.
+ *
+ * `restoreRound` is for STARTUP, and it is the only thing that puts a previous
+ * round's finished report back on screen. It must never do that to a round that
+ * is in flight: replacing a live `probeRun` (running, requests counting, done
+ * climbing) with the previous one sends `requests` back to 0, `done` back to
+ * the old total and `running` to false, so the panel adopts a finished-looking
+ * report immediately and stops following — the round the user just started runs
+ * on invisibly. Measured 2026-10-06: "click probe, it flashes, then nothing
+ * happens", with the endpoint reporting `running:false, requests:0, done:35/35`
+ * while a round was demonstrably in flight.
+ *
+ * The guard lives HERE rather than at the call site because this is where the
+ * clobbering happens, and every future caller inherits it.
+ */
+export function adopt(
   state: CatalogState,
   deps: CatalogDeps,
   record: CatalogCacheRecord,
@@ -1177,7 +3252,11 @@ function adopt(
   // catalogue and the verdicts; it has nothing to say about a round in flight.
   restoreRound = false,
 ): void {
-  const derived = derive(record.models, { knownApis: deps.knownApis, template: deps.template });
+  // The Off evidence a previous process MEASURED, threaded into the derivation
+  // itself rather than patched onto the result: the map is a function of the
+  // record plus the evidence, so patching afterwards would leave two places that
+  // decide `off` — which is how the two authorities drifted apart before.
+  const derived = deriveWithEvidence(state, deps, record.models);
   // An empty state.models dictionary is NOT a catalogue — it is a fetch that failed
   // and got persisted anyway (a round writes one when the catalogue fetch
   // never succeeded, see runProbeRound). Adopting it empties the picker on
@@ -1190,6 +3269,7 @@ function adopt(
     state.source = "models.dev";
     state.updatedAt = record.fetchedAt;
   }
+
   if (Object.keys(record.probes).length > 0) state.probes = { ...record.probes };
   // A channel a previous process MEASURED, re-applied. Without this the
   // measurement is on disk and ignored, so a restart silently reverted every
@@ -1201,9 +3281,10 @@ function adopt(
   // outcome instead of an empty progress area. `running` stays false: this is
   // a completed round, not one to follow.
   const restored = record.lastRound;
-  if (restoreRound && restored !== undefined && restored.total > 0) {
+  if (restoreRound && state.probeRun.running !== true && restored !== undefined && restored.total > 0) {
     state.probeRun = {
       running: false,
+      requests: 0,
       total: restored.total,
       done: restored.done,
       current: null,
@@ -1353,9 +3434,13 @@ function runSingle(state: CatalogState, deps: CatalogDeps): Promise<void> {
   return state.inflight;
 }
 
-function runProbeSingle(state: CatalogState, deps: CatalogDeps): Promise<void> {
+function runProbeSingle(
+  state: CatalogState,
+  deps: CatalogDeps,
+  options: { samplesPerModel?: number; scope?: ProbeScope } = {},
+): Promise<void> {
   if (state.probeInflight !== null) return state.probeInflight;
-  state.probeInflight = runProbeRound(state, deps).finally(() => {
+  state.probeInflight = runProbeRound(state, deps, options).finally(() => {
     state.probeInflight = null;
   });
   return state.probeInflight;
@@ -1366,8 +3451,41 @@ function runProbeSingle(state: CatalogState, deps: CatalogDeps): Promise<void> {
  * can now be driven with two plain objects, with no factory, no temp directory
  * and no network. Everything else in this file moved for the same reason.
  */
-export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Promise<void> {
+/**
+ * Keeps the vocabulary a refusal enumerated, without keeping the refusal.
+ *
+ * A refusal is worthless as a verdict and valuable as a vocabulary: it says the
+ * model exists and what it accepts. Recording it as a verdict would be exactly
+ * the "absence read as a claim" mistake; discarding it would throw away the
+ * only evidence of a level models.dev under-declares.
+ */
+function harvestSelfReport(state: CatalogState, id: string, outcome: ProbeResult): void {
+  const reported = outcome.selfReported;
+  if (reported === undefined || reported.length === 0) return;
+  const previous = state.probes[id]?.selfReported;
+  if (previous !== undefined && previous.length === reported.length && previous.every((l, i) => l === reported[i])) return;
+  state.probes = {
+    ...state.probes,
+    [id]: { ...(state.probes[id] ?? { verdict: "ok", at: 0 }), selfReported: [...reported] },
+  };
+}
+
+export async function runProbeRound(
+  state: CatalogState,
+  deps: CatalogDeps,
+  options: { samplesPerModel?: number; scope?: ProbeScope } = {},
+): Promise<void> {
+  const samplesPerModel = options.samplesPerModel ?? 1;
+  const scope = options.scope ?? "visible";
   const { path, hidden, probe } = deps;
+  // The raw models.dev record behind a derived model, so an effort measurement
+  // is fingerprinted against what it is actually ABOUT. Absent before the first
+  // sync, which is exactly when there is nothing to fingerprint yet.
+  const rawById = (id: string): CatalogRecord | undefined => {
+    const section = state.cache?.models;
+    const raw = section === undefined ? undefined : section[id];
+    return isPlainObject(raw) ? ({ ...raw, id } as CatalogRecord) : undefined;
+  };
   // A round reads `state.probes` twice — to decide what is already settled, and
   // to answer `priorVerdict`, which is the only thing that lets it tell a fresh
   // removal from a re-confirmed old one — and `state.models` to decide what to
@@ -1401,13 +3519,14 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
   // channel refused rather than a model that is gone — and a permanent verdict
   // on a wrong channel is how a working model goes missing for good.
   // The round's scope, decided by one pure function below.
-  const { targets, notListed } = planRound(state.models, live, servedSet, state.probes, hidden);
+  const { targets, notListed } = planRound(state.models, live, servedSet, state.probes, hidden, deps.now(), scope);
   // The panel polls this while the round runs: a progress pill ("4/10") and
   // one badge per row (ok with latency / failed / probing / waiting). It is
   // replaced wholesale at the start of every round and frozen when the round
   // ends, so a late poll never shows a previous round's leftovers as live.
   state.probeRun = {
     running: true,
+    requests: 0,
     // The round's whole scope, so the panel can tell "queued" from "skipped".
     targets: [...targets, ...notListed].map((model) => model.id),
     total: targets.length + notListed.length,
@@ -1431,11 +3550,45 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
   }
   try {
     for (const model of targets) {
+      // A model is asked until this axis has an answer, not until the round
+      // ends. Every `continue` below leaves the SHOT loop, which is what it has
+      // always meant: this model is done for this round. The budget is the only
+      // hard stop, and `effortMeasurementPending` is what stops it early — so the
+      // cost follows the evidence rather than the calendar.
+      // One row and one tally tick per MODEL, however many samples it takes.
+      let okShots = 0;
+      let elapsedTotal = 0;
+      // Requests spent on THIS model. `state.probeRun.requests` is the round's
+      // total, and comparing that against the per-model budget silently stopped
+      // asking the ceiling and capability questions after the round had spent
+      // nine requests anywhere — four models in, seven never heard the question.
+      let shots = 0;
+      // Separate from `shots` on purpose: the effort ladder and the capability
+      // axes are different questions with different budgets, and one starving the
+      // other is how the ceiling harvest ended up manual-only.
+      let capabilityShots = 0;
+      for (let shot = 1; shot <= samplesPerModel; shot += 1) {
+      shots += 1;
+      state.probeRun.requests += 1;
       state.probeRun.current = model.id;
       const started = deps.now();
       let outcome: ProbeResult;
+      // Declared here so the bookkeeping below reads THE question that was sent,
+      // never a second derivation of it.
+      let question: EffortQuestion = "baseline";
       try {
-        outcome = await probe!(model);
+        const raw = rawById(model.id);
+        const record0 = state.probes[model.id];
+        const settled = raw !== undefined && effortVerdictFresh(record0, reasoningFingerprint(raw), deps.now());
+        // THE question, derived once. It used to be derived twice — once to send
+        // (with this model's own lowest published level as the fallback) and
+        // once to label the verdict (with a hardcoded `minimal`) — and after a
+        // disagreement the two answers differ. The stored label then changed the
+        // question itself, so a measurement taken at `low` ended up filed, and
+        // finally frozen, as a claim about `minimal`: a level this model does not
+        // publish, measured once while the tally said three.
+        question = nextEffortQuestion(record0, raw === undefined ? "minimal" : fallbackLevelFor(raw), settled);
+        outcome = await probe!(model, question);
       } catch {
         untrusted = true;
         state.probeRun.results[model.id] = {
@@ -1444,8 +3597,7 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
           code: "error",
           http: 0,
         };
-        state.probeRun.done += 1;
-        continue;
+        break;
       }
       // The row badge reports whether the model ANSWERED, not what the
       // verdict was: `dead` removes the model from the list, but from this
@@ -1453,37 +3605,396 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
       // `ok` earns the green badge; everything else is red — and red carries
       // WHY, because a red badge with no reason is not a report.
       const elapsed = Math.max(0, deps.now() - started);
-      state.probeRun.results[model.id] = probeRowFor(outcome, elapsed, state.probes[model.id]?.verdict);
-      state.probeRun.done += 1;
-      if (outcome === undefined || outcome === null || outcome.kind === "inconclusive") {
+      elapsedTotal += elapsed;
+      const row = probeRowFor(outcome, elapsed, state.probes[model.id]?.verdict);
+      if (row.status === "ok") okShots += 1;
+      state.probeRun.results[model.id] = roundRowSoFar(row, okShots, elapsedTotal);
+      // A refusal of a spelling THIS probe injected is a sample about that
+      // spelling, not a failure to reach the model. Measured 2026-10-06:
+      // space-bunny-free answers `none` with a hard 400 on both channels while
+      // the same model answers the omitted request normally — so the refusal is
+      // evidence, and it is exactly the evidence that moves the round to the
+      // model's own lowest level (ADR 0004 §31). Treating it as a round that
+      // concluded nothing both threw that away AND silenced the model for six
+      // hours, so the fallback could never be reached.
+      //
+      // Only 400/422 qualify, and only for a question this probe actually asked:
+      // a 403/429 is about the caller, a 404/410 is about the model, and both are
+      // already classified upstream. The probe's own request is `hi` with a
+      // 1024-token budget, so ADR 0004 §7's "a generic 400 also means context
+      // overflow" shape does not apply to it.
+      const spellingRefused =
+        outcome !== undefined && outcome !== null && outcome.kind === "inconclusive"
+        && question !== "baseline" && question !== "settled"
+        // 400/422 are the ordinary "I will not take this parameter" statuses;
+        // a FORMAT-scoped refusal says the same thing in a 401, which would
+        // otherwise be read as a credential problem and end the model up
+        // permanently unmeasurable.
+        //
+        // The attribution is safe here because the round only asks a spelling
+        // AFTER three successful omitted samples on this same channel: the
+        // request differs from one that worked by exactly the injected field.
+        // Measured 2026-10-06 on `space-bunny-free`: `low` answered 200 five
+        // times out of five, `none` was refused every time, and the model sat in
+        // the panel as "unmeasurable" instead of falling back to its own level.
+        && (outcome.http === 400 || outcome.http === 422 || outcome.formatScoped === true);
+      if (outcome === undefined || outcome === null || (outcome.kind === "inconclusive" && !spellingRefused)) {
         untrusted = true;
-        continue;
+        // A round that concluded nothing writes NO verdict: a model we could
+        // not reach has no verdict to give it, and giving it one would be the
+        // same "absence read as a claim" mistake this change set exists to
+        // remove. It is still asked next round — there is no cadence.
+        harvestSelfReport(state, model.id, outcome);
+        break;
       }
-      if (outcome.kind !== "ok" && outcome.kind !== "dead") {
+      if (outcome.kind !== "ok" && outcome.kind !== "dead" && !spellingRefused) {
         untrusted = true;
-        continue;
+        harvestSelfReport(state, model.id, outcome);
+        break;
       }
-      state.probes[model.id] = {
-        verdict: outcome.kind,
+      const prior = state.probes[model.id];
+      // A refusal carries no usage and no channel of its own, but it was still
+      // answered on the channel this round asked — which is what a confirmed
+      // verdict needs to be fingerprinted against.
+      if (spellingRefused) harvestSelfReport(state, model.id, outcome);
+      // The Off verdict the same request observed, held back until it agrees
+      // with what came before. `big-pickle` accepted `none` on six of nine
+      // identical requests and 400'd the rest while its liveness stayed `ok`, so
+      // a single sample would persist the wrong row a third of the time with
+      // nothing downstream able to notice.
+      // The probe reports an OBSERVATION; what it means is decided here, because
+      // the baseline arrives on a different round and only the round holds both.
+      const observation = outcome.kind === "ok" ? outcome.effort : undefined;
+      // A SETTLED model is asked for liveness only. Its reading is real but it
+      // answers a question nobody asked, so filing it as a baseline grew that
+      // array on every round for ever — and a median over a silently growing set
+      // is the drift ADR 0004 §38 warns about, one array further down.
+      const isBaseline = question !== "settled" && observation?.kind === "baseline";
+      // A candidate is judged against the model's OWN omitted baseline, never
+      // against an absolute count: longcat's floor of 36 sits above big-pickle's
+      // baseline of 14, so any fixed number collides on the third model.
+      // A settled model contributes nothing: no sample is appended, so its
+      // verdict cannot drift while it waits for the TTL.
+      const tokens =
+        question === "settled" ? prior?.effortTokens : observation === undefined ? undefined : [...(prior?.effortTokens ?? []), observation.tokens];
+      const baseTokens =
+        observation?.kind === "baseline" ? [...(prior?.effortBaselineTokens ?? []), observation.tokens] : prior?.effortBaselineTokens;
+      // Judged on medians, once enough of both sides exist. Per-sample
+      // classification would measure the classifier's fragility — big-pickle's
+      // `minimal` alternates 0 and 8 — rather than the model's.
+      const working =
+        observation?.kind === "candidate" && (tokens?.length ?? 0) >= EFFORT_SAMPLES
+          ? effortVerdictFrom(tokens, baseTokens)
+          : undefined;
+      // A refusal IS a sample: `rejected` is the one kind that needs no token
+      // count, and it is what the fallback branch is waiting for.
+      const sample: MeasuredEffort["kind"] | undefined =
+        question === "settled"
+          ? undefined
+          : spellingRefused
+            ? "rejected"
+            : working === true
+              ? "none-works"
+              : working === false
+                ? "noop"
+                : undefined;
+      const tally = sample === undefined ? undefined : effortVerdict(prior?.effortSamples, sample);
+      // How many times the CURRENT question has failed.
+      //
+      // `EFFORT_FALLBACK_AFTER` counts failures, not disagreements. It had to
+      // count whatever `effortVerdict` calls a discord — and that function has to
+      // call the very first sample one, because there is no prior to agree with.
+      // So one measurement of `none` was enough to move the round off `none`,
+      // including when `none` was exactly what works: mimo-v2.6-flash-free would
+      // have been asked `minimal` instead, and `minimal` measures 16 against a 37
+      // baseline — a miss of 0.09 tokens against the 15.91 threshold — so a model
+      // with a perfect Off would have ended with no Off row at all.
+      //
+      // A question switch also resets the count: the fallback level is a fresh
+      // attempt, and the failures recorded against `none` say nothing about it.
+      const failed = sample !== undefined && sample !== "none-works";
+      const movedOn = prior?.effortQuestion !== undefined && prior.effortQuestion !== question;
+      const discord =
+        tally === undefined
+          ? (prior?.effortDiscord ?? 0)
+          : tally.kind === "confirmed"
+            ? 0
+            : movedOn
+              ? 0
+              : (prior?.effortDiscord ?? 0) + (failed ? 1 : 0);
+      // A refusal names no channel of its own, but it WAS answered on the one
+      // this round asked — and a verdict that cannot say which channel it was
+      // taken on is a verdict `thinkingLevelMapFor` will refuse to apply.
+      const channel = isMeasuredChannel(outcome.api) ? outcome.api : spellingRefused && isMeasuredChannel(model.api) ? model.api : undefined;
+      const confirmed =
+        sample !== undefined && tally !== undefined && tally.kind === "confirmed" && channel !== undefined && rawById(model.id) !== undefined
+          ? sample
+          : undefined;
+      // The record is REBUILT every round, so it starts from the previous one:
+      // evidence this round does not re-derive — the other side of the effort
+      // tally, a vocabulary a refusal enumerated, a measured window — is the
+      // only copy that exists, and a baseline round used to erase the candidates
+      // while a candidate round erased the baseline. Alternating rounds then
+      // erase half the tally each time, which no number of rounds can satisfy.
+      //
+      // `reason` is the one field deliberately NOT carried: it describes this
+      // verdict, so a model that answers again must not keep displaying the
+      // refusal that used to retire it. Everything else survives untouched, and
+      // the fingerprints on the measurements are checked where they are applied.
+      const { reason: _staleReason, ...carried } = prior ?? {};
+      const next: ProbeRecord = {
+        ...carried,
+        // Whatever this round concluded about effort, it concluded it with THIS
+        // instrument. Recorded on the samples it touched, so a record written by
+        // an older one is recognisable on the way back in.
+        ...(observation !== undefined || carried.effortReading !== undefined || tally !== undefined
+          ? { effortReading: EFFORT_READING }
+          : {}),
+        // A round that only measured a refusal learned nothing new about
+        // LIVENESS, so the verdict it already earned stands; writing
+        // `inconclusive` here would both be a value `ProbeVerdict` does not
+        // admit and throw away a verdict the model did earn.
+        verdict: outcome.kind === "ok" || outcome.kind === "dead" ? outcome.kind : (prior?.verdict ?? "ok"),
         at: stamp,
         ...(typeof outcome.reason === "string" && outcome.reason !== "" ? { reason: outcome.reason } : {}),
         // Only an answer names a channel. A refusal is evidence that the
-        // channel did not work, not evidence that another one would.
-        ...(outcome.kind === "ok" && isMeasuredChannel(outcome.api) ? { api: outcome.api } : {}),
+        // channel did not work, not evidence that another one would — except a
+        // refusal to OUR OWN spelling, which was answered on the channel we
+        // asked and therefore keeps it.
+        ...(outcome.kind === "ok" && isMeasuredChannel(outcome.api)
+          ? { api: outcome.api }
+          : spellingRefused && channel !== undefined
+            ? { api: channel }
+            : {}),
         // Reaching here means the prober exhausted every channel before
-        // concluding, so this `dead` is earned and can be final.
-        ...(outcome.kind === "dead" ? { swept: true } : {}),
+        // concluding, so this `dead` is earned and can be final — but "final"
+        // needs an end, and the end is a date rather than never.
+        ...(outcome.kind === "dead" ? { swept: true, nextProbeAt: stamp + DEAD_RECHECK_MS } : {}),
+        // The tally is kept even when nothing was confirmed, so the next round
+        // continues the count instead of restarting it.
+        ...(tally !== undefined && question !== "settled"
+        ? { effortSamples: tally.kind === "confirmed" ? [] : tally.samples, effortDiscord: discord }
+        : {}),
+        // The baseline is the reference every later candidate is judged against,
+        // so it is kept even when nothing was concluded.
+        ...(isBaseline && observation !== undefined ? { effortBaseline: observation.tokens } : {}),
+        // The raw samples are what the verdict is drawn from; keeping them is
+        // what lets a later round judge the MEDIAN rather than the last value.
+        ...(isBaseline && baseTokens !== undefined ? { effortBaselineTokens: baseTokens } : {}),
+        ...(observation?.kind === "candidate" && tokens !== undefined ? { effortTokens: tokens } : {}),
+        // Written ONLY on agreement. A disagreement empties the tally and leaves
+        // the map unmeasured, which offers no Off row rather than a wrong one.
+        // The fallback question stays put: it answered the question, so
+        // switching back would re-open a settled matter.
+        ...(tally !== undefined ? { effortQuestion: question } : {}),
+        ...(confirmed && tally !== undefined && channel !== undefined
+          ? {
+              effort: {
+                // The KIND is the confirmed sample, not the spelling we were
+                // asking about. Re-deriving it from `question` is how a
+                // confirmed `noop` became `level-works` on 2026-10-06:
+                // `longcat-2.5-preview-free` kept samples [1,36,36,36,36]
+                // against a baseline of [36,36,36] — median 36, threshold 15.48,
+                // so it reduced NOTHING — and was handed an Off row at
+                // `minimal` anyway. A verdict that names a level it did not
+                // demonstrate is the one kind of lie this axis cannot ship.
+                //
+                // `level-works` is the same verdict as `none-works`, spoken in
+                // the words of the level that was asked: the sample said the
+                // spelling WORKS, and the spelling was `minimal`.
+                kind: confirmed === "noop" || confirmed === "rejected"
+                  ? confirmed
+                  : question === "none"
+                    ? "none-works"
+                    : "level-works",
+                ...(confirmed === "noop" || confirmed === "rejected" || question === "none" ? {} : { level: question }),
+                fp: reasoningFingerprint({ ...rawById(model.id)!, id: model.id }),
+                api: channel,
+                at: stamp,
+              },
+              effortDiscord: 0,
+              effortFrozenAt: stamp,
+              // Frozen: the samples that produced this verdict are KEPT, and
+              // the tally is emptied — two different things, and the comment here
+              // used to claim the first while the code did the second.
+              //
+              // The tally is what would keep growing (a settled model is still
+              // probed for liveness, and `effortSamples` would otherwise count
+              // judgements made against a frozen verdict). The samples are the
+              // ONLY evidence the verdict rests on: clearing them made every
+              // frozen verdict unauditable, which is how a classifier can be
+              // wrong with no way to notice — and on 2026-10-06 that is exactly
+              // where `longcat-2.5-preview-free` landed, confirmed at a level
+              // the recorded measurement says does nothing.
+              effortSamples: [],
+            }
+          : {}),
       };
+      state.probes[model.id] = next;
+      // Another shot only while this axis still has no answer. A round that
+      // concluded nothing at all left the shot loop above, so this cannot turn a
+      // failing model into a quota drain.
+      const raw = rawById(model.id);
+      const pending = effortMeasurementPending(
+        model,
+        next,
+        nextEffortQuestion(next, raw === undefined ? "minimal" : fallbackLevelFor({ ...raw, id: model.id })),
+      );
+      if (!pending) break;
       // Applied HERE, not when the round ends. A row is painted the moment its
       // verdict lands, so a model shown as working must already be routed the
       // way it worked — waiting for the last model to finish left a visibly
       // successful model still going down the channel the probe had just ruled
       // out. The cache write stays once per round.
-      if (outcome.kind === "ok") applyMeasuredChannel(state.models, state.probes);
+      if (outcome.kind === "ok") {
+        applyMeasuredChannel(state.models, state.probes);
+      }
+      } // shot loop
+      // The capability axes this model has never been asked about. Asked AFTER the
+      // effort shots and on the same budget, for two reasons: a model that did not
+      // answer at all is not asked a second question (the round already knows
+      // nothing about it), and a capability sample can never be filed against the
+      // effort tally because it is not produced by the shot loop at all.
+      //
+      // `capabilityQuestionsFor` reads the SAME evidence the panel reads, so an
+      // axis the panel already shows as measured is not asked again — the round
+      // cannot re-measure what it already knows, which is what keeps this from
+      // turning into a permanent per-round tax.
+      const axisQuestions = capabilityQuestionsFor(model, rawById(model.id), state.probes, deps.now());
+      // The CEILING question goes first, and it is the only one whose cost is
+      // zero when it works: it asks for the whole advertised window, so a route
+      // with a limit refuses and NAMES it, and a refusal produces no output
+      // tokens at all. A route that answers instead is recorded as having stated
+      // nothing — which is itself the answer for a model whose ceiling is above
+      // anything this conversation could ask for.
+      // Asked when there is nothing stored OR when what is stored cannot be
+      // applied. The second half is the one that matters: an entry written under
+      // the old fingerprint reads as a valid measurement (`isMeasuredLimits`
+      // only checks that `fp` is a non-empty string) and is then dropped by the
+      // fingerprint comparison on the way into the catalogue — so it would never
+      // be asked again and never be applied. A permanent silent drop, found live:
+      // `longcat-2.5-preview-free` had been sitting in exactly that state, its
+      // budget coming from the seed table while the panel showed no `stated`.
+      //
+      // `fp: ""` is the record of "asked, and the route named nothing". It is
+      // worth keeping for {@link CEILING_SILENCE_TTL_MS} — long enough that a
+      // restart does not re-pay for a question already answered in silence, short
+      // enough that an upstream which starts declaring a ceiling is noticed
+      // within a day.
+      const storedLimits = state.probes[model.id]?.limits;
+      const ceilingApplies =
+        storedLimits !== undefined && storedLimits.fp !== "" && rawById(model.id) !== undefined && storedLimits.fp === contextFingerprint(rawById(model.id)!);
+      const ceilingAnswered =
+        storedLimits !== undefined &&
+        storedLimits.fp === "" &&
+        storedLimits.at > 0 &&
+        deps.now() - storedLimits.at < CEILING_SILENCE_TTL_MS;
+      if (storedLimits === undefined || (!ceilingApplies && !ceilingAnswered)) {
+        for (const _attempt of [0]) {
+          if (capabilityShots >= CAPABILITY_SAMPLE_BUDGET) break;
+          if (state.probes[model.id]?.verdict !== "ok") break;
+          const recordCeil = rawById(model.id);
+          if (recordCeil === undefined) break;
+          capabilityShots += 1;
+          state.probeRun.requests += 1;
+          try {
+            const ceilingOutcome = await probe!(model, "ceiling");
+            const stated = ceilingOutcome.kind === "inconclusive" ? ceilingOutcome.ceilings : undefined;
+            const priorC = state.probes[model.id];
+            state.probes[model.id] = {
+              ...priorC,
+              // Recorded even when nothing was named: "asked, and the route said
+              // no more" is what stops the next round from asking again, and it
+              // is the honest state of a route that enforces nothing.
+              limits:
+                // Dated, so it survives a warm start and the next round can
+                // tell "asked an hour ago" from "asked last week".
+                stated === undefined
+                  ? { fp: "", at: deps.now() }
+                  : {
+                      ...(stated.output === undefined ? {} : { output: stated.output }),
+                      ...(stated.context === undefined ? {} : { context: stated.context }),
+                      // `contextFingerprint`, NOT `capabilityFingerprint`: the two
+                      // are different strings ("1000000:131072" versus
+                      // "1000000:131072:text+image") and the check on the way
+                      // back in compares against this one. Storing the other meant
+                      // every harvested ceiling was silently dropped, and the
+                      // number in the panel came from the seed table instead —
+                      // which looks exactly like the mechanism working.
+                      fp: contextFingerprint(recordCeil),
+                      at: deps.now(),
+                    },
+            };
+            // A context ceiling the route just NAMED is the strongest evidence
+            // there is for that axis — first-party, current, free — so it is
+            // applied immediately rather than at the end of the round.
+            if (stated?.context !== undefined) {
+              const m = state.models.find((x) => x.id === model.id);
+              if (m !== undefined && stated.context > m.contextWindow) {
+                (m as { contextWindow: number }).contextWindow = stated.context;
+              }
+            }
+          } catch {
+            // A prober that throws has learned nothing; the axis stays open and
+            // the next round asks again.
+          }
+        }
+      }
+      // The two DECLARED-capability questions cost real output tokens — a vision
+      // question can spend 4096 of them on thinking — and the daily round covers
+      // every model Zen serves, including the ones the user switched OFF. Paying
+      // that daily for models nobody is looking at is the wrong bill, so the axis
+      // questions stay on the manual round, which is scoped to what is on screen.
+      // The ceiling question above is the cheap one and runs on every round: a
+      // refusal produces no output tokens at all.
+      for (const axis of scope === "served" ? [] : axisQuestions) {
+        if (state.probes[model.id]?.verdict !== "ok") break;
+        if (capabilityShots >= CAPABILITY_SAMPLE_BUDGET) break;
+        const record1 = rawById(model.id);
+        if (record1 === undefined) break;
+        capabilityShots += 1;
+        state.probeRun.requests += 1;
+        const askedAt = deps.now();
+        try {
+          const capabilityOutcome = await probe!(model, `capability:${axis}`);
+          const judged = capabilityOutcome.kind === "ok" ? capabilityOutcome.capability : undefined;
+          // Nothing is written when the request taught us nothing — the model
+          // said nothing, the upstream refused, the bucket was spent. An absent
+          // verdict means the panel shows "not measured" and the next round
+          // tries again, which is the honest state of an unanswered question.
+          if (judged === undefined) continue;
+          const prior1 = state.probes[model.id];
+          state.probes[model.id] = {
+            ...prior1,
+            capabilities: {
+              ...prior1?.capabilities,
+              [axis]: { ok: judged.ok, at: askedAt, fp: capabilityFingerprint(record1) },
+            },
+          };
+        } catch {
+          // Same rule as the shot loop: a prober that throws has learned nothing,
+          // and a capability axis is never worth failing a round over.
+        }
+      }
+      state.probeRun.done += 1;
     }
   } finally {
     state.probeRun.running = false;
     state.probeRun.current = null;
+  }
+  // Republish what this round just measured. `state.models` was derived before
+  // the round, so a verdict that landed here was on disk but not in the list the
+  // picker and the panel read — the user clicked "Probe now" and watched a round
+  // confirm an Off row that stayed invisible until the next catalogue sync or a
+  // restart. The derivation is the SAME one the warm start uses, so the two
+  // cannot answer differently about the same evidence.
+  //
+  // `adopt()` is deliberately not called: it restores the probe map FROM the
+  // record, which would roll back what this very round just wrote.
+  if (state.cache !== null) {
+    const derived = deriveWithEvidence(state, deps, state.cache.models);
+    if (derived.candidates.length > 0) state.models = derived.candidates;
+    applyMeasuredChannel(state.models, state.probes);
   }
   // The round marker is written even when nothing concluded: it is the only
   // thing that stops a fully-gated day from re-probing on every single read.
@@ -1572,6 +4083,18 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
         // Adopted whatever its age: a stale state.cache is still a far better answer
         // than the offline floor, and `ensureFresh` revalidates on the first read
         // in the background rather than making the user wait for 5.2MB.
+        //
+        // …unless a round is already in flight. `restoreRound` exists for the
+        // startup case, and this read is the startup read — but it resolves on
+        // its own schedule, and a round started from `getModels()` can begin
+        // before it lands. Restoring then replaces a LIVE `probeRun`
+        // (running, requests counting, done climbing) with the previous round's
+        // finished report: `requests` back to 0, `done` back to 35/35,
+        // `running` false. The panel adopts that at once and stops following, so
+        // the round the user just started runs on invisibly and the card shows
+        // nothing changing. Measured 2026-10-06: "click probe, it flashes, then
+        // nothing happens" with the live endpoint reporting `running:false,
+        // requests:0, done:35/35` while a round was demonstrably in flight.
         adopt(state, deps, found, true);
       })
       .catch(() => undefined)
@@ -1638,15 +4161,192 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
    * empty the picker.
    */
 
+  /**
+   * Keeps the vocabulary a refusal enumerated, without keeping the refusal.
+   *
+   * A refusal is worthless as a verdict and valuable as a vocabulary: it says the
+   * model exists and what it accepts. Recording it as a verdict would be exactly
+   * the "absence read as a claim" mistake; discarding it would throw away the
+   * only evidence of a level models.dev under-declares.
+   */
+  function harvestSelfReport(state: CatalogState, id: string, outcome: ProbeResult): void {
+    const reported = outcome.selfReported;
+    if (reported === undefined || reported.length === 0) return;
+    const previous = state.probes[id]?.selfReported;
+    if (previous !== undefined && previous.length === reported.length && previous.every((l, i) => l === reported[i])) {
+      return;
+    }
+    state.probes = { ...state.probes, [id]: { ...(state.probes[id] ?? { verdict: "ok", at: 0 }), selfReported: [...reported] } };
+  }
+
+  /** Records one clamp observation and, once they agree, raises the window. */
+  /**
+   * Write the catalogue cache with whatever the state holds RIGHT NOW.
+   *
+   * Shared because the truncation counters are written from the request path,
+   * not from a round: they accumulate over days of ordinary use, and a counter
+   * that a restart erases cannot answer the question it exists to answer. The
+   * round's own write stays where it is — it is a milestone, this is not — but
+   * both go through here so the record they produce cannot differ.
+   *
+   * Fire-and-forget on purpose: a reply must never wait on bookkeeping, and the
+   * write is atomic, so the worst a crash costs is one increment.
+   */
+  let persistInFlight: Promise<void> | null = null;
+  let persistQueued = false;
+  function persistCache(): void {
+    if (state.cache === null) return;
+    // SERIALISED, because the record is a whole-file replace and two concurrent
+    // writes lose one of the increments: three truncations in quick succession
+    // produced three overlapping writes, and the one that landed last was
+    // whichever had read the state earliest — so a count went missing. Caught by
+    // the test that reads the file back, not by the panel, which never saw the
+    // number at all.
+    if (persistInFlight !== null) {
+      persistQueued = true;
+      return;
+    }
+    // Built at WRITE time, not at call time, so a queued write carries the state
+    // as it is when it goes out rather than as it was when it was asked for.
+    persistInFlight = writeCacheAtomic(path, {
+      etag: state.cache.etag,
+      fetchedAt: state.cache.fetchedAt,
+      models: state.cache.models,
+      probes: state.probes,
+      lastProbeAt: state.lastProbeAt,
+      lastRound: state.cache.lastRound,
+    })
+      .catch(() => undefined)
+      .then(() => {
+        persistInFlight = null;
+        if (persistQueued) {
+          persistQueued = false;
+          persistCache();
+        }
+      });
+  }
+
+  function observeFirstToken(id: string, ms: number): void {
+    const record = state.probes[id];
+    const previous = record?.firstTokenMs ?? [];
+    state.probes = {
+      ...state.probes,
+      [id]: {
+        ...(record ?? { verdict: "ok", at: now() }),
+        // Newest first, five deep: enough to stop one cold request from becoming
+        // the model's reputation, and small enough that a stale entry expires on
+        // its own within a normal week of use.
+        firstTokenMs: [ms, ...previous].slice(0, 5),
+      },
+    };
+    persistCache();
+  }
+
+  function observeClamp(id: string, observation: ClampObservation): void {
+    const model = state.models.find((m) => m.id === id);
+    if (model === undefined) return;
+    const record = state.probes[id];
+    // Counted FIRST, and independent of `starved`: a reply cut off mid-answer is
+    // not the clamp signature (which needs an empty one), and it is the fact
+    // that says whether the advertised budget is too low. `emitted` below the
+    // model's own ceiling means the CONTEXT clamp cut it, which is a different
+    // question and is counted apart — a conversation running out of room is not
+    // an output budget that is too small.
+    if (observation.truncated === true) {
+      const byContext =
+        observation.emitted === undefined || observation.emitted < model.maxTokens;
+      const hits = record?.budgetHits ?? {};
+      state.probes = {
+        ...state.probes,
+        [id]: {
+          ...(record ?? { verdict: "ok", at: now() }),
+          budgetHits: {
+            ...hits,
+            ...(byContext ? { context: (hits.context ?? 0) + 1 } : { output: (hits.output ?? 0) + 1 }),
+            at: now(),
+          },
+        },
+      };
+      // Persisted, not held in memory: the answer this counts towards is "has a
+      // reply ever wanted more than we send", and a counter a restart erases
+      // cannot answer it — this session alone restarted six times.
+      persistCache();
+    }
+    if (!observation.starved) return;
+    const verdict = clampVerdict(record, observation, model.contextWindow);
+    if (verdict.kind === "none") return;
+    if (verdict.kind === "hit") {
+      // In-memory only. Losing it on restart costs one more round, never a
+      // wrong verdict, which is the same bargain the round's counters make.
+      state.probes = { ...state.probes, [id]: { ...(record ?? { verdict: "ok", at: now() }), contextHits: verdict.hits } };
+      return;
+    }
+    // The raw section the derivation came from, so the measurement is fingerprinted
+    // against what it is actually about rather than against whatever is on hand.
+    const section = state.cache?.models;
+    const record0 = section !== undefined && isPlainObject(section[id]) ? { ...(section[id] as CatalogRecord), id } : undefined;
+    const measured: MeasuredContext = {
+      raisedTo: verdict.raisedTo,
+      fp: record0 === undefined ? "" : contextFingerprint(record0),
+      at: now(),
+      // Derived from the clamp signature, never from the endpoint's own words —
+      // so it stays behind the `declared x 4` valve.
+      source: "inferred",
+    };
+    state.probes = {
+      ...state.probes,
+      [id]: { ...(record ?? { verdict: "ok", at: now() }), context: measured, contextHits: 0 },
+    };
+    // Only ever upward, and re-derived from the same function that produced it,
+    // so the live list and the next warm start cannot disagree.
+    const raised = record0 === undefined ? verdict.raisedTo : contextWindowFor(record0, measured) ?? verdict.raisedTo;
+    if (raised > model.contextWindow) (model as { contextWindow: number }).contextWindow = raised;
+  }
+
   return {
+    observeClamp,
+    observeFirstToken,
     current(): CatalogSnapshot {
       // One pass over the single effective list feeds both `visible` and
       // `capabilities`, so the ids and the cards can never disagree.
       const effective = effectiveList(state.models, state.zenIds, state.probes);
+      // The raw records behind the derived models, so a card can say what
+      // models.dev published next to what the plugin actually advertises — and
+      // so the two provenance flags come from the same seed tables and probe
+      // records the request path reads, rather than from a second opinion formed
+      // here. A panel that recomputes "measured" on its own is exactly the kind
+      // of second authority that drifts.
+      const rawById = (id: string): CatalogRecord | undefined => {
+        const raw = state.cache?.models?.[id];
+        return isPlainObject(raw) ? ({ ...raw, id } as CatalogRecord) : undefined;
+      };
+      const section = state.cache?.models;
+      const efforts = section === undefined ? new Map<string, MeasuredEffort>() : measuredEffortMap(effective, section, state.probes);
+      const harvested = section === undefined ? new Map<string, MeasuredLimits>() : measuredLimitsFor(effective, section, state.probes);
+      const measured = section === undefined ? new Map<string, MeasuredContext>() : measuredContextFor(effective, section, state.probes);
       return {
         models: state.models.slice(),
         visible: effective.map((model) => model.id),
-        capabilities: effective.map(modelCapability),
+        capabilities: effective.map((model) => {
+          const record = rawById(model.id);
+          const limit = isPlainObject(record?.limit) ? record.limit : {};
+          const declaredContext = finitePositive(limit.context);
+          const declaredOutput = finitePositive(limit.output);
+          return modelCapability(model, {
+            record,
+            probes: state.probes,
+            // "Measured" means the number on the wire is not the number that was
+            // published — stated plainly rather than re-derived from the seed
+            // tables, because this is the only reading a reader of the panel can
+            // check: they can see both numbers.
+            measured: measured.get(model.id),
+            measuredEffort: efforts.get(model.id),
+            limits: harvested.get(model.id),
+            budgetHits: state.probes[model.id]?.budgetHits,
+            firstTokenMs: state.probes[model.id]?.firstTokenMs,
+            now: Date.now(),
+          });
+        }),
         source: state.source,
         updatedAt: state.updatedAt,
         gateCheckedAt: state.gateCheckedAt,
@@ -1678,17 +4378,31 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
       if (probe === undefined) return;
       if (state.probeInflight !== null) return state.probeInflight;
       if (probedToday(state.lastProbeAt, now)) return;
-      return runProbeSingle(state, deps);
+      // One request per model, over every model Zen still lists: nobody asked
+      // for this round, and its job is to keep the catalogue honest rather than
+      // to answer a question someone is watching.
+      return runProbeSingle(state, deps, { samplesPerModel: 1, scope: "served" });
     },
-    async forceProbes(): Promise<void> {
-      if (probe === undefined) return;
+    async forceProbes(): Promise<ProbeStart> {
+      if (probe === undefined) return { started: false, reason: "unavailable" };
+      if (state.probeInflight !== null) return { started: false, reason: "running" };
       // A manual round still costs one request per model from a bucket shared
       // per egress IP, and the POST route has no rate limit of its own — so
       // repeated clicks spent the whole office's quota. A short floor keeps the
       // button honest without making it useless: the user asked for a fresh
       // answer, not a second one five seconds later.
-      if (now() - state.lastProbeAt < FORCED_PROBE_MIN_INTERVAL_MS) return;
-      return runProbeSingle(state, deps);
+      //
+      // The floor is REPORTED rather than swallowed. Returning nothing made a
+      // refused click indistinguishable from a started one: the route answered
+      // 202 either way, and the panel spun until its grace period expired with
+      // no word about why.
+      const wait = FORCED_PROBE_MIN_INTERVAL_MS - (now() - state.lastProbeAt);
+      if (wait > 0) return { started: false, reason: "cooldown", retryAfterMs: wait };
+      await runProbeSingle(state, deps, {
+        samplesPerModel: options.manualSampleBudget ?? MANUAL_SAMPLE_BUDGET,
+        scope: "visible",
+      });
+      return { started: true };
     },
     probeProgress(): ProbeProgress {
       // A copy: the round mutates `state.probeRun` while the panel reads this.
@@ -1700,6 +4414,8 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
         results: { ...state.probeRun.results },
         targets: state.probeRun.targets.slice(),
         startedAt: state.probeRun.startedAt,
+        requests: state.probeRun.requests,
+        pending: pendingEffortIds(state),
       };
     },
     applyZenGate(ids: readonly string[] | null): void {

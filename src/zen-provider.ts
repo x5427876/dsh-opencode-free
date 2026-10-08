@@ -17,7 +17,7 @@ import { getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compa
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
-import type { Catalog } from "./catalog.js";
+import type { CapabilityAxis, Catalog } from "./catalog.js";
 
 export const PROVIDER_ID = "opencode-zen-free";
 export const BASE_URL = "https://opencode.ai/zen/v1";
@@ -585,7 +585,23 @@ function restoreShellCalls(value: unknown): void {
 export const ZEN_API_KEY_ENV = "OPENCODE_API_KEY";
 
 /** Upstream failure classes with actionable guidance (see spec v0.2). */
-export type ZenFailureKind = "anon-gated" | "quota-exhausted" | "bad-key" | "unknown";
+export type ZenFailureKind =
+  | "anon-gated"
+  | "quota-exhausted"
+  | "bad-key"
+  | "upstream-overloaded"
+  | "endpoint-unavailable"
+  /**
+   * The route refused because of WHERE the request came from.
+   *
+   * Its own condition, and the only failure here with a one-line fix the reader
+   * can act on: a different egress is a different answer. Reporting it as
+   * "unknown" made a model that is perfectly usable look like a mystery, and the
+   * plugin's own catalogue says which models are sensitive to it — the free lane
+   * is keyed to the caller's region, not to the model.
+   */
+  | "region-blocked"
+  | "unknown";
 
 export const ZEN_FAILURE_GUIDANCE: Record<ZenFailureKind, string> = {
   "anon-gated":
@@ -595,10 +611,18 @@ export const ZEN_FAILURE_GUIDANCE: Record<ZenFailureKind, string> = {
   "quota-exhausted":
     "免費額度用完。等視窗重置，或掛 Zen key（插件 config.apiKey 或 " + ZEN_API_KEY_ENV + "）繼續用。",
   "bad-key": "Zen key 無效。檢查 key 是否正確、過期或被撤銷；匿名用量不受影響。",
+  "upstream-overloaded":
+    "上游暫時過載（503）。這是上游的容量問題，與插件、key、模型是否可用都無關；稍後再試即可。",
+  "endpoint-unavailable":
+    "上游端點暫時不可達（Upstream request failed: Endpoint is unavailable）。這是路由的問題，與模型是否可用無關；稍後再試。",
+  "region-blocked":
+    "上游依出口地區拒絕（not available in your country）。模型本身可能完全正常——換一個出口再試即可，這與 key、額度、模型都無關。",
   unknown: "未知的上游錯誤。跑 scripts/reverify.sh 看當下閘門狀態，仍異常則回報狀態碼與報文。",
 };
 
 const ANON_GATED_PATTERN = /FreeTierError|MissingSessionID|only be used .*OpenCode/i;
+/** Self-described capacity trouble, whatever status it arrives under. */
+const OVERLOADED_PATTERN = /temporarily overloaded|service unavailable|overloaded|capacity/i;
 /**
  * Re-assert the anonymous admission tools on the FINAL payload.
  *
@@ -671,11 +695,24 @@ export const ZEN_TRANSPORT_GUIDANCE =
  * anonymity-gate marker is present, and an unrecognized 403 stays unknown
  * rather than guessed.
  */
+const REGION_PATTERN = /not available in your country|unavailable in your (?:country|region)|region.?block|not available in this region|country.?restricted/i;
+
 export function classifyZenFailure(status: number, bodyText: string): ZenFailureKind {
   const body = typeof bodyText === "string" ? bodyText : "";
   if (ANON_GATED_PATTERN.test(body)) return "anon-gated";
   if (status === 429 || QUOTA_PATTERN.test(body)) return "quota-exhausted";
   if (status === 401 || BAD_KEY_PATTERN.test(body)) return "bad-key";
+  // The upstream says so in words, and the status does not: measured
+  // 2026-10-06, `nemotron-3-ultra-free` answered HTTP 200 whose only SSE frame
+  // was `Streaming response failed: [503] Upstream error from Nvidia: Service
+  // temporarily overloaded`. A row that says only "unknown" makes a capacity
+  // problem look like a mystery, and it is the one condition here the reader can
+  // simply wait out.
+  if (OVERLOADED_PATTERN.test(body)) return "upstream-overloaded";
+  // Matched BEFORE the status, because this one is routinely carried as a 403
+  // and a 400 — and a bare status would file it under "bad key" or "unknown",
+  // both of which send the reader to fix something that is not broken.
+  if (REGION_PATTERN.test(body)) return "region-blocked";
   return "unknown";
 }
 
@@ -748,6 +785,132 @@ const PROBE_PROMPT = "hi";
  */
 export const PROBE_MAX_TOKENS = 1024;
 /**
+ * The budget a vision question gets, for the reason spelled out at the one place
+ * it is used: a reasoning model can spend a small budget entirely on thinking and
+ * return no text, which is indistinguishable from a model that cannot see.
+ */
+export const CAPABILITY_VISION_MAX_TOKENS = 4096;
+
+/**
+ * The two questions a round can ask about a DECLARED capability, and how each one
+ * is decided.
+ *
+ * Both existed as claims before either had a measurement: the vision badge is a
+ * copy of `modalities.input`, and "tool calls work" was an inference from the
+ * anonymous gate that admits a request only when it carries `read` and `bash`.
+ * A panel that shows a badge nobody checked is a promise the plugin cannot keep,
+ * so both became questions the round can ask — once per model, then never again
+ * (the verdict is persisted).
+ *
+ * The image is a 64x64 PNG built by hand and embedded here: magenta over lime,
+ * no network, no dependency. Asking for the TOP half is what makes the answer
+ * unfalsifiable from the prompt — the model cannot guess which half was asked
+ * about — and the no-image control answers "no image was attached" and "blue",
+ * so the wrong answer is on record as well as the right one.
+ *
+ * The tool schemas are REAL. The admission gate's own stubs describe themselves
+ * as "Unavailable in this request. Do not call." — so measuring against them
+ * would report a model that correctly obeys an instruction as a model that
+ * cannot use tools.
+ */
+const CAPABILITY_PROBE_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATklEQVR42u3PMQkAAAwDsPo3vWnoWQjEQHK5aREQEBAQEBAQEBAQEBAQEBAQEBAQEBAQqAPzBAQEBAQEBAQEBAQEBAQEBAQEBAQEBARaDx986VrSGkoPAAAAAElFTkSuQmCC";
+const CAPABILITY_TOOL_SCHEMAS: readonly Record<string, unknown>[] = [
+  {
+    type: "function",
+    function: {
+      name: "bash",
+      description: "Execute a shell command in a persistent session and return its output.",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string", description: "The command to execute" },
+          description: { type: "string", description: "A short description of what the command does" },
+        },
+        required: ["command"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read",
+      description: "Read a file from the local filesystem. Takes a path and returns its contents with line numbers.",
+      parameters: {
+        type: "object",
+        properties: { path: { type: "string", description: "The path to read" } },
+        required: ["path"],
+      },
+    },
+  },
+];
+
+const CAPABILITY_QUESTIONS: Readonly<Record<CapabilityAxis, { question: string; prompt: string }>> = {
+  vision: {
+    question: "capability:vision",
+    prompt:
+      "Look at the attached image. Reply with ONLY one lowercase English colour word: the colour of the image's TOP half. No other words.",
+  },
+  tools: {
+    question: "capability:tools",
+    prompt:
+      "Call the `bash` tool with the command `echo capability-probe`. Do not answer from memory — make the tool call now, then stop.",
+  },
+};
+
+/**
+ * A ceiling the ROUTE stated about itself, read out of a refusal.
+ *
+ * This is the cheapest instrument in the plugin and it is the one that was not
+ * being used: a refusal costs ZERO output tokens and it returns a NUMBER, where
+ * a generation costs tens of thousands and may not even reach its budget. Two
+ * distinct ceilings appear in these bodies and they are not the same thing:
+ *
+ *   output  "[invalid_parameter] 参数校验失败: /max_tokens: 995834 is not less
+ *           or equal to 262144"                        ← longcat, measured 2026-10-07
+ *   context "...exceeds the model's maximum context length of 262139 tokens"
+ *                                                       ← big-pickle, same day
+ *   context "This endpoint's maximum context length is 1048576 tokens."
+ *                                                       ← mimo (ADR 0004 §4)
+ *
+ * An ACCEPTANCE says nothing about any of this, which is how `big-pickle` came
+ * to be advertising a window four times its real one (ADR 0004 §47).
+ *
+ * Returned as two optional numbers rather than one, because a body can name
+ * either, both, or neither, and the caller must not have to guess which kind it
+ * got. A body that names neither is a refusal about something else entirely —
+ * a bad parameter, a dead model, a gate — and this returns undefined so it can
+ * never be mistaken for a measurement.
+ */
+export function statedCeilings(body: string): { output?: number; context?: number } | undefined {
+  if (typeof body !== "string" || body === "") return undefined;
+  const out: { output?: number; context?: number } = {};
+  // The parameter form. `max_tokens: <sent> is not less or equal to <cap>`; the
+  // sent value is ours (pi-ai's clamp) and is deliberately not read — the ceiling
+  // is the other side of the comparison.
+  const param = /max_tokens:\s*\d+\s+is\s+not\s+less\s+or\s+equal\s+to\s+(\d+)/i.exec(body);
+  if (param?.[1] !== undefined) out.output = Number(param[1]);
+  const context =
+    /maximum context length (?:is|of)\s+(\d+)\s*tokens/i.exec(body) ??
+    /maximum context length of\s+(\d+)/i.exec(body);
+  if (context?.[1] !== undefined) out.context = Number(context[1]);
+  return out.output === undefined && out.context === undefined ? undefined : out;
+}
+
+/**
+ * The axis a question string asks about, or undefined when it is not one.
+ *
+ * The prefix is the whole contract between the catalogue's round and this
+ * prober, and it is deliberately not a value in the effort ladder: a capability
+ * question must never be mistaken for a reasoning spelling, or a sample would be
+ * filed against the wrong axis.
+ */
+export function capabilityAxisOf(question: string | undefined): CapabilityAxis | undefined {
+  if (typeof question !== "string") return undefined;
+  const axis = question.startsWith("capability:") ? question.slice("capability:".length) : "";
+  return axis === "vision" || axis === "tools" ? axis : undefined;
+}
+/**
  * Same per-model ceiling as scripts/test-live.mjs, and the same 15s 9router's
  * per-model test uses. The round is sequential over the whole catalogue, so the
  * per-model ceiling is the round's worst case multiplied: 30s here was up to
@@ -781,6 +944,13 @@ const MODEL_GONE_PATTERNS: readonly RegExp[] = [
   /\bmodels?\b.{0,60}?\bnot\s+supported\b/i,
   // "model not found" / "does not exist" / "unrecognized model"
   /\bmodels?\b.{0,24}?\b(?:not\s+found|does\s+not\s+exist|unrecognized)\b/i,
+  // "Model mimo-v2.5-free has been deprecated. Use mimo-v2.6-flash-free instead."
+  // — measured 2026-10-07. It arrives as HTTP 410, already in
+  // `MODEL_GONE_STATUSES`, so the verdict was `dead`; what was missing is that the
+  // BODY says it — which is what lets it survive a sibling channel that answered
+  // nothing. Model-scoped on purpose: a bare "deprecated" also describes request
+  // fields and endpoints, and those are not the model.
+  /\bmodels?\b.{0,80}?\bdeprecat(?:ed|ion)\b/i,
   /\bno\s+longer\s+(?:available|served|supported|provided|offered)\b/i,
   /\b(?:retired|sunset|discontinued|decommissioned)\b/i,
 ];
@@ -808,6 +978,32 @@ const ENDPOINT_FAILURE_PATTERN =
 
 /** Statuses that mean the addressed model itself is gone. */
 const MODEL_GONE_STATUSES = new Set([404, 410]);
+
+/**
+ * Whether the upstream NAMED this model's unavailability, as opposed to the
+ * status alone carrying it.
+ *
+ * The two are not interchangeable. A bare 404/410 is exactly what a WRONG
+ * channel answers — ADR 0004 §22 measured a healthy model replying "not
+ * supported for format …" when sent down the wrong one — so a sibling channel
+ * staying silent must veto it. A body that says "Model is unavailable." is not
+ * something a wrong channel invents; the format-scoped reading is already
+ * excluded by {@link FORMAT_SCOPED_PATTERN}.
+ *
+ * Measured 2026-10-06: `deepseek-v4-flash-free` answers exactly that sentence on
+ * the completions channel, and a bare `Internal server error` 500 on the
+ * responses channel. Ranking the 500 above the named sentence kept a withdrawn
+ * model in the picker for weeks.
+ */
+export function isNamedModelUnavailable(status: number, bodyText: string): boolean {
+  const body = typeof bodyText === "string" ? bodyText : "";
+  if (ANON_GATED_PATTERN.test(body)) return false;
+  if (QUOTA_PATTERN.test(body)) return false;
+  if (BAD_KEY_PATTERN.test(body)) return false;
+  if (ENDPOINT_FAILURE_PATTERN.test(body)) return false;
+  if (FORMAT_SCOPED_PATTERN.test(body)) return false;
+  return MODEL_GONE_PATTERNS.some((pattern) => pattern.test(body));
+}
 
 /**
  * Whether an upstream failure *positively* identifies this model as gone.
@@ -863,8 +1059,44 @@ export type ProbeOutcome =
       usage?: ProbeUsage;
       /** The channel that ANSWERED, when one did. */
       api?: Api;
+      /**
+       * What the SAME request observed about `reasoning_effort:"none"`, since
+       * the probe sends it at the payload boundary. One request, two signals —
+       * measured: a model that honours `none` still returns text, so this costs
+       * the liveness verdict nothing.
+       */
+      effort?: { readonly kind: "baseline" | "candidate"; readonly tokens: number };
+      /**
+       * Levels the model enumerated in a refusal, when it named them.
+       *
+       * Free: it rides on a 400 the probe was already receiving, and it is the
+       * only evidence we have of a level models.dev does not publish.
+       */
+      selfReported?: readonly string[];
+      /**
+       * What a CAPABILITY question concluded, when this request was one.
+       *
+       * `ok: false` only when the model ANSWERED and the answer was wrong. A
+       * reply with no text at all — a reasoning model that spent the whole
+       * budget thinking, measured 2026-10-07 on `muse-spark-1.2` — reports
+       * nothing, because "it said nothing" is not evidence about vision, and
+       * writing it down would retire a capability on a formatting accident.
+       */
+      capability?: { readonly axis: CapabilityAxis; readonly ok: boolean; readonly detail: string };
     }
-  | { kind: "dead"; reason: string; code: "dead"; http: number }
+  | {
+      kind: "dead";
+      reason: string;
+      code: "dead";
+      http: number;
+      /**
+       * The upstream NAMED this model's unavailability, rather than the status
+       * alone carrying it. See {@link isNamedModelUnavailable}: the two are not
+       * interchangeable, and only the named one survives a silent sibling
+       * channel.
+       */
+      named?: boolean;
+    }
   | {
       kind: "inconclusive";
       reason: string;
@@ -872,6 +1104,12 @@ export type ProbeOutcome =
       http: number;
       /** Which anonymous-gate marker the body carried, when it carried one. */
       marker?: AnonGateMarker;
+      /**
+       * The body said the request SHAPE is not supported for this model
+       * ("… not supported for format openai"). Distinct from a refusal about the
+       * caller, and the round needs the difference to attribute the refusal.
+       */
+      formatScoped?: boolean;
     };
 
 /**
@@ -887,6 +1125,8 @@ export type ProbeOutcome =
 export interface ProbeUsage {
   readonly input?: number | undefined;
   readonly output?: number | undefined;
+  /** Upstream's own reasoning count. `undefined` when the route omits it. */
+  readonly reasoning?: number | undefined;
 }
 
 /** Why a probe did not get an answer the round could trust. */
@@ -924,6 +1164,20 @@ export interface ProbeDeps {
    * of the shared bucket, so nothing in `index.ts` passes this.
    */
   readonly maxTokens?: number | undefined;
+  /**
+   * The prompt to send. Defaults to the cheapest thing that draws an answer,
+   * which is what liveness and every capability measurement want; a longer
+   * deterministic prompt is only for measuring a CEILING (what the model
+   * produces when asked for more than the declaration allows).
+   */
+  readonly prompt?: string | undefined;
+  /**
+   * Which Off spelling to ask about. `"minimal"` is the fallback for a model
+   * whose `none` never accumulates agreeing samples; it costs nothing extra
+   * because the round changes what its existing request asks rather than
+   * adding one.
+   */
+  readonly question?: "baseline" | "none" | (string & {}) | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -934,6 +1188,9 @@ export interface ProbeDeps {
  * failure into a generic `stopReason: "error"` and the recorder is the only
  * place the cause is still intact.
  */
+/** How much of a probe reply the recorder keeps for diagnosis. */
+const MAX_RECORDED_BODY = 8 * 1024;
+
 function createRecordingFetch(base: typeof fetch): {
   fetch: typeof fetch;
   read: () => { status: number; body: string; cause: string | undefined };
@@ -946,7 +1203,18 @@ function createRecordingFetch(base: typeof fetch): {
       const response = await (base as (u: never, i?: never) => Promise<Response>)(input, init);
       try {
         status = response.status;
-        if (!response.ok) body = await response.clone().text();
+        // Captured for EVERY response, not only for failures. An upstream can
+        // answer 200 whose only SSE frame is an error — measured 2026-10-06,
+        // `nemotron-3-ultra-free`: `Streaming response failed: [503] Upstream
+        // error from Nvidia: Service temporarily overloaded`. Under
+        // `if (!response.ok)` that body was thrown away before anyone read it,
+        // so the probe could only ever answer "unknown (HTTP 200)": the one
+        // place the upstream NAMES its own condition was the one place the
+        // plugin discarded it.
+        //
+        // Bounded, and probe-only: this recorder wraps probe requests alone, and
+        // the slice keeps a pathological reply from being buffered whole.
+        body = (await response.clone().text()).slice(0, MAX_RECORDED_BODY);
       } catch {
         // An unreadable error body is not a conclusion; the status still stands.
       }
@@ -1040,7 +1308,17 @@ function isCallerScoped(outcome: ProbeOutcome): boolean {
   // Only a failure carries a code; an `ok` never reaches here, but the type
   // says so and the check should not pretend otherwise.
   if (outcome.kind === "ok") return false;
-  if (outcome.code === "anon-gated" || outcome.code === "quota-exhausted" || outcome.code === "bad-key")
+  // `upstream-overloaded` joins these: an upstream that answers 503 will answer
+  // 503 on the other channel too, so asking again spends a request from the
+  // shared bucket to learn the same thing. It is also not evidence about the
+  // model — the classification exists precisely so the panel can say so.
+  if (
+    outcome.code === "anon-gated" ||
+    outcome.code === "quota-exhausted" ||
+    outcome.code === "bad-key" ||
+    outcome.code === "upstream-overloaded" ||
+    outcome.code === "endpoint-unavailable"
+  )
     return true;
   // 403/429 only when it is NOT a "this model is gone" verdict: that sentence
   // is the wrong channel talking, and it must still be retried elsewhere.
@@ -1055,17 +1333,71 @@ function isCallerScoped(outcome: ProbeOutcome): boolean {
  * of the stream, and a field that moves is a measurement problem, not a reason
  * to fail a probe that already has its answer. Anything unrecognised comes back
  * undefined rather than a guess.
+ *
+ * `reasoning` is the one field the round cannot do without. pi-ai normalises
+ * both channels into `Usage.reasoning` — `completion_tokens_details
+ * .reasoning_tokens` on completions, `output_tokens_details.reasoning_tokens` on
+ * responses — and dropping it here made every observation zero, which is not a
+ * measurement but a constant. Measured 2026-10-06: the route reports it
+ * (mimo-v2.6-flash-free 37 omitted, 0 under `none`).
  */
 function usageOf(result: Record<string, unknown> | undefined): ProbeUsage | undefined {
   const raw = (result as { usage?: unknown } | undefined)?.usage;
   if (raw === null || typeof raw !== "object") return undefined;
   const count = (value: unknown): number | undefined =>
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+  const reasoning = count((raw as { reasoning?: unknown }).reasoning);
   const usage = {
     input: count((raw as { input?: unknown }).input),
     output: count((raw as { output?: unknown }).output),
+    ...(reasoning === undefined ? {} : { reasoning }),
   };
-  return usage.input === undefined && usage.output === undefined ? undefined : usage;
+  return usage.input === undefined && usage.output === undefined && reasoning === undefined
+    ? undefined
+    : usage;
+}
+
+/**
+ * What a failure MEANS depends on WHICH credential was sent.
+ *
+ * With no Zen key configured this plugin sends the literal string `public`, so a
+ * 401 from upstream is not a bad key — there is no key. It is the free tier
+ * being refused, and the `bad-key` guidance ("check that your key is correct,
+ * expired or revoked") points at something the user never did.
+ *
+ * Measured 2026-10-06 on an anonymous deployment: space-bunny-free came back
+ * 401 and the panel said "key 无效" while no key existed. The two kinds also
+ * lead somewhere different — `bad-key` invites a configuration change, while
+ * `anon-gated` says the anonymous admission itself failed.
+ */
+function failureKindFor(status: number, body: string, apiKey: string | undefined): ZenFailureKind {
+  // A body that names a FORMAT is about the request, not about who sent it.
+  // Without this, a 401 reading "not supported for format openai" is classified
+  // as a credential failure — and `isCallerScoped` then returns it immediately,
+  // discarding the other channel's answer. Measured 2026-10-06: that is how
+  // `space-bunny-free`, a model this session is running on, sat in the panel as
+  // "unmeasurable" for rounds while answering normally.
+  if (FORMAT_SCOPED_PATTERN.test(body)) return "unknown";
+  const kind = classifyZenFailure(status, body);
+  // The status wins where the status says something, and the body only breaks
+  // ties where it does not.
+  //
+  // That ordering is not cosmetic: this provider REUSES the sentence
+  // "Upstream request failed: Endpoint is unavailable." for a quota refusal.
+  // Measured 2026-10-07: `ling-3.1-flash-free` answers HTTP 429 with exactly
+  // that body. Read body-first, it became "the endpoint is unreachable" — which
+  // is not wrong-looking, just wrong: the remedy is to wait for the quota window,
+  // not to diagnose a route.
+  //
+  // Where the status says nothing — a 400, or a 200 carrying an error frame —
+  // the body is the only evidence there is, and "Endpoint is unavailable" then
+  // means the route is down. Measured the same day on
+  // `ling-3.0-flash-fin-free`, which had been painted a red model failure for
+  // rounds while the endpoint was simply down.
+  if (kind === "unknown" && ENDPOINT_FAILURE_PATTERN.test(body)) return "endpoint-unavailable";
+  if (kind !== "bad-key") return kind;
+  const sent = typeof apiKey === "string" ? apiKey.trim() : "";
+  return sent === "" || sent === ANONYMOUS_KEY ? "anon-gated" : kind;
 }
 
 /**
@@ -1075,11 +1407,95 @@ function usageOf(result: Record<string, unknown> | undefined): ProbeUsage | unde
  * `inconclusive` rather than rejecting, so one bad model cannot abort a
  * catalogue-wide probe run.
  */
+/**
+ * What one capability reply concluded — or `undefined`, which means "this
+ * request taught us nothing" and must not be recorded as a verdict.
+ *
+ * `undefined` is a real outcome, not an oversight: a reasoning model can reply
+ * with thinking and no text (measured 2026-10-07, `muse-spark-1.2` at a 1024
+ * budget), and recording "cannot see" from a reply that said nothing would retire
+ * a capability on a formatting accident. The same rule keeps an upstream 500 or a
+ * spent bucket out of the evidence: those never reach here, because this only
+ * runs on a reply that carried an answer.
+ */
+function judgeCapability(
+  axis: CapabilityAxis,
+  result: Record<string, unknown>,
+): { axis: CapabilityAxis; ok: boolean; detail: string } | undefined {
+  const content = Array.isArray(result.content) ? result.content : [];
+  if (axis === "tools") {
+    const calls = content.filter(
+      (part): part is { type: string; name: string; arguments: unknown } =>
+        part !== null && typeof part === "object" && (part as { type?: unknown }).type === "toolCall",
+    );
+    if (calls.length === 0) {
+      const said = content
+        .filter((part): part is { type: string; text: string } =>
+          part !== null && typeof part === "object" && (part as { type?: unknown }).type === "text",
+        )
+        .map((part) => part.text)
+        .join(" ")
+        .trim();
+      // Text instead of a call is a conclusion — the model chose to answer rather
+      // than act. Saying nothing at all is not, and stays unmeasured.
+      if (said === "") return undefined;
+      return { axis, ok: false, detail: "answered in prose instead of calling a tool" };
+    }
+    const named = calls.some((call) => call.name === "bash" || call.name === "read");
+    return {
+      axis,
+      ok: named,
+      detail: named ? `called ${calls.map((c) => c.name).join(", ")}` : `called ${calls.map((c) => c.name).join(", ")}, which is not a gate tool`,
+    };
+  }
+  const said = content
+    .filter((part): part is { type: string; text: string } =>
+      part !== null && typeof part === "object" && (part as { type?: unknown }).type === "text",
+    )
+    .map((part) => part.text)
+    .join(" ")
+    .trim();
+  if (said === "") return undefined;
+  // The image is magenta on top and lime below, so the two are opposites: a
+  // model that cannot see has one answer available and it is the wrong one. Both
+  // synonyms are accepted because a colour name is a language act, not a token
+  // match — but the BOTTOM half is named as a failure, never as a near miss.
+  const top = /magenta|fuchsia|pink|purple/i.test(said);
+  const bottom = /lime|green/i.test(said);
+  return {
+    axis,
+    ok: top && !bottom,
+    detail: top && !bottom ? "named the top half" : bottom ? "named the BOTTOM half — the image did not reach it" : "named no colour",
+  };
+}
+
 async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutcome> {
   const recorder = createRecordingFetch(deps.fetchImpl ?? globalThis.fetch);
-  const context = {
-    messages: [{ role: "user", content: PROBE_PROMPT, timestamp: deps.now?.() ?? Date.now() }],
-  };
+  // A capability question replaces the prompt, and for vision it also has to
+  // carry an image — which means the block form of a user message rather than a
+  // string. The shape is the one DSH produces when it attaches a screenshot, so
+  // the probe exercises the production path rather than a private one.
+  const axis = capabilityAxisOf(deps.question);
+  const capability = axis === undefined ? undefined : CAPABILITY_QUESTIONS[axis];
+  const message =
+    axis === "vision"
+      ? {
+          role: "user",
+          content: [
+            { type: "text", text: capability?.prompt ?? PROBE_PROMPT },
+            { type: "image", data: CAPABILITY_PROBE_IMAGE_BASE64, mimeType: "image/png" },
+          ],
+          timestamp: deps.now?.() ?? Date.now(),
+        }
+      : { role: "user", content: deps.prompt ?? capability?.prompt ?? PROBE_PROMPT, timestamp: deps.now?.() ?? Date.now() };
+  const context = { messages: [message] };
+  // The CEILING question asks for the whole advertised window on purpose: pi-ai
+  // clamps that to `window − estimate − 4096`, which is the largest value this
+  // conversation can carry, so the request goes out at the top of what the plugin
+  // would ever ask for. A route with a ceiling below that refuses and names it;
+  // a route without one answers, which is itself the finding. One request, and
+  // the refusal costs no output tokens at all.
+  const asksCeiling = deps.question === "ceiling";
   const signal = AbortSignal.timeout(deps.timeoutMs ?? PROBE_TIMEOUT_MS);
   // Whether the request ran out of time is a property of the SIGNAL, not of
   // whichever error happens to surface: the provider flattens an abort into a
@@ -1090,6 +1506,9 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
     signal.aborted ||
     (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError"));
   let result: Record<string, unknown> | undefined;
+  // Whether the request that actually left carried a reasoning field. Set by the
+  // payload hook below and read once the reply settles.
+  const injected: { reasoning: boolean } = { reasoning: false };
   let thrown: unknown;
   try {
     // `streamSimple`, not `stream`. Measured 2026-09-30: `stream()` ignores
@@ -1102,12 +1521,79 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
     // only thing it did change was the channel.
     const stream = deps.provider.streamSimple(model, context, {
       apiKey: deps.apiKey ?? "public",
-      maxTokens: deps.maxTokens ?? PROBE_MAX_TOKENS,
+      // A vision question gets 4096 rather than the usual 1024, and that is a
+      // measurement rather than a guess: at 1024 a reasoning model can spend the
+      // whole budget thinking and return no text at all (mimo at 256 and 1024,
+      // muse-spark-1.2 at 1024), which reads as "this model cannot see" when it
+      // can. At 4096 the same models answer. Spending four output tokens per
+      // thousand to avoid a false negative is the cheaper side of that trade.
+      maxTokens: deps.maxTokens ?? (asksCeiling ? model.contextWindow : axis === "vision" ? CAPABILITY_VISION_MAX_TOKENS : PROBE_MAX_TOKENS),
       // The default reasoning effort for muse-spark is xhigh; a probe only
       // needs any reply, so it asks for the cheapest one.
       reasoning: "low",
-      // The last gate before the bytes leave. See enforceAnonymousTools.
-      onPayload: (payload: unknown) => enforceAnonymousTools(payload),
+      // The last gate before the bytes leave — and where the Off question is
+      // asked, at no marginal quota.
+      //
+      // `clampThinkingLevel` cannot be used to send "none": the spelling is not
+      // in pi-ai's level vocabulary, so it resolves to `off` and is dropped
+      // before the bytes leave (verified locally). Writing it into the body here
+      // is the only path that actually reaches the wire.
+      //
+      // Measured 2026-10-06, this does NOT cost the liveness verdict: with zero
+      // reasoning tokens the model still returned text (mimo 29 characters,
+      // big-pickle 32), so `hasAnswer` still holds.
+      onPayload: (payload: unknown, sent: unknown) => {
+        const gated = enforceAnonymousTools(payload);
+        const body = gated as Record<string, unknown>;
+        // Which question this request asks, decided ONCE: the early return below
+        // and the sample's bucket must agree, or the round files a candidate
+        // reading as a baseline and compares nothing.
+        //
+        // The bucket is decided by whether THIS PROBE put a spelling on the wire,
+        // not by whether the body happened to be empty before it did. The
+        // liveness request always carries `reasoning_effort: "low"` for a model
+        // with a ladder, and this plugin hands every reasoning model the default
+        // ladder — so "the body was empty" was never true on the models that
+        // matter, and every candidate sample was filed as a baseline.
+        //
+        // A no-ladder model really does clamp the hardcoded `low` to omission, and
+        // that request is genuinely the omitted baseline — which is exactly the
+        // question the round asked in that case, so it needs no extra rule.
+        const asks = deps.question !== undefined && deps.question !== "baseline" && deps.question !== "settled";
+        injected.reasoning = asks;
+        // A capability question carries no reasoning spelling at all: it is not
+        // about the effort axis, and a capability sample filed against it would
+        // be a sample about the wrong thing. What it does carry, for the tool
+        // axis, is the real schemas — the gate's stubs are the one tool
+        // definition a model is told not to use.
+        if (axis !== undefined) {
+          if (axis !== "tools") return body;
+          // The gate's stubs are REPLACED, not appended to. They describe
+          // themselves as "Unavailable in this request. Do not call." — and a
+          // list carrying both a "do not call bash" and a real bash is a
+          // contradiction the model gets to resolve, which is not a measurement.
+          // The real schemas carry the same two names, so the gate is still
+          // satisfied after they replace the stubs.
+          const existing = (Array.isArray(body.tools) ? body.tools : []).filter(
+            (tool): tool is Record<string, unknown> =>
+              tool !== null &&
+              typeof tool === "object" &&
+              (tool as { function?: { description?: unknown } }).function?.description !== STUB_DESCRIPTION,
+          );
+          return { ...body, tools: [...existing, ...CAPABILITY_TOOL_SCHEMAS] };
+        }
+        // The baseline round sends nothing at all: it is the same request the
+        // liveness probe was already making, so asking for the model's own
+        // default costs no extra quota.
+        // `settled` means the model already has a standing verdict: send the plain
+        // liveness request and measure nothing.
+        if (!asks) return body;
+        const responses = (sent as { api?: string } | undefined)?.api === "openai-responses";
+        // Whatever level the round decided to ask about. `deps.question` is
+        // `none`, a baseline marker, or a specific level name.
+        const spelling = deps.question === "none" ? "none" : deps.question;
+        return responses ? { ...body, reasoning: { effort: spelling } } : { ...body, reasoning_effort: spelling };
+      },
       // A probe must not spend a second call confirming anything: without this
       // a 429 costs three requests instead of one, because the SDK's default
       // retry policy treats a rate limit as worth repeating. Production retries
@@ -1138,7 +1624,31 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
   // The usage is carried through rather than dropped: it decides nothing here,
   // but it is the only way to tell what a probe actually costs, and the
   // upstream already computed it.
-  if (hasAnswer(result)) return { kind: "ok", usage: usageOf(result) };
+  if (hasAnswer(result)) {
+    // One request, two signals: the liveness verdict AND what `none` did.
+    // Measured: reasoning_tokens 0 means `none` stopped reasoning; a non-zero
+    // count with HTTP 200 means it was accepted and ignored. The gate tools are
+    // always present, so this costs the round nothing.
+    const usage = usageOf(result);
+    const observed = Number(usage?.reasoning ?? 0);
+    // The probe reports what it OBSERVED; it does not decide what it means.
+    // Judging the number against the model's own baseline is the round's job,
+    // because the baseline arrives on a different round.
+    return {
+      kind: "ok",
+      usage,
+      // What the bytes actually carried, not what we meant to ask. On a no-ladder
+      // model the liveness request silently becomes the baseline this way.
+      effort: {
+        kind: injected.reasoning === true ? "candidate" : "baseline",
+        tokens: observed,
+      },
+      // A capability question is judged on the ANSWER, not on the fact that one
+      // arrived — so it never rides the `effort` bucket above, which belongs to
+      // the reasoning axis alone.
+      ...(axis === undefined ? {} : { effort: undefined, capability: result === undefined ? undefined : judgeCapability(axis, result) }),
+    };
+  }
   const { status, body, cause } = recorder.read();
   // The body is the only place the upstream's actual words exist, and an
   // `inconclusive` is never persisted — so without this a refusal is
@@ -1176,24 +1686,39 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
     };
   }
   if (isModelUnavailableFailure(status, body)) {
+    const named = isNamedModelUnavailable(status, body);
     return {
       kind: "dead",
       reason: `上游回報此模型不可用（HTTP ${status}）`,
       code: "dead",
       http: status,
+      ...(named ? { named: true } : {}),
     };
   }
+  const kind = failureKindFor(status, body, deps.apiKey);
+  // "not supported for FORMAT" is a statement about the REQUEST SHAPE. It has to
+  // survive as a distinguishable fact, because the round needs it to tell two
+  // apart that look identical from the outside:
+  //   - the shape the PLUGIN injected is refused  → evidence about that spelling
+  //   - the shape the CHANNEL guessed is refused  → evidence about the channel
+  // Measured 2026-10-06: `space-bunny-free` answers the completions channel
+  // with a generic 400 on `reasoning_effort:"none"`, and the responses channel
+  // with `401 Model space-bunny-free is not supported for format openai`.
+  const formatScoped = FORMAT_SCOPED_PATTERN.test(body);
+  const ceilings = statedCeilings(body);
   if (status === 0) {
-    const kind = classifyZenFailure(status, body);
-    return { kind: "inconclusive", reason: kind, code: kind, http: 0, marker: anonGateMarker(body) };
+    return { kind: "inconclusive", reason: kind, code: kind, http: 0, marker: anonGateMarker(body), ...(ceilings === undefined ? {} : { ceilings }) };
   }
-  const kind = classifyZenFailure(status, body);
   return {
     kind: "inconclusive",
     reason: `${kind}（HTTP ${status}）`,
     code: kind,
     http: status,
     marker: anonGateMarker(body),
+    ...(ceilings === undefined ? {} : { ceilings }),
+    ...(formatScoped ? { formatScoped: true } : {}),
+    // The one piece of good news a refusal can carry: the model's own vocabulary.
+    ...(selfReportedLevels(body) === undefined ? {} : { selfReported: selfReportedLevels(body) }),
   };
 }
 
@@ -1216,11 +1741,45 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
  * the wrong channel talking, and the channel that might have contradicted it was
  * never reached. Silence vetoes; it does not merely lose an argument.
  */
+/**
+ * The levels a model says it accepts, read out of a refusal that enumerated them.
+ *
+ * Measured 2026-10-06. `fledge-alpha-free`: `reasoning_effort 'none' is not
+ * supported for model 'fledge-alpha-free'. allowed values: ["low", "high",
+ * "max"]` — matching its models.dev declaration exactly. And
+ * `muse-spark-1.3-contributor-free` returned the same form listing `max`, which
+ * models.dev does NOT publish, at 516 reasoning tokens — the strongest mode that
+ * model has, confirmed twice.
+ *
+ * So models.dev under-declares ladders the same way it under-declares
+ * `limit.context`, and a model naming its own vocabulary is better evidence than
+ * a third party transcribing it.
+ *
+ * Returns undefined for the generic `invalid_request_error: invalid request`,
+ * which every other model returns and which carries nothing: a classifier that
+ * guessed from it would invent a capability, which is the mistake this change set
+ * exists to remove.
+ */
+const ALLOWED_VALUES =
+  /(?:allowed|supported|valid)(?:\s+(?:values|value|levels))?\s*[:=]\s*\[([^\]]*)\]/i;
+
+export function selfReportedLevels(body: string): string[] | undefined {
+  if (typeof body !== "string" || body === "") return undefined;
+  const match = ALLOWED_VALUES.exec(body);
+  if (match === null) return undefined;
+  const levels = (match[1] ?? "")
+    .split(",")
+    .map((part) => part.trim().replace(/^["'`]+|["'`]+$/g, ""))
+    .filter((part) => part !== "" && /^[a-z][a-z0-9-]*$/i.test(part));
+  return levels.length > 0 ? levels : undefined;
+}
+
 export async function probeModel(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutcome> {
   // Null, not a placeholder conclusion: a placeholder would tie with a real
   // inconclusive on strength and then win the "first seen wins" tie-break,
   // replacing a transport failure with "no channel answered".
   let last: ProbeOutcome | null = null;
+  let namedDead: Extract<ProbeOutcome, { kind: "dead" }> | undefined;
   // The first channel that failed to answer, kept for its reason and status —
   // the row has to say WHY it could not tell, not just that it could not.
   let silent: ProbeOutcome | null = null;
@@ -1235,11 +1794,21 @@ export async function probeModel(model: Model<Api>, deps: ProbeDeps): Promise<Pr
     if (outcome.kind === "ok") return { ...outcome, api: variant.api };
     if (isCallerScoped(outcome)) return outcome;
     if (outcome.kind === "dead") {
+      // A NAMED unavailability outranks a silent sibling. A bare 404/410 is
+      // exactly what a wrong channel produces, so the sweep must still be able
+      // to veto it (ADR 0004 §22); a body that says "Model is unavailable." is
+      // not something a wrong channel invents, and letting a generic 500 from
+      // the other channel bury it kept a withdrawn model in the picker for weeks.
+      if (outcome.named === true) {
+        namedDead ??= outcome;
+        continue;
+      }
       last = outcome;
       continue;
     }
     if (silent === null) silent = outcome;
   }
+  if (namedDead !== undefined) return namedDead;
   if (silent !== null) return silent;
   return (
     last ?? {
@@ -1271,11 +1840,58 @@ export async function resolveZenApiKey(input: {
   return { apiKey: "public", source: "Anonymous free tier" };
 }
 
+/**
+ * Options objects to their per-request outcome.
+ *
+ * A WeakMap rather than a property on the options: `processed` is spread into
+ * the transport call, and anything enumerable on it could reach the wire. This
+ * is bookkeeping that must never become part of a request.
+ */
+const REQUEST_OUTCOMES = new WeakMap<object, RequestOutcome>();
+
+function attachOutcome<T extends StreamOptions>(processed: T, outcome: RequestOutcome): T {
+  REQUEST_OUTCOMES.set(processed as unknown as object, outcome);
+  return processed;
+}
+
+/** The per-request outcome, when `processed` is one of ours. */
+export function requestOutcomeOf(options: unknown): RequestOutcome | undefined {
+  if (options === null || typeof options !== "object") return undefined;
+  return REQUEST_OUTCOMES.get(options as object);
+}
+
+/**
+ * Per-request scratch the transport fills in and the stream wrapper reads.
+ *
+ * The emitted clamp value and the terminal `stopReason` are only ever both
+ * visible in the same module, which is why the clamp observation is assembled
+ * here rather than in the catalogue.
+ */
+export interface RequestOutcome {
+  /** The `max_tokens` / `max_completion_tokens` pi-ai emitted, after clamping. */
+  clampEmitted?: number | undefined;
+  /** Terminal `stopReason` of the request this belongs to. */
+  stopReason?: string | undefined;
+  /** Whether any usable content came back. */
+  answered?: boolean;
+  /** Output tokens the upstream reported for this request. */
+  outputTokens?: number | undefined;
+  /**
+   * Milliseconds from sending to the FIRST stream event.
+   *
+   * The latency a person actually feels. Total latency mixes it with how long the
+   * model chose to write, and a slow start followed by a fast answer is not a
+   * slow model — which is the difference that decides whether you keep using it.
+   */
+  firstTokenMs?: number | undefined;
+}
+
 function compatRequestOptions<T extends StreamOptions>(
   options: T,
   getSessionId: SessionGetter,
   fallbackSession: string,
   recorder?: TransportRecorder,
+  outcome?: RequestOutcome,
 ): T {
   const headers = Object.fromEntries(
     Object.entries(options?.headers ?? {}).filter(
@@ -1305,22 +1921,71 @@ function compatRequestOptions<T extends StreamOptions>(
     // missing it while identical ones carrying it pass. Set it explicitly here
     // so the drop cannot remove it. Same affinity value as x-opencode-session.
     sessionId: opencodeSession,
-    timeoutMs: options?.timeoutMs ?? 180_000,
+    // The WHOLE-request timeout, not an idle one: pi-ai hands this to the
+    // OpenAI SDK as `timeout`, which aborts the request end to end.
+    //
+    // It was 180s, and that turned out to be the ceiling that actually decided
+    // how long a reply could be — measured 2026-10-07, asking
+    // `mimo-v2.6-flash-free` for 40,000 and then 34,000 output tokens: both died
+    // at 181s with HTTP 200 and no usage frame. Re-run through the provider
+    // directly with a 900s timeout, the same request produced all 40,000 tokens
+    // with `stopReason: "length"` at ~152 tok/s. So 180s bought about 27,000
+    // tokens — less than the 32,000 the plugin used to advertise, which is why
+    // raising the ceiling alone would have changed nothing a user could observe.
+    //
+    // 600s matches the profile's own `streamIdleTimeoutMs`, so the host already
+    // expects a stream to run that long; a caller that sets its own timeout
+    // still wins.
+    timeoutMs: options?.timeoutMs ?? 600_000,
     maxRetries: options?.maxRetries ?? 2,
     fetch: withEncryptedContentFallback(options?.fetch as FetchFunction | undefined, recorder) as T["fetch"],
-    // "off" is offered as an explicit level (the user asked to keep it), but
-    // pi-ai renders it as `reasoning: { effort: "none" }` by default and as
-    // `effort: "off"` when explicitly chosen on the responses channel — two
-    // values neither pi-ai's own records nor OpenCode ever send. This strips
-    // exactly those placeholders back to "no reasoning object", which is what
-    // OpenCode's "Default" sends. Real levels pass through untouched, and a
-    // caller-provided onPayload runs first so its edits are what get checked.
-    onPayload: (async (payload: unknown, model: never) => {
+    // The map is the single authority on what Off puts on the wire; this mirrors
+    // it rather than deciding alongside it. Two authorities is how the previous
+    // split arose, and the split is what let a silent lie ship: with the old
+    // guard, selecting Off on muse-spark-1.3-contributor-free removed the
+    // reasoning object, upstream accepted the request, and the model reasoned
+    // 360 tokens — the MAXIMUM — with nothing reporting a problem anywhere.
+    // Measured 2026-10-06, `reasoning_effort 'none'` is refused there outright
+    // ("allowed values: [minimal, low, medium, high, xhigh, max]"), so the old
+    // guard was converting a loud refusal into silence.
+    //
+    // `onPayload` receives the model on BOTH channels
+    // (openai-completions.js:188, openai-responses.js:113), so the map is
+    // readable here without a host change.
+    //
+    // The literal "off" remains the only thing stripped: it is pi-ai's
+    // placeholder for an explicitly-chosen Off (openai-responses.js:262) and is
+    // not in Zen's validated set.
+    onPayload: (async (payload: unknown, model: unknown) => {
       let next = payload as Record<string, unknown>;
       if (typeof incomingPayload === "function") {
-        const out = await (incomingPayload as (p: never, m: never) => unknown)(payload as never, model);
+        const out = await (incomingPayload as (p: never, m: never) => unknown)(payload as never, model as never);
         if (out !== undefined) next = out as Record<string, unknown>;
       }
+      // The number pi-ai actually emitted, read AFTER clampMaxTokensToContext ran.
+      // The field name is not uniform: 31 of 36 derived records carry a template
+      // compat with `maxTokensField: "max_tokens"`, and pi-ai lets an explicit
+      // compat override its own detection (openai-completions.js:1317). Reading
+      // only `max_completion_tokens` would find nothing on those records.
+      const body = next as Record<string, unknown>;
+      const emitted =
+        typeof body.max_completion_tokens === "number"
+          ? body.max_completion_tokens
+          : typeof body.max_tokens === "number"
+            ? body.max_tokens
+            : undefined;
+      if (outcome !== undefined) outcome.clampEmitted = emitted;
+      // The REQUESTED value (from shapeSummary above) and the EMITTED value (here)
+      // are the two numbers that separate this lane's two causes for one opaque
+      // 400 — measured 2026-10-08: `max_tokens` above 524288 and an input above the
+      // context window both answer with the identical body, so nothing else in the
+      // log can tell them apart. Before this line, `shapeSummary` read `maxTokens`
+      // and never printed it, and the failure was undiagnosable after the fact.
+      if (emitted !== undefined) debugLog(`emitted max_tokens=${emitted}`);
+      const map = (model as { thinkingLevelMap?: Record<string, string | null> } | undefined)?.thinkingLevelMap;
+      // `"none"` is a REAL wire value wherever a measurement said it stops
+      // reasoning; it must survive. Everywhere else it is pi-ai's placeholder.
+      if (map?.off === "none") return next === payload ? undefined : next;
       const reasoning = next?.reasoning;
       if (reasoning !== null && typeof reasoning === "object") {
         const effort = (reasoning as { effort?: unknown }).effort;
@@ -1483,7 +2148,7 @@ function shapeSummary(context: unknown, options: unknown): string {
     const tools = Array.isArray(ctx.messages)
       ? getCurrentTools(ctx.messages as Parameters<typeof getCurrentTools>[0]).length
       : 0;
-    return `msgs=${Array.isArray(ctx.messages) ? ctx.messages.length : "?"} chars~${chars} tools=${tools} reasoning=${String(opt.reasoning ?? "(default)")}`;
+    return `msgs=${Array.isArray(ctx.messages) ? ctx.messages.length : "?"} chars~${chars} tools=${tools} reasoning=${String(opt.reasoning ?? "(default)")} maxTokens=${String(opt.maxTokens ?? "(unset→model default)")}`;
   } catch {
     return "shape=(unavailable)";
   }
@@ -1761,6 +2426,54 @@ function appendTransportDetail<T extends Record<string, unknown>>(
   return { ...record, errorMessage: `${message}｜${ZEN_TRANSPORT_GUIDANCE}（${detail}）` } as T;
 }
 
+/**
+ * The message a clamp-induced empty reply is rewritten to.
+ *
+ * DSH derives `LlmFailure.code` from this text by regex
+ * (`classifyPiAiError`), so the wording IS the retry decision. It must match none
+ * of the retryable shapes: no 4xx or 5xx literals, no "timeout", no
+ * network/connection/socket/fetch wording, no "quota". An unmatched message falls
+ * through to `PI_AI_ERROR`, which is not in `DEFAULT_RETRYABLE_CODES` — so the
+ * request is not retried and this text reaches the user verbatim.
+ *
+ * Why it matters: a wrong Off that the model silently ignores answers HTTP 200
+ * with no content, which the host classifies `EMPTY_RESPONSE` — a RETRYABLE
+ * code. A deterministic wrong value therefore burned five identical retries
+ * (500+1000+2000+4000+8000 = 15.5s of backoff, six round-trips and six draws on
+ * the shared anonymous bucket) before surfacing an error that never mentioned
+ * the effort at all.
+ */
+export const CLAMPED_REPLY_MESSAGE =
+  "上游回傳了空白內容：本回合的輸出預算被夾到下限，模型沒有可作答的空間。" +
+  "這通常表示該模型的工作區視窗宣告過小；請縮小對話或改用其他模型。";
+
+/**
+ * Whether a terminal reply is the clamp signature rather than a model that chose
+ * to say nothing.
+ *
+ * The two are distinguishable: a clamp is visible in the bytes we emitted. A
+ * model that simply declines to answer leaves `max_completion_tokens` alone, and
+ * those must keep the host's own handling — this is not our failure to explain.
+ */
+export function isClampStarved(
+  result: unknown,
+  emitted: number | undefined,
+): boolean {
+  if (emitted !== 1) return false;
+  if (!result || typeof result !== "object") return false;
+  const rec = result as Record<string, unknown>;
+  if (rec.stopReason === "error") return false;
+  const content = rec.content;
+  return !Array.isArray(content) || content.length === 0;
+}
+
+/** Rewrites a successful-but-empty reply into a named, non-retryable error. */
+export function mapClampedReplyToGuidance<T>(result: T, emitted: number | undefined): T {
+  if (!isClampStarved(result, emitted)) return result;
+  const rec = result as Record<string, unknown>;
+  return { ...rec, stopReason: "error", errorMessage: CLAMPED_REPLY_MESSAGE } as T;
+}
+
 export function mapTransportErrorToGuidance<T>(result: T, recorder?: TransportRecorder): T {
   if (!result || typeof result !== "object") return result;
   const rec = result as Record<string, unknown>;
@@ -1800,7 +2513,12 @@ function mapEventErrorToGuidance<T>(event: T, recorder?: TransportRecorder): T {
   } as T;
 }
 
-function withGuidance<T extends object>(stream: T, restoreShell = false, recorder?: TransportRecorder): T {
+function withGuidance<T extends object>(
+  stream: T,
+  restoreShell = false,
+  recorder?: TransportRecorder,
+  outcome?: RequestOutcome,
+): T {
   return new Proxy(stream, {
     get(target, prop, _receiver) {
       if (prop === "result") {
@@ -1808,7 +2526,10 @@ function withGuidance<T extends object>(stream: T, restoreShell = false, recorde
         return async () => {
           const result = await inner.call(target);
           if (restoreShell) restoreShellCalls(result);
-          return mapTransportErrorToGuidance(result, recorder);
+          // Before the transport rewrite: a clamp is not a transport failure, and
+          // it must not be left to the host's retryable EMPTY_RESPONSE path.
+          const clamped = mapClampedReplyToGuidance(result, outcome?.clampEmitted);
+          return mapTransportErrorToGuidance(clamped, recorder);
         };
       }
       if (prop === Symbol.asyncIterator) {
@@ -1895,16 +2616,131 @@ export function zenProvider(
     },
   });
 
-  function requestOptions<T extends StreamOptions>(
+/**
+ * Feed one finished request back to the catalogue as a clamp observation.
+ *
+ * `starved` is deliberately not `!hasAnswer(result)` alone: a reasoning model
+ * can spend its whole budget thinking and still count as answered, which is the
+ * plugin's existing issue-3010 rule. Here the stricter reading is the honest one
+ * — a clamp observation that acted on a merely-thinking reply would raise a
+ * window for a request that was never starved.
+ */
+function observeFinishedRequest<S extends { result(): Promise<{ stopReason?: unknown; content?: unknown }> }>(
+  model: Model<Api>,
+  catalog: Catalog | null,
+  processed: unknown,
+  stream: S,
+): S {
+  if (catalog === null) return stream;
+  const outcome = requestOutcomeOf(processed);
+  if (outcome === undefined) return stream;
+  const original = stream.result.bind(stream);
+  const startedAt = Date.now();
+  let reported = false;
+  // ONE report, from whichever API the caller used. This used to hang off
+  // `result()` alone — and the host never calls it: dsh-llm-pi-ai's
+  // `toStreamChunks` does `for await (const event of events)`, so every
+  // production reply went past this wrapper and the clamp observation, the
+  // truncation counter and the first-token timing were all measured on nothing.
+  // A probe calls `result()`; a conversation iterates. Both must report, once.
+  const report = (result: {
+    stopReason?: unknown;
+    content?: unknown;
+    usage?: { output?: unknown; output_tokens?: unknown };
+  }): void => {
+    if (reported) return;
+    reported = true;
+    outcome.stopReason = typeof result.stopReason === "string" ? result.stopReason : undefined;
+    outcome.answered = hasAnswer(result);
+    const output = result.usage?.output ?? result.usage?.output_tokens;
+    outcome.outputTokens = typeof output === "number" && Number.isFinite(output) ? output : undefined;
+    catalog.observeClamp(model.id, {
+      emitted: outcome.clampEmitted,
+      // A reasoning model can spend its whole budget thinking and still count as
+      // answered — the plugin's existing issue-3010 rule. Here the stricter
+      // reading is the honest one: an observation taken on a merely-thinking
+      // reply would raise a window for a request that was never starved.
+      starved: outcome.stopReason === "length" && outcome.answered !== true,
+      // A reply that ended on the budget but DID say something: cut off
+      // mid-answer. That is the free measurement of whether the advertised
+      // budget binds in real use, and it rides on this request either way.
+      truncated: outcome.stopReason === "length" && outcome.answered === true,
+    });
+    if (typeof outcome.firstTokenMs === "number") catalog.observeFirstToken(model.id, outcome.firstTokenMs);
+  };
+  // Wrapped in place rather than re-wrapped: the host holds this object and may
+  // read other members of it, so replacing it with a narrower one would be a
+  // silent capability loss of the same kind this whole change set removes.
+  stream.result = async () => {
+    const result = await original();
+    report(result as { stopReason?: unknown; content?: unknown });
+    return result;
+  };
+  // The path a real conversation takes. Wrapped rather than replaced, and the
+  // events pass through untouched: the host iterates for its chunks and calls
+  // nothing else, so an observer attached to `result()` observes nothing at all.
+  const iterable = stream as unknown as Record<symbol, unknown>;
+  const originalIterator = (stream as unknown as Record<symbol, unknown>)[Symbol.asyncIterator] as
+    | (() => AsyncIterable<unknown>)
+    | undefined;
+  if (typeof originalIterator === "function") {
+    iterable[Symbol.asyncIterator] = async function* (this: unknown): AsyncGenerator<unknown> {
+      const inner = originalIterator.call(this ?? stream) as AsyncIterable<unknown>;
+      let first = true;
+      for await (const event of inner) {
+        if (first) {
+          first = false;
+          outcome.firstTokenMs = Date.now() - startedAt;
+        }
+        if (event !== null && typeof event === "object") {
+          const typed = event as {
+            type?: string;
+            reason?: string;
+            message?: { stopReason?: unknown; content?: unknown; usage?: { output?: unknown; output_tokens?: unknown } };
+          };
+          if (typed.type === "done") {
+            report({
+              stopReason: typed.reason ?? typed.message?.stopReason,
+              content: typed.message?.content,
+              usage: typed.message?.usage,
+            });
+          } else if (typed.type === "error") {
+            report({ stopReason: typed.reason ?? "error", content: [] });
+          }
+        }
+        yield event;
+      }
+      if (first) outcome.firstTokenMs = Date.now() - startedAt;
+    };
+  }
+  return stream;
+}
+
+function requestOptions<T extends StreamOptions>(
     options: T = {} as T,
     context?: unknown,
-  ): { processed: T; recorder: TransportRecorder } {
+  ): { processed: T; recorder: TransportRecorder; outcome: RequestOutcome } {
     const recorder = createTransportRecorder(options?.fetch as FetchFunction | undefined);
-    const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
+    // The per-request scratch the payload hook fills and the stream wrapper
+    // reads. It has to be created here and handed down: the clamp value is only
+    // observable at the payload boundary, and the terminal stopReason only at
+    // the result, so neither is reachable from the catalogue alone.
+    const outcome: RequestOutcome = {};
+    const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder, outcome);
+    // Without this line the outcome is created, filled by the payload hook, read by
+    // the stream wrapper — and never FOUND, because the only way to find it is a
+    // lookup keyed by the processed options. `attachOutcome` shipped WITH the clamp
+    // mechanism on 2026-10-06 and had no call site in that first commit, so
+    // `requestOutcomeOf` returned undefined and every observation on a real request
+    // returned early: no clamp signature, no truncation count, no first-token
+    // timing. All of it measured nothing, silently, while every test that exercised
+    // the catalogue directly kept passing — which is how a mechanism can be
+    // complete, documented and dead at the same time.
+    attachOutcome(processed, outcome);
     debugLog(
       `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "provider")} ${shapeSummary(context, options)}`,
     );
-    return { processed, recorder };
+    return { processed, recorder, outcome };
   }
 
   return {
@@ -1948,20 +2784,31 @@ export function zenProvider(
     stream(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(options, gate.context);
-      return withGuidance(provider.stream(model, gate.context, processed), gate.restoreShell, recorder);
+      const { processed, recorder, outcome } = requestOptions(options, gate.context);
+      return observeFinishedRequest(
+        model,
+        catalog,
+        processed,
+        withGuidance(provider.stream(model, gate.context, processed), gate.restoreShell, recorder, outcome),
+      );
     },
     streamSimple(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(options, gate.context);
-      return withGuidance(
-        provider.streamSimple(model, gate.context, {
-          ...processed,
-          reasoning: options?.reasoning ?? (model.id.startsWith("muse-spark-") ? "xhigh" : undefined),
-        }),
-        gate.restoreShell,
-        recorder,
+      const { processed, recorder, outcome } = requestOptions(options, gate.context);
+      return observeFinishedRequest(
+        model,
+        catalog,
+        processed,
+        withGuidance(
+          provider.streamSimple(model, gate.context, {
+            ...processed,
+            reasoning: options?.reasoning ?? (model.id.startsWith("muse-spark-") ? "xhigh" : undefined),
+          }),
+          gate.restoreShell,
+          recorder,
+          outcome,
+        ),
       );
     },
   };
