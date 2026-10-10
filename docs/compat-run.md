@@ -31,7 +31,7 @@ Run it through pnpm, not `node` directly. The script calls pnpm through
 ## Running it
 
 ```sh
-pnpm compat --dsh 0.2.1-alpha.1
+pnpm compat --dsh 0.2.1-alpha.2
 ```
 
 | Option | Meaning |

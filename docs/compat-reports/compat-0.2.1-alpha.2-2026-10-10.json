@@ -1,0 +1,329 @@
+{
+  "header": {
+    "dshVersion": "0.2.1-alpha.2",
+    "pluginVersion": "0.3.2",
+    "date": "2026-10-10T02:58:46.193Z",
+    "os": "darwin 25.6.0 arm64, Node v26.9.0",
+    "keyed": false,
+    "tools": true,
+    "path": "Isolated DSH_HOME, built-in headless profile plus a --patch overlay (webServer on 127.0.0.1, default model). Same PiAiAdapter -> plugin path as the web profile, but not the profile users run: this is not a web UI verification."
+  },
+  "catalogue": {
+    "error": null,
+    "onlyLive": [
+      "muse-spark-1.2-contributor-free",
+      "step-5-preview-free"
+    ],
+    "onlyBuiltin": [
+      "fledge-alpha-free"
+    ]
+  },
+  "warmup": {
+    "ok": true,
+    "error": null,
+    "visible": [
+      "big-pickle",
+      "ling-3.1-flash-free",
+      "longcat-2.5-preview-free",
+      "mimo-v2.6-flash-free",
+      "muse-spark-1.2-contributor-free",
+      "muse-spark-1.3-contributor-free",
+      "nemotron-3-ultra-free",
+      "nemotron-3.5-lightning-free",
+      "space-bunny-free",
+      "step-5-preview-free"
+    ]
+  },
+  "models": [
+    {
+      "id": "big-pickle",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "muse-spark-1.3-contributor-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "muse-spark-1.2-contributor-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "space-bunny-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "longcat-2.5-preview-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "step-5-preview-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "nemotron-3-ultra-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "nemotron-3.5-lightning-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "ling-3.1-flash-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "exo-free",
+      "effort": "high",
+      "effortNote": "",
+      "keyed": null,
+      "tools": null,
+      "l0": {
+        "inPicker": false,
+        "probe": "failed: dead (HTTP 410)"
+      },
+      "verdict": "upstream-down",
+      "layer": null,
+      "reason": "warmup probe judged it dead: failed: dead (HTTP 410)"
+    },
+    {
+      "id": "mimo-v2.6-flash-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": ""
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: timeout (HTTP 200)"
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "ling-3.0-flash-fin-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": null,
+      "l0": {
+        "inPicker": false,
+        "probe": "failed: dead (HTTP 400)"
+      },
+      "verdict": "upstream-down",
+      "layer": null,
+      "reason": "warmup probe judged it dead: failed: dead (HTTP 400)"
+    }
+  ],
+  "unverified": [],
+  "exitCode": 0
+}

@@ -368,7 +368,9 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
     // adapter's resolved-model info, which never carried `api`.
     const record = plugin.freeModels().find((m) => m.id === 'space-bunny-free')
     assert.ok(record, 'the derived record must be in the catalogue')
-    assert.equal(record.api, 'openai-responses', 'D6: reasoning effort ⇒ responses')
+    // pi-ai 1.x lists `space-bunny-free` in its builtin table as completions, and
+    // D6 tier 1 outranks the models.dev effort signal (covered in catalog.test.mjs).
+    assert.equal(record.api, 'openai-completions', 'D6: the pi-ai builtin table wins')
     assert.equal(record.name, 'Space Bunny Free')
     assert.equal(record.contextWindow, 1048576, 'limit.context is mapped')
     assert.equal(record.maxTokens, 524288, 'limit.output is mapped')

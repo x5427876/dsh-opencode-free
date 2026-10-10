@@ -533,7 +533,6 @@ test('channelFor reproduces the opencode models pi-ai actually lists', () => {
     'mimo-v2.6-flash-free': 'openai-completions',
     'nemotron-3-ultra-free': 'openai-completions',
     'nemotron-3.5-lightning-free': 'openai-completions',
-    'muse-spark-1.2-contributor-free': 'openai-responses',
     'muse-spark-1.3-contributor-free': 'openai-responses',
   }
   for (const [id, expected] of Object.entries(truth)) {

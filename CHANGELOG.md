@@ -4,6 +4,18 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-10
+
+Supports DeepSeek Harness `0.2.1-alpha.2`.
+
+### Changed
+
+- **Targets DeepSeek Harness `0.2.1-alpha.2`.** The peer pins move to
+  `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` `0.2.1-alpha.2`. DSH
+  `0.2.1-alpha.2` moves `pi-ai` from `^0.87.1` to `^1.0.2`, so the `pi-ai` peer
+  moves with it. The pin stays exact, so `0.2.1-alpha.1` is no longer supported by
+  this release; stay on `0.3.1` for it.
+
 ## [0.3.1] - 2026-10-03
 
 Supports DeepSeek Harness `0.2.1-alpha.1`.

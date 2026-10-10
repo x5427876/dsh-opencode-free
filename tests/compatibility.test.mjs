@@ -83,7 +83,7 @@ after(async () => {
   await rm(sandboxHome, { recursive: true, force: true })
 })
 
-test('targets the DSH 0.2.1-alpha.1 contracts', async () => {
+test('targets the DSH 0.2.1-alpha.2 contracts', async () => {
   // The version the plugin sends upstream must be the one package.json declares,
   // and the install guide must name that same version. Nothing here requires a
   // bump: merging unreleased work and publishing a release are separate steps,
@@ -170,9 +170,9 @@ test('targets the DSH 0.2.1-alpha.1 contracts', async () => {
     'scripts/reverify.sh keeps the provider User-Agent prefix in step with src/zen-provider.ts',
   )
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.1-alpha.1', name)
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.1-alpha.2', name)
   }
-  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^0.87.1')
+  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^1.0.2')
   assert.equal(pkg.peerDependencies['react'], undefined)
   assert.deepEqual(pkg.dsh, {
     bundle: { patch: './cordis.patch.yml' },
