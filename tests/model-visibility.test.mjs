@@ -3,6 +3,7 @@ import { after, test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { PROVIDER_ID, builtinFreeModels } from '../src/zen-provider.ts'
 
 const plugin = await import('../src/index.ts')
@@ -67,11 +68,12 @@ const API_FIXTURE = {
         limit: { context: 200000, output: 32000 },
         modalities: { input: ['text'], output: ['text'] },
       },
-      // Free + active, UNKNOWN to pi-ai: exercises D6 tiers 2-3 (effort ⇒
-      // responses) and the limit/modalities mapping.
-      'space-bunny-free': {
-        id: 'space-bunny-free',
-        name: 'Space Bunny Free',
+      // Free + active, UNKNOWN to pi-ai (asserted below): exercises D6 tiers 2-3
+      // (effort ⇒ responses) and the limit/modalities mapping. The id is invented
+      // so a pi-ai upgrade cannot add it to the builtin table.
+      'orbit-otter-free': {
+        id: 'orbit-otter-free',
+        name: 'Orbit Otter Free',
         attachment: true,
         reasoning: true,
         reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }],
@@ -293,6 +295,10 @@ test('a failed fetch leaves the pi-ai builtin floor in place (D8 offline floor)'
 })
 
 test('derived catalogue: deprecated stays until a probe judges it, paid drops out', async () => {
+  assert.ok(
+    !getBuiltinModels('opencode').some((m) => m.id === 'orbit-otter-free'),
+    'the derived-model fixture id must stay unknown to pi-ai',
+  )
   // The Zen identity guard (zen-provider.ts) captures the FIRST global fetch it
   // ever sees into `__dshOpenCodeFreeFetchOriginal` and delegates to it for
   // every later call, re-wrapping on each apply(). Swapping `globalThis.fetch`
@@ -323,7 +329,7 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
     assert.equal(refreshed.body.source, 'models.dev')
 
     const ids = await listedIds(host)
-    assert.ok(ids.includes('space-bunny-free'), 'a newly published free model must appear')
+    assert.ok(ids.includes('orbit-otter-free'), 'a newly published free model must appear')
     assert.ok(
       ids.includes('deepseek-v4-flash-free'),
       'D1: a deprecated free model stays until a probe judges it',
@@ -351,27 +357,25 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
       refreshed.body.models.map((m) => m.id),
       refreshed.body.visible,
     )
-    const bunny = refreshed.body.models.find((m) => m.id === 'space-bunny-free')
-    assert.deepEqual(bunny, { id: 'space-bunny-free', image: true, thinking: 'max' })
+    const bunny = refreshed.body.models.find((m) => m.id === 'orbit-otter-free')
+    assert.deepEqual(bunny, { id: 'orbit-otter-free', image: true, thinking: 'max' })
     const pickle = refreshed.body.models.find((m) => m.id === 'big-pickle')
     assert.deepEqual(pickle, { id: 'big-pickle', image: false, thinking: null })
 
     // The derived record is a real model as far as the picker is concerned.
     const adapter = host.registered[0][1]
-    const derived = await adapter.resolveModel(PROVIDER_ID, 'space-bunny-free')
-    assert.equal(derived.id, 'space-bunny-free')
+    const derived = await adapter.resolveModel(PROVIDER_ID, 'orbit-otter-free')
+    assert.equal(derived.id, 'orbit-otter-free')
     const deprecated = await adapter.resolveModel(PROVIDER_ID, 'deepseek-v4-flash-free')
     assert.equal(deprecated.id, 'deepseek-v4-flash-free', 'it resolves until a probe says otherwise')
 
     // Field-level mapping (channel + limits) is asserted on the seam that
     // actually owns it — the catalogue's own model records — not on the
     // adapter's resolved-model info, which never carried `api`.
-    const record = plugin.freeModels().find((m) => m.id === 'space-bunny-free')
+    const record = plugin.freeModels().find((m) => m.id === 'orbit-otter-free')
     assert.ok(record, 'the derived record must be in the catalogue')
-    // pi-ai 1.x lists `space-bunny-free` in its builtin table as completions, and
-    // D6 tier 1 outranks the models.dev effort signal (covered in catalog.test.mjs).
-    assert.equal(record.api, 'openai-completions', 'D6: the pi-ai builtin table wins')
-    assert.equal(record.name, 'Space Bunny Free')
+    assert.equal(record.api, 'openai-responses', 'D6: reasoning effort ⇒ responses')
+    assert.equal(record.name, 'Orbit Otter Free')
     assert.equal(record.contextWindow, 1048576, 'limit.context is mapped')
     assert.equal(record.maxTokens, 524288, 'limit.output is mapped')
   } finally {

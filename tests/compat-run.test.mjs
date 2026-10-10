@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
+import { readFile } from 'node:fs/promises'
 import { runCompat } from '../scripts/compat-core.mjs'
 
-const PIN = '0.2.1-alpha.2'
+const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+const PIN = pkg.peerDependencies['@deepseek-ai/dsh-llm']
 
 /**
  * Fake world for one compat run. Every dependency is in memory: no DSH, no
@@ -84,7 +86,7 @@ test('a DSH version the peer pin does not name stops before installing or spendi
   const { deps, calls } = world()
   await assert.rejects(runCompat({ dsh: '0.2.0-rc.2' }, deps), (error) => {
     assert.match(error.message, /0\.2\.0-rc\.2/)
-    assert.match(error.message, /0\.2\.1-alpha\.2/)
+    assert.ok(error.message.includes(PIN))
     return true
   })
   assert.deepEqual(calls, [])

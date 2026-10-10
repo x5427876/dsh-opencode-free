@@ -414,7 +414,7 @@ const PI_SUMMARIZATION_MARKER = "context summarization";
 
 type TranscriptMessage = Record<string, unknown> & { role?: unknown };
 /**
- * The shape pi-ai 0.87 providers actually read. `toTranscript` used to declare
+ * The shape pi-ai (0.87 and later) providers actually read. `toTranscript` used to declare
  * it as the caller's own `T`, so a caller that passed a legacy `Context` and
  * then read `.systemPrompt` off the result type-checked perfectly and got
  * `undefined` at run time — a type lie on the request path's front door
@@ -423,7 +423,7 @@ type TranscriptMessage = Record<string, unknown> & { role?: unknown };
 export type TranscriptContext = ReturnType<typeof normalizeContext>;
 
 /**
- * Fold a legacy `Context` into the transcript pi-ai 0.87 providers read;
+ * Fold a legacy `Context` into the transcript pi-ai (0.87 and later) providers read;
  * a transcript passes through unchanged.
  *
  * The `T` return type is a deliberate fiction: the result is a
@@ -513,8 +513,8 @@ export function applyAnonymousToolGate<T>(
 ): { context: T; restoreShell: boolean } {
   const key = typeof apiKey === "string" && apiKey.trim() ? apiKey : "public";
   const msgs = (context as { messages?: unknown } | null)?.messages as TranscriptMessage[] | undefined;
-  // The gate operates on the transcript, because that is all a 0.87 provider
-  // reads: `context.tools` is not merely ignored, it is unreachable. On rc.1
+  // The gate operates on the transcript, because that is all a pi-ai 0.87+
+  // provider reads: `context.tools` is not merely ignored, it is unreachable. On rc.1
   // (pi-ai 0.85) the old shape was correct, and the two are not compatible —
   // which is why the peer pin is exact rather than a union.
   if (key !== "public" || !Array.isArray(msgs)) return { context, restoreShell: false };

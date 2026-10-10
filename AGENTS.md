@@ -121,8 +121,8 @@ wipe credentials, delete a profile, or claim success from a partial check.
 Use this when moving the plugin to a new DSH release (development, not an
 install request).
 
-1. Update the exact peer pins in `package.json` together with the documentation
-   and compatibility tests (standards rule C1).
+1. Update the exact peer pins and every file that names them, following the
+   checklist in [`docs/release.md`](docs/release.md) (standards rule C1).
 2. Run `pnpm run check`.
 3. **Before release, the compat run is required:**
    `pnpm compat --dsh <version> --out <dir>`. See
@@ -138,6 +138,8 @@ install request).
 
 The compat run is not the plugin's probe, and it is not part of CI
 ([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)).
+
+To tag and release after the upgrade, follow [`docs/release.md`](docs/release.md).
 
 ## Engineering standards
 

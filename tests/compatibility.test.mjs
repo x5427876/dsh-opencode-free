@@ -83,7 +83,7 @@ after(async () => {
   await rm(sandboxHome, { recursive: true, force: true })
 })
 
-test('targets the DSH 0.2.1-alpha.2 contracts', async () => {
+test('targets the pinned DSH contracts', async () => {
   // The version the plugin sends upstream must be the one package.json declares,
   // and the install guide must name that same version. Nothing here requires a
   // bump: merging unreleased work and publishing a release are separate steps,
@@ -169,10 +169,18 @@ test('targets the DSH 0.2.1-alpha.2 contracts', async () => {
     reverify.includes(OPENCODE_USER_AGENT.split(' dsh-opencode-free/')[0]),
     'scripts/reverify.sh keeps the provider User-Agent prefix in step with src/zen-provider.ts',
   )
+  const pin = pkg.peerDependencies['@deepseek-ai/dsh-llm']
   for (const [name, version] of Object.entries(pkg.peerDependencies)) {
-    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, '0.2.1-alpha.2', name)
+    if (name.startsWith('@deepseek-ai/dsh-')) assert.equal(version, pin, name)
   }
-  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], '^1.0.2')
+  // The pi-ai peer must be the range DSH's own adapter depends on, or two copies
+  // of pi-ai get installed; the installed adapter and DSH pin must agree too, so
+  // a stale node_modules cannot pass this suite against the wrong host.
+  const adapterPkg = JSON.parse(
+    await readFile(new URL('../node_modules/@deepseek-ai/dsh-llm-pi-ai/package.json', import.meta.url), 'utf8'),
+  )
+  assert.equal(adapterPkg.version, pin, 'installed dsh-llm-pi-ai matches the peer pin')
+  assert.equal(pkg.peerDependencies['@earendil-works/pi-ai'], adapterPkg.dependencies['@earendil-works/pi-ai'])
   assert.equal(pkg.peerDependencies['react'], undefined)
   assert.deepEqual(pkg.dsh, {
     bundle: { patch: './cordis.patch.yml' },
