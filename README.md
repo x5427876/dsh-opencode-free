@@ -39,7 +39,7 @@ install OpenCode, log in, get an API key, or run a separate server.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.1-alpha.1` (exact) |
+| DeepSeek Harness | `0.2.1-alpha.2` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each plugin release pins one exact DSH version. Check yours first:
@@ -50,6 +50,7 @@ dsh --version
 
 | Plugin | DSH |
 |---|---|
+| `0.3.2` | `0.2.1-alpha.2` |
 | `0.3.1` | `0.2.1-alpha.1` |
 | `0.3.0` | `0.2.0-rc.2` |
 | `0.2.1` | `0.2.0-rc.2` |
@@ -65,7 +66,7 @@ dependency warnings.
 Install the pinned package from npm:
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.3.1
+dsh plugin --profile web add dsh-opencode-free@0.3.2
 ```
 
 The examples use the `web` profile. Replace it with your target profile.

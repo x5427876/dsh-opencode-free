@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { runCompat } from '../scripts/compat-core.mjs'
 
-const PIN = '0.2.1-alpha.1'
+const PIN = '0.2.1-alpha.2'
 
 /**
  * Fake world for one compat run. Every dependency is in memory: no DSH, no
@@ -84,7 +84,7 @@ test('a DSH version the peer pin does not name stops before installing or spendi
   const { deps, calls } = world()
   await assert.rejects(runCompat({ dsh: '0.2.0-rc.2' }, deps), (error) => {
     assert.match(error.message, /0\.2\.0-rc\.2/)
-    assert.match(error.message, /0\.2\.1-alpha\.1/)
+    assert.match(error.message, /0\.2\.1-alpha\.2/)
     return true
   })
   assert.deepEqual(calls, [])
