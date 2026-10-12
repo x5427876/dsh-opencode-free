@@ -4,6 +4,20 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A request over the context window now reaches compaction.** Zen refuses it
+  with the generic `[invalid_request_error] invalid request`, which neither
+  pi-ai's overflow patterns nor the host's detector match, so auto-compaction
+  never ran and every later message failed the same way (#7). When the refusal
+  is that bare message and the `max_tokens` sent is below the one requested
+  (pi-ai lowered it to fit the window), the plugin appends
+  `input exceeds the context window of this model` to the upstream wording.
+  Any other refusal is left as the upstream said it. The clause is missed when
+  the clamp does not bind; that case keeps the old behaviour.
+
 ## [0.3.2] - 2026-10-10
 
 Supports DeepSeek Harness `0.2.1-alpha.2`.

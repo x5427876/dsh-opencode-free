@@ -364,11 +364,36 @@ export interface TransportRecorder {
   readonly fetch: FetchFunction;
   /** The recorded cause chain; undefined when no transport failure happened. */
   detail(): string | undefined;
+  /** Remember the output ceiling that actually went on the wire. */
+  notePayload(payload: unknown): void;
+  /** The output ceiling the caller asked for and the one that was sent. */
+  maxTokens(): RequestMaxTokens;
 }
 
-export function createTransportRecorder(inner?: FetchFunction): TransportRecorder {
+export interface RequestMaxTokens {
+  readonly requested?: number | undefined;
+  readonly emitted?: number | undefined;
+}
+
+/** The three field names the wire formats Zen routes to use for the output ceiling. */
+const MAX_TOKENS_FIELDS = ["max_tokens", "max_completion_tokens", "max_output_tokens"] as const;
+
+function emittedMaxTokens(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  for (const field of MAX_TOKENS_FIELDS) {
+    const value = (payload as Record<string, unknown>)[field];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+export function createTransportRecorder(
+  inner?: FetchFunction,
+  requestedMaxTokens?: number,
+): TransportRecorder {
   const base: FetchFunction = inner ?? globalThis.fetch;
   let detail: string | undefined;
+  let emitted: number | undefined;
   return {
     fetch: (async (url: unknown, init?: unknown) => {
       try {
@@ -384,6 +409,10 @@ export function createTransportRecorder(inner?: FetchFunction): TransportRecorde
       }
     }) as FetchFunction,
     detail: () => detail,
+    notePayload(payload) {
+      emitted = emittedMaxTokens(payload);
+    },
+    maxTokens: () => ({ requested: requestedMaxTokens, emitted }),
   };
 }
 
@@ -1326,9 +1355,11 @@ function compatRequestOptions<T extends StreamOptions>(
         const effort = (reasoning as { effort?: unknown }).effort;
         if (effort === "none" || effort === "off") {
           const { reasoning: _dropped, ...rest } = next;
+          recorder?.notePayload(rest);
           return rest;
         }
       }
+      recorder?.notePayload(next);
       return next === payload ? undefined : next;
     }) as T["onPayload"],
     headers: {
@@ -1410,7 +1441,10 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
           const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
           const ctx = gate.context;
-          const recorder = createTransportRecorder(options?.fetch as FetchFunction | undefined);
+          const recorder = createTransportRecorder(
+            options?.fetch as FetchFunction | undefined,
+            options?.maxTokens ?? model.maxTokens,
+          );
           const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
           debugLog(
             `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
@@ -1425,7 +1459,10 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
           const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
           const ctx = gate.context;
-          const recorder = createTransportRecorder(options?.fetch as FetchFunction | undefined);
+          const recorder = createTransportRecorder(
+            options?.fetch as FetchFunction | undefined,
+            options?.maxTokens ?? model.maxTokens,
+          );
           const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
           debugLog(
             `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
@@ -1761,14 +1798,54 @@ function appendTransportDetail<T extends Record<string, unknown>>(
   return { ...record, errorMessage: `${message}｜${ZEN_TRANSPORT_GUIDANCE}（${detail}）` } as T;
 }
 
+/**
+ * The wording both overflow detectors accept: pi-ai's `/exceeds the context
+ * window/i` and the host's own `EXCEEDS_MODEL_CONTEXT`. It holds no bare
+ * three-digit number, so DSH's status-literal scan cannot re-file the failure.
+ */
+export const CONTEXT_OVERFLOW_CLAUSE = "input exceeds the context window of this model";
+
+/** The upstream's generic refusal, with nothing after it that says what was wrong. */
+const GENERIC_INVALID_REQUEST = /\[invalid_request_error\] invalid request[\s"'.}\]\\]*$/i;
+
+/**
+ * Zen answers a request over the context window with the same generic
+ * `invalid request` it uses for any other malformed one, so neither detector
+ * recognises it and compaction never runs. Name the overflow only when the
+ * request itself shows it: pi-ai lowers `max_tokens` to what fits the window,
+ * so a sent value below the requested one means the input was already near the
+ * limit. A schema error, an output ceiling, an unsupported parameter, or a
+ * policy refusal either carries its own wording or leaves `max_tokens`
+ * untouched, and stays as the upstream said it. APPENDED, never substituted.
+ */
+export function appendContextOverflowClause(message: string, tokens: RequestMaxTokens = {}): string {
+  const { requested, emitted } = tokens;
+  if (!GENERIC_INVALID_REQUEST.test(message)) return message;
+  if (requested === undefined || emitted === undefined || !(emitted < requested)) return message;
+  return `${message}｜${CONTEXT_OVERFLOW_CLAUSE}`;
+}
+
+/** An error no HTTP rule placed: add what the transport and the request tell us. */
+function appendUnclassifiedDetail<T extends Record<string, unknown>>(
+  record: T,
+  message: string,
+  recorder?: TransportRecorder,
+): T {
+  const withDetail = appendTransportDetail(record, message, recorder);
+  const current = (withDetail as { errorMessage?: unknown }).errorMessage;
+  if (typeof current !== "string") return withDetail;
+  const next = appendContextOverflowClause(current, recorder?.maxTokens());
+  return next === current ? withDetail : { ...withDetail, errorMessage: next };
+}
+
 export function mapTransportErrorToGuidance<T>(result: T, recorder?: TransportRecorder): T {
   if (!result || typeof result !== "object") return result;
   const rec = result as Record<string, unknown>;
   if (rec.stopReason !== "error" || typeof rec.errorMessage !== "string") return result;
   const m = TRANSPORT_ERROR_PATTERN.exec(rec.errorMessage);
-  if (!m) return appendTransportDetail(rec, rec.errorMessage, recorder) as T;
+  if (!m) return appendUnclassifiedDetail(rec, rec.errorMessage, recorder) as T;
   const kind = classifyZenFailure(Number(m[1] ?? m[2]), m[3] ?? "");
-  if (kind === "unknown") return appendTransportDetail(rec, rec.errorMessage, recorder) as T;
+  if (kind === "unknown") return appendUnclassifiedDetail(rec, rec.errorMessage, recorder) as T;
   const status = m[1] ?? m[2];
   return {
     ...rec,
@@ -1784,11 +1861,11 @@ function mapEventErrorToGuidance<T>(event: T, recorder?: TransportRecorder): T {
   if (!inner || typeof inner !== "object" || typeof inner.errorMessage !== "string") return event;
   const m = TRANSPORT_ERROR_PATTERN.exec(inner.errorMessage);
   if (!m) {
-    return { ...rec, error: appendTransportDetail(inner, inner.errorMessage, recorder) } as T;
+    return { ...rec, error: appendUnclassifiedDetail(inner, inner.errorMessage, recorder) } as T;
   }
   const kind = classifyZenFailure(Number(m[1] ?? m[2]), m[3] ?? "");
   if (kind === "unknown") {
-    return { ...rec, error: appendTransportDetail(inner, inner.errorMessage, recorder) } as T;
+    return { ...rec, error: appendUnclassifiedDetail(inner, inner.errorMessage, recorder) } as T;
   }
   const status = m[1] ?? m[2];
   return {
@@ -1896,10 +1973,14 @@ export function zenProvider(
   });
 
   function requestOptions<T extends StreamOptions>(
+    model: Model<Api>,
     options: T = {} as T,
     context?: unknown,
   ): { processed: T; recorder: TransportRecorder } {
-    const recorder = createTransportRecorder(options?.fetch as FetchFunction | undefined);
+    const recorder = createTransportRecorder(
+      options?.fetch as FetchFunction | undefined,
+      options?.maxTokens ?? model.maxTokens,
+    );
     const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
     debugLog(
       `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "provider")} ${shapeSummary(context, options)}`,
@@ -1948,13 +2029,13 @@ export function zenProvider(
     stream(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(options, gate.context);
+      const { processed, recorder } = requestOptions(model, options, gate.context);
       return withGuidance(provider.stream(model, gate.context, processed), gate.restoreShell, recorder);
     },
     streamSimple(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(options, gate.context);
+      const { processed, recorder } = requestOptions(model, options, gate.context);
       return withGuidance(
         provider.streamSimple(model, gate.context, {
           ...processed,
