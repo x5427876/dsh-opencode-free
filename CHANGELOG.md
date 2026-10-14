@@ -4,6 +4,19 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Targets DeepSeek Harness `0.2.1-alpha.3`.** The peer pins move to
+  `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` `0.2.1-alpha.3` and
+  `@deepseek-ai/schemastery` `~3.18.5-alpha.2`. DSH `0.2.1-alpha.3` moves `pi-ai`
+  from `^1.0.2` to `^1.1.0`, so the `pi-ai` peer moves with it. The pin stays
+  exact, so `0.2.1-alpha.2` is no longer supported by this release; stay on
+  `0.3.3` for it. Plugin behaviour is unchanged: the requests the plugin sends to
+  Zen through the DSH adapter are identical on `0.2.1-alpha.2` and `0.2.1-alpha.3`,
+  including the anonymous `read` and `bash` tool gate.
+
 ## [0.3.3] - 2026-10-12
 
 Supports DeepSeek Harness `0.2.1-alpha.2`.

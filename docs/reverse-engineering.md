@@ -242,7 +242,7 @@ DSH 在 Windows 用 `dsh-base` 的 `tool-pwsh` 取代 `tool-bash`，送出的是
 
 ### 9. pi-ai 0.87 起：provider 收到的是 transcript（DSH `0.2.0-rc.2` 起）
 
-DSH `0.2.0-rc.2` 到 `0.2.1-alpha.1` 的 `dsh-llm-pi-ai` 使用 pi-ai `^0.87.1`，`0.2.1-alpha.2` 起使用 `^1.0.2`，兩者的 transcript API 相同；更早的版本使用 `0.85.1`。
+DSH `0.2.0-rc.2` 到 `0.2.1-alpha.1` 的 `dsh-llm-pi-ai` 使用 pi-ai `^0.87.1`，`0.2.1-alpha.2` 使用 `^1.0.2`，`0.2.1-alpha.3` 起使用 `^1.1.0`，三者的 transcript API 相同；更早的版本使用 `0.85.1`。
 `PiAiAdapter` 仍組出舊的 `Context`（`systemPrompt` / `messages` / `tools`），
 但它呼叫 `Models.streamSimple()`，而這一層會先 `normalizeContext()`：把
 `systemPrompt` 與 `tools` 摺進開頭的 system 訊息（`toolsAdded`），再交給
@@ -294,7 +294,7 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
   匿名；v1 無持久登入，改為 `config.apiKey` → `OPENCODE_API_KEY` → 匿名。
 - **pi-ai 版本跟 DSH**：插件的 pi-ai peer 必須和 DSH `dsh-llm-pi-ai` 用的
   版本一致（DSH `0.2.0-rc.1` 以前是 `0.85.1`，`0.2.0-rc.2` 到 `0.2.1-alpha.1` 是 `^0.87.1`，
-  `0.2.1-alpha.2` 起是 `^1.0.2`），否則會裝出兩份 pi-ai。0.87 起走 transcript API（見上 §9）。
+  `0.2.1-alpha.2` 是 `^1.0.2`，`0.2.1-alpha.3` 起是 `^1.1.0`），否則會裝出兩份 pi-ai。0.87 起走 transcript API（見上 §9）。
 
 ## 上游閘門觀察（實測 + 第三方佐證）
 
