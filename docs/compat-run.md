@@ -37,6 +37,7 @@ pnpm compat --dsh 0.2.1-alpha.3
 | Option | Meaning |
 | --- | --- |
 | `--dsh <version>` | Required, no default. The DSH release to install. It must equal the exact peer pin of `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` in `package.json`. Otherwise the run stops before installing anything, because DSH would skip the plugin. |
+| `--model <id>` | Asks one model only. The id must be a free model Zen serves now; otherwise the run stops with exit code 3 before installing anything. The warmup probe round also asks only that model, because the others are switched off in the overlay. The report says it was a single-model run, so its exit code 0 means that one model, not the catalogue. |
 | `--tools` | Also verifies a tool round-trip (L2). Off by default to keep the run short. |
 | `--keep` | Keeps the temp environment and prints its path, for debugging. By default it is deleted. |
 | `--out <dir>` | Writes the matrix (`.md`) and JSON into `<dir>`. Without it, nothing is written to the working tree. |

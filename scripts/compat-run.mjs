@@ -1,6 +1,6 @@
 // Compat run CLI (CONTEXT.md: compat run, not the plugin's probe).
 //
-//   pnpm compat --dsh <version> [--tools] [--keep] [--out <dir>]
+//   pnpm compat --dsh <version> [--model <id>] [--tools] [--keep] [--out <dir>]
 //
 // Installs the given DSH and this repo's packed plugin into a temp
 // DSH_HOME, verifies every Zen free model through a real headless DSH, prints
@@ -21,7 +21,7 @@ import { builtinFreeModels, fetchZenModelIds } from '../lib/zen-provider.js'
 import { CompatPreconditionError, runCompat } from './compat-core.mjs'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const USAGE = 'usage: pnpm compat --dsh <version> [--tools] [--keep] [--out <dir>]'
+const USAGE = 'usage: pnpm compat --dsh <version> [--model <id>] [--tools] [--keep] [--out <dir>]'
 /** Exit code for a refused precondition: nothing was installed or sent. */
 const EXIT_PRECONDITION = 3
 
@@ -35,6 +35,7 @@ async function main() {
     args = parseArgs({
       options: {
         dsh: { type: 'string' },
+        model: { type: 'string' },
         tools: { type: 'boolean', default: false },
         keep: { type: 'boolean', default: false },
         out: { type: 'string' },
@@ -58,7 +59,7 @@ async function main() {
   })
   try {
     const { text, files, exitCode } = await runCompat(
-      { dsh: args.dsh, tools: args.tools, out: args.out === undefined ? undefined : resolve(args.out) },
+      { dsh: args.dsh, model: args.model, tools: args.tools, out: args.out === undefined ? undefined : resolve(args.out) },
       {
         pkg,
         env: process.env,
@@ -108,6 +109,7 @@ function createDriver({ dsh, keep }) {
   let root
   let dshBin
   let port
+  let hidden = []
   let disposed = false
 
   const paths = () => ({ home: join(root, 'home'), ws: join(root, 'ws'), overlay: join(root, 'overlay.yml') })
@@ -161,6 +163,8 @@ function createDriver({ dsh, keep }) {
       '- id: session-title-llm',
       '  disabled: true',
     ]
+    // A single-model run: the plugin's probe round only asks models that are switched on.
+    if (hidden.length > 0) lines.push('- id: opencode-free', '  config:', `    hiddenModels: ${JSON.stringify(hidden)}`)
     if (model !== undefined) {
       lines.push('- id: agent-default-model', '  config:', '    provider: opencode-zen-free', `    model: ${JSON.stringify(model)}`)
       if (effort !== undefined) lines.push(`    reasoningEffort: ${JSON.stringify(effort)}`)
@@ -210,7 +214,8 @@ function createDriver({ dsh, keep }) {
      * the catalogue, start one probe round, wait for it, read the picker list.
      * Public behaviour only; the plugin's cache file is never read.
      */
-    async warmup() {
+    async warmup(request) {
+      hidden = request?.hidden ?? []
       await writeOverlay({})
       const run = start([process.execPath, dshBin, '--profile', 'headless', '--patch', paths().overlay, '-'], {
         cwd: paths().ws,
@@ -251,6 +256,9 @@ function createDriver({ dsh, keep }) {
           if (Date.now() > roundDeadline) throw new Error(`the probe round did not finish within ${ROUND_TIMEOUT_MS / 60_000} minutes`)
           await delay(2_000)
         }
+        // `results` also holds the models Zen no longer lists (code "not-listed", zero requests), so only the other rows were asked.
+        const asked = Object.values(progress.results ?? {}).filter((row) => row.code !== 'not-listed').length
+        console.error(`compat: warmup: the probe round asked ${asked} model(s)`)
         const snapshot = await call('/catalog')
         if (snapshot.source !== 'models.dev') throw new Error(`the plugin's catalogue is ${snapshot.source}, not models.dev`)
         return { visible: snapshot.visible, probe: progress }

@@ -27,6 +27,7 @@ export async function runCompat(options, deps) {
     )
   }
 
+  const only = typeof options.model === 'string' && options.model.trim() !== '' ? options.model.trim() : undefined
   // Detected, never an option: a key on the command line ends up in shell history.
   const key = deps.env.OPENCODE_API_KEY?.trim() || undefined
   const ask = redactingDriver(deps.driver, key)
@@ -37,6 +38,7 @@ export async function runCompat(options, deps) {
     os: deps.osLabel,
     keyed: key !== undefined,
     tools: options.tools === true,
+    ...(only === undefined ? {} : { model: only }),
     path: VERIFICATION_PATH,
   }
   let live
@@ -58,6 +60,11 @@ export async function runCompat(options, deps) {
     .filter((id) => live.modelsDev[id] !== undefined && isFree(live.modelsDev[id]))
     .map((id) => ({ id, effort: lowestEffort(live.modelsDev[id]) }))
   const liveIds = new Set(models.map((model) => model.id))
+  if (only !== undefined && !liveIds.has(only)) {
+    throw new CompatPreconditionError(
+      `--model ${only} is not a free model Zen serves now; choose one of: ${[...liveIds].join(', ')}`,
+    )
+  }
   const builtinIds = new Set(live.builtinIds)
   const catalogue = {
     error: null,
@@ -65,17 +72,22 @@ export async function runCompat(options, deps) {
     onlyBuiltin: live.builtinIds.filter((id) => !liveIds.has(id)),
   }
 
+  const selected = only === undefined ? models : models.filter((model) => model.id === only)
+  // The plugin's probe round asks every model that is switched on, so a
+  // single-model run switches the others off for the warmup.
+  const hidden =
+    only === undefined ? undefined : [...new Set([...live.zenIds, ...live.builtinIds])].filter((id) => id !== only)
   const results = []
   let warmup
   try {
-    warmup = await warmUp(deps)
+    warmup = await warmUp(deps, hidden)
     // Measured 2026-10-03: the first three models in Zen's order stayed 429
     // while the round had just seen five others answer, so the streak rule
     // ended the run before asking any of those five. Models that answered go
     // first, which spends what quota is left where an answer is likely. The
     // streak rule still applies to the rest.
     const answered = (model) => warmup.probe[model.id]?.status === 'ok'
-    const ordered = [...models.filter(answered), ...models.filter((model) => !answered(model))]
+    const ordered = [...selected.filter(answered), ...selected.filter((model) => !answered(model))]
     let streak = 0
     let asked = false
     for (const { id, effort } of ordered) {
@@ -160,6 +172,20 @@ const EXIT_MEANING = {
   2: 'not broken, but not finished: rate-limited or unverified models remain, run again later',
 }
 
+/**
+ * What the exit code means for this run. A single-model run never says "every
+ * model verified": exit code 0 also covers gate-refused and upstream-down, so
+ * the sentence has to come from the one model's own verdict.
+ */
+function resultMeaning(report) {
+  const { model } = report.header
+  if (model === undefined || report.exitCode !== 0) return EXIT_MEANING[report.exitCode]
+  const verdict = report.models[0]?.verdict
+  return verdict === 'ok'
+    ? 'the selected model verified, no plugin-fault'
+    : `the selected model was not verified (${verdict}), no plugin-fault`
+}
+
 /** The human-readable matrix. Same facts as the JSON, nothing more. */
 function renderMatrix(report) {
   const { header } = report
@@ -170,8 +196,11 @@ function renderMatrix(report) {
     `- OS: ${header.os}`,
     `- Key: ${header.keyed ? 'yes (OPENCODE_API_KEY set; used only for comparison re-runs)' : 'no (anonymous only)'}`,
     `- Tools (L2): ${header.tools ? 'on' : 'off'}`,
+    ...(header.model === undefined
+      ? []
+      : [`- Model: ${header.model} (single-model run: the other free models were not asked)`]),
     `- Path: ${header.path}`,
-    `- Result: exit code ${report.exitCode} — ${EXIT_MEANING[report.exitCode]}`,
+    `- Result: exit code ${report.exitCode} — ${resultMeaning(report)}`,
     '',
   ]
   if (report.catalogue.error !== null) {
@@ -213,14 +242,14 @@ function cell(value) {
  * processes that follow do not start another one (one round per local day).
  * A failure here is never a quiet pass: nothing is verified and the run fails.
  */
-async function warmUp(deps) {
+async function warmUp(deps, hidden) {
   try {
     await deps.driver.setup()
   } catch (error) {
     return { ok: false, error: `setup: ${describe(error)}`, visible: [], probe: {} }
   }
   try {
-    const round = await deps.driver.warmup()
+    const round = await deps.driver.warmup(hidden === undefined ? undefined : { hidden })
     return { ok: true, error: null, visible: [...round.visible], probe: { ...round.probe?.results } }
   } catch (error) {
     return { ok: false, error: `warmup: ${describe(error)}`, visible: [], probe: {} }

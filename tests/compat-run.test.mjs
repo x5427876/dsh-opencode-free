@@ -42,8 +42,8 @@ function world({
       setup: async () => {
         calls.push({ kind: 'setup' })
       },
-      warmup: async () => {
-        calls.push({ kind: 'warmup' })
+      warmup: async (request) => {
+        calls.push({ kind: 'warmup', ...request })
         return { visible: [...zenIds], probe: { results: {} } }
       },
       run: async (request) => {
@@ -596,4 +596,37 @@ test('a model left rate-limited by a tool step also gets the keyed re-run', asyn
   const { report } = await runCompat({ dsh: PIN, tools: true }, deps)
   assert.deepEqual(runs().filter((r) => r.apiKey !== undefined).map((r) => r.model), ['alpha-free'])
   assert.deepEqual([report.models[0].verdict, report.models[0].keyed?.verdict], ['rate-limited', 'ok'])
+})
+
+test('a --model id Zen does not serve as free is refused before installing or spending quota', async () => {
+  const { deps, calls } = world()
+  await assert.rejects(runCompat({ dsh: PIN, model: 'gamma-free' }, deps), (error) => {
+    assert.match(error.message, /gamma-free/)
+    assert.ok(error.message.includes('alpha-free'), 'the message lists the ids that can be chosen')
+    return true
+  })
+  assert.deepEqual(calls, [])
+})
+
+test('--model asks only that model, hides the others during warmup, and the report says it was a single-model run', async () => {
+  const ids = ['alpha-free', 'beta-free', 'gamma-free']
+  const { deps, calls, runs } = world({ zenIds: ids, builtinIds: ids })
+  const { report, text, exitCode } = await runCompat({ dsh: PIN, model: 'beta-free' }, deps)
+  assert.equal(exitCode, 0)
+  assert.deepEqual(runs().map((run) => run.model), ['beta-free'])
+  assert.deepEqual(calls.find((call) => call.kind === 'warmup').hidden, ['alpha-free', 'gamma-free'])
+  assert.deepEqual(report.models.map((model) => model.id), ['beta-free'])
+  assert.equal(report.header.model, 'beta-free')
+  assert.deepEqual(report.catalogue, { error: null, onlyLive: [], onlyBuiltin: [] })
+  assert.match(text, /single-model/)
+  assert.doesNotMatch(text, /every model verified/)
+})
+
+test('a single-model run whose model was refused never says the model verified', async () => {
+  const { deps } = world({ replies: { 'alpha-free': [GATED] } })
+  const { report, text, exitCode } = await runCompat({ dsh: PIN, model: 'alpha-free' }, deps)
+  assert.equal(exitCode, 0, 'gate-refused leaves the exit code at 0, as for a full run')
+  assert.equal(report.models[0].verdict, 'gate-refused')
+  assert.doesNotMatch(text, /selected model verified/)
+  assert.match(text, /Result: exit code 0 .*not verified.*gate-refused/)
 })
