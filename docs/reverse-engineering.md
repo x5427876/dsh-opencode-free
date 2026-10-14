@@ -56,6 +56,10 @@
   證實」。對照組要用**完整的真實使用方式**（例如 `pi -p` 走完整 agent），不要只呼叫
   底層函式。
 - **先問「哪個客戶端現在能用」。** 擷取它的成功請求來比對，通常一小時內就能定位。
+- **別用 Node 轉發代理當「官方客戶端」的對照。** 代理能原樣保留標頭與 body，卻換掉了最後送出請求的 HTTP
+  客戶端。2026-10-14 同一個 IP、同一分鐘：官方 CLI 直連 200，經轉發代理（標頭與 body 逐項原樣轉發）403。
+  要看官方請求長什麼樣，可以用代理；要判斷「官方客戶端現在能不能過」，必須直連：
+  `opencode run -m opencode/<model> "Reply with OK only."`。`reverify.sh` ② 變紅不代表官方客戶端被擋。
 - **平台差異。** 同一個 DSH，在 Linux／macOS 送 `bash`，在 Windows 送 `pwsh`
   （`dsh-base/cordis.patch.yml` 依 `process.platform` 開關 `tool-bash`／`tool-pwsh`）。
   在一個平台上成功，不代表另一個平台也成功。
@@ -316,6 +320,30 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
   `test-live.mjs` 的免費模型全部匿名回覆，`reverify.sh` ②號燈為綠。重驗用
   `scripts/reverify.sh`（紅綠燈）；`node scripts/test-live.mjs` 會發送實際請求，任一
   模型未回覆便以非零退出碼結束，先執行 `pnpm run build`。未測試 Zen key。
+- **2026-10-14：官方 CLI 能過，其他 HTTP 客戶端不能過。** 同一個出口 IP（經 Cloudflare WARP 的手機熱點）、
+  同一台電腦、同一分鐘，匿名 `Bearer public`：
+
+  | 客戶端 | 結果 |
+  |---|---|
+  | 官方 OpenCode 1.19.0，`muse-spark-1.3-contributor-free`，直連 | 成功，回覆 `OK` |
+  | 同一個 CLI，經本機 Node 轉發代理（標頭與 body 逐項原樣轉發） | 403 FreeTierError |
+  | `reverify.sh` ②（curl：串流、`read`+`bash`、仿冒身份，含 `x-opencode-session-id`） | 403 FreeTierError |
+  | 上一列再加 `--http1.1`、`Accept-Encoding`、`Connection: keep-alive` 的各種組合 | 403 |
+  | 上一列改送官方 CLI 的 11 個工具名稱，UA 改為 `opencode/1.19.0` | 403 |
+  | DSH `0.2.1-alpha.2` 與 `0.2.1-alpha.3` 的 compat run（Node，匿名，9 個模型） | 全部 403 |
+
+  對照：2026-10-10 同樣的 Node 路徑（DSH `0.2.1-alpha.2` + 插件 `0.3.2`）是 10 個模型 `ok`，
+  所以閘門在這幾天收緊了。同日上游追蹤器有多個官方客戶端的新報告（含 2.0.29 桌面版；
+  anomalyco/opencode#55435、#55443），2026-10-03 也有一波（#52907）。
+
+  已排除：標頭集合、body 形狀、工具集、UA 版本、HTTP 版本、編碼標頭、DSH 版本。
+  推論（未驗證）：伺服器分辨的是官方 CLI 的連線方式。官方 CLI 跑在 Bun 上，DSH 與插件跑在 Node 上，
+  curl 又是另一種。TLS 指紋是主要候選，但沒有 Bun 客戶端對照，所以不能確定。
+  這次調查沒有嘗試偽造 TLS 指紋。
+
+  後果：加上工具閘門對策後 `reverify.sh` ② 曾為綠，現在為紅，但這不代表官方客戶端被擋。
+  匿名請求目前只有官方客戶端能過；帶 key 的路徑未測試（本機沒有 `OPENCODE_API_KEY`）。
+  DSH `0.2.1-alpha.3` 因此沒有匿名 live 驗證。
 - 第三方說法（本專案未驗證）：免費額度是整出口 IP 共用的 trial bucket。
   就算屬實，也不是上述 403 的原因（見 §8 與「診斷原則」）。多方回報收緊：
   LiteLLM 帶 header 也被拒、Hermes 靠補 session header 修復、
