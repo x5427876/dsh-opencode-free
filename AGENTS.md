@@ -124,6 +124,13 @@ profile, requested release, installation mode, what changed, cleanup status,
 and what remains unverified. Do not patch DSH, switch to another paid route,
 wipe credentials, delete a profile, or claim success from a partial check.
 
+## Releases
+
+For every release request (including patch releases and requests to tag a release),
+read and execute [the release checklist](docs/release.md) through its completion
+gate (R5). A pushed tag alone is incomplete. A narrower request to prepare files
+or edit documentation does not authorize publication; report any pending steps.
+
 ## DSH upgrades
 
 Use this when moving the plugin to a new DSH release (development, not an

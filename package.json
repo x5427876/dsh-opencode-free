@@ -28,7 +28,6 @@
     "cordis.patch.yml",
     "README.md",
     "README.zh-TW.md",
-    "CHANGELOG.md",
     "AGENTS.md",
     "LICENSE"
   ],
@@ -52,7 +51,9 @@
     "pretest": "pnpm run build",
     "prepack": "pnpm run build",
     "test": "tsx --test tests/*.test.mjs",
-    "check": "pnpm run typecheck && pnpm run test && pnpm pack --pack-destination .artifacts",
+    "check": "pnpm run check:docs && pnpm run typecheck && pnpm run test && pnpm pack --pack-destination .artifacts",
+    "check:docs": "node scripts/check-doc-links.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
     "compat": "pnpm run build && node scripts/compat-run.mjs"
   },
   "keywords": [

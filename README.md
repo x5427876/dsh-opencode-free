@@ -51,8 +51,7 @@ dsh plugin --profile web add dsh-opencode-free@0.3.4
 ```
 
 Replace `web` with your target profile. If already installed, use the update
-command below instead of adding it again. A Git tag alone does not mean the
-version is available on npm; publication is a separate maintainer step.
+command below instead of adding it again.
 
 Verify the package and composed configuration:
 
@@ -192,7 +191,7 @@ before contributing. Edit `src/`; `lib/` is generated.
 
 ```sh
 pnpm install
-pnpm run check  # typecheck, build, offline tests, and pack
+pnpm run check  # local links, typecheck, build, offline tests, and pack
 ```
 
 Default tests use fixtures and a temporary `DSH_HOME`; they do not access the
@@ -203,7 +202,7 @@ explicit authorization:
   not a current admission or key verification test. It sends real requests and
   is available only from a clone. See the [usage guide](docs/usage.md#verify-the-configured-path).
 - For actual-host verification and exit-code meanings, see the [compat run guide](docs/compat-run.md).
-- For release history and agent installation procedures, see [CHANGELOG.md](CHANGELOG.md)
+- For release history and agent installation procedures, see [GitHub Releases](https://github.com/x5427876/dsh-opencode-free/releases)
   and [AGENTS.md](AGENTS.md).
 
 ## License

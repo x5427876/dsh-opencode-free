@@ -46,7 +46,6 @@ dsh plugin --profile web add dsh-opencode-free@0.3.4
 ```
 
 請將 `web` 換成你的目標 profile。若已安裝，請改用下方的更新指令，不要重複新增。
-Git 標籤不代表該版本已上架 npm；發布套件是維護者另行執行的步驟。
 
 檢查套件與合成後的設定：
 
@@ -172,7 +171,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 
 ```sh
 pnpm install
-pnpm run check  # 型別檢查、建置、離線測試與打包
+pnpm run check  # 本地連結、型別檢查、建置、離線測試與打包
 ```
 
 預設測試使用 fixture 與暫存的 `DSH_HOME`，不連網，也不消耗推理額度。
@@ -181,7 +180,7 @@ pnpm run check  # 型別檢查、建置、離線測試與打包
 - `scripts/reverify.sh` 是請求假設已過時的歷史診斷工具，不能用來驗證目前准入或 key。
   它仍會送出真實請求，僅能從 clone 取得。詳見[使用指南](docs/usage.zh-TW.md#驗證設定的路徑)。
 - 真實宿主驗證與退出碼定義，請見[相容性驗證指南](docs/compat-run.md)。
-- 版本歷史與 Agent 安裝流程，請見 [CHANGELOG.md](CHANGELOG.md) 與 [AGENTS.md](AGENTS.md)。
+- 版本歷史與 Agent 安裝流程，請見 [GitHub Releases](https://github.com/x5427876/dsh-opencode-free/releases) 與 [AGENTS.md](AGENTS.md)。
 
 ## 授權
 

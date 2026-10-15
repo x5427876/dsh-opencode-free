@@ -91,10 +91,11 @@ External links point to moving branches reviewed for this baseline, not frozen s
 
 | ID | Level | Requirement and Rationale | Verification |
 | --- | --- | --- | --- |
-| R1 | MUST | Keep the released version, CHANGELOG, installation commands, and compatibility table consistent. Separate unreleased work from released versions. | Compatibility tests and pre-release document comparison. |
+| R1 | MUST | Keep the released version, GitHub Release notes, installation commands, and compatibility table consistent. GitHub Releases are the sole version-change record; prepare unreleased notes outside tracked documentation. | Compatibility tests and pre-release document comparison. |
 | R2 | MUST | Verify that the actual tarball's exports, types, client, and patch files are usable. Exclude credentials, caches, and private scratch files. A successful build does not prove installability. | Pack contents, isolated tarball-consumer imports, and installation checks; explicitly list checks not run. |
 | R3 | MUST | Use patch releases for compatible fixes and minor releases for new features. Breaking changes increment minor in 0.x and major from 1.x onward; document impact and upgrade steps. Publishing requires separate authorization. | Review version differences and upgrade guidance; explicitly identify supported-host changes. |
 | R4 | SHOULD | Claim platform support according to evidence. Linux fixtures do not prove actual Windows, macOS, Desktop, or Web operation. | Record OS, Node, DSH, profile, and verification level; qualify claims where evidence is missing. |
+| R5 | MUST | Every release includes synchronized version declarations, a pushed annotated tag, and a published GitHub Release with notes and the verified tarball. A commit or tag alone is not a completed release. Public release text describes shipped behavior and installation; internal publication handoffs belong in maintainer communications. | Follow [the release checklist](release.md); verify the remote tag commit, published release status, asset identity, and actual npm availability before describing publication status. |
 
 ## Applying the Standards
 

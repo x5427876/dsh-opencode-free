@@ -86,9 +86,8 @@ after(async () => {
 
 test('targets the pinned DSH contracts', async () => {
   // The version the plugin sends upstream must be the one package.json declares,
-  // and the install guide must name that same version. Nothing here requires a
-  // bump: merging unreleased work and publishing a release are separate steps,
-  // and a changelog may LEAD with `## [Unreleased]` until one happens.
+  // and the install guide must name that same version. Merging unreleased work
+  // and publishing a release are separate steps; release notes live on GitHub.
   assert.match(pkg.version, /^\d+\.\d+\.\d+$/, 'package.json carries a plain semver')
   const v = pkg.version
   const agentsDoc = await readFile(new URL('../AGENTS.md', import.meta.url), 'utf8')
@@ -107,24 +106,6 @@ test('targets the pinned DSH contracts', async () => {
     agentsDoc.includes(`dsh-opencode-free@${v}`),
     `AGENTS.md installs ${v} specifically, not some other version`,
   )
-  const changelog = await readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8')
-  // The changelog must account for whatever `package.json` says, and it may carry
-  // an `[Unreleased]` section above it. Presence alone is not enough — a released
-  // section further down the file does not make the shipped version current — so
-  // POSITION is checked against whichever the file leads with.
-  const firstSection = changelog.match(/^## \[(Unreleased|[^\]]+)\]/m)
-  assert.ok(firstSection !== null, 'the changelog has a leading version section')
-  const lead = firstSection === null ? '' : firstSection[1]
-  assert.ok(
-    lead === 'Unreleased' || lead === v,
-    `the changelog leads with ${lead}, which is neither [Unreleased] nor the shipped ${v}`,
-  )
-  if (lead === v) {
-    assert.ok(
-      changelog.includes(`## [${v}]`),
-      `the changelog says it leads with ${v} but has no ${v} section`,
-    )
-  }
   // Both User-Agent strings must derive from ONE definition. The provider's
   // was a hardcoded second copy and had already drifted to 0.2.0 on a branch
   // whose package.json said 0.3.0.
@@ -144,13 +125,12 @@ test('targets the pinned DSH contracts', async () => {
   )
   // Every scripts/ path referenced from committed prose must be a real tracked
   // file: probe-ab.mjs was cited from four committed places (source comment,
-  // test-live.mjs, ADR 0002, CHANGELOG 0.3.1) while being untracked, so the only
+  // test-live.mjs, ADR 0002, old release notes) while being untracked, so the only
   // reproducible evidence for PROBE_MAX_TOKENS lived outside the repository
   //.
   for (const doc of [
     await readFile(new URL('../README.md', import.meta.url), 'utf8'),
     await readFile(new URL('../src/zen-provider.ts', import.meta.url), 'utf8'),
-    await readFile(new URL('../CHANGELOG.md', import.meta.url), 'utf8'),
   ]) {
     for (const m of doc.matchAll(/scripts[\/]([a-z-]+\.(?:mjs|sh))/g)) {
       const tracked = execFileSync('git', ['ls-files', '--error-unmatch', `scripts/${m[1]}`], {

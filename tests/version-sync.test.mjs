@@ -19,6 +19,14 @@ for (const readme of ['README.md', 'README.zh-TW.md']) {
   })
 }
 
+test('public release documentation omits internal npm handoff boilerplate', async () => {
+  const handoff = /git (?:tag alone does not mean|標籤不代表)|publication is a separate maintainer step|維護者(?:會)?另行發布 npm|發布套件是維護者另行執行的步驟/i
+  for (const file of ['README.md', 'README.zh-TW.md']) {
+    const text = (await read(file)).replace(/\s+/g, ' ')
+    assert.doesNotMatch(text, handoff, `${file} describes the release, not internal publication handoffs`)
+  }
+})
+
 test('AGENTS.md says which DSH this release supports', async () => {
   assert.ok((await read('AGENTS.md')).includes(`only DeepSeek Harness \`${dsh}\``))
 })
@@ -37,9 +45,12 @@ test('every DSH package in the release-age exclusions allows the pinned version'
   for (const line of lines) assert.ok(line.includes(dsh), `${line.trim()} allows ${dsh}`)
 })
 
-test('the changelog entry for this release names the pinned DSH', async () => {
-  const changelog = await read('CHANGELOG.md')
-  const section = changelog.split(/^## \[/m).find((s) => s.startsWith(`${v}]`))
-  if (section === undefined) return // [Unreleased] may lead until the release is cut
-  assert.ok(section.includes(`Supports DeepSeek Harness \`${dsh}\``), `CHANGELOG ${v} names ${dsh}`)
+test('release history uses GitHub Releases instead of a local changelog', async () => {
+  for (const file of ['README.md', 'README.zh-TW.md']) {
+    const text = await read(file)
+    assert.ok(text.includes('](https://github.com/x5427876/dsh-opencode-free/releases)'), `${file} links to GitHub Releases`)
+    assert.doesNotMatch(text, /\]\([^)]*CHANGELOG\.md\)/i, `${file} has no local changelog link`)
+  }
+  assert.ok(!pkg.files.includes('CHANGELOG.md'), 'the package does not include a separate changelog')
+  await assert.rejects(read('CHANGELOG.md'), { code: 'ENOENT' })
 })
