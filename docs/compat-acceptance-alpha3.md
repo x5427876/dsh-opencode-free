@@ -49,7 +49,9 @@ Pinned upstream source locations:
 
 The release also documents that headless defaults to environment/.env credentials rather than saved keys. Continue using a fresh DSH_HOME and workspace, and remove OPENCODE_API_KEY from the test environment. Headless evidence does not prove Web/Desktop credential precedence or user-profile behavior.
 
-## Confirmed gaps in the current runner
+## Baseline gaps before implementation
+
+The following table records the runner before this change. The implementation now addresses these gaps; [the integration report](compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md) records verification and remaining limits. Historical line references below identify the baseline, not the updated source.
 
 | Gap | Local evidence | Required adjustment |
 | --- | --- | --- |

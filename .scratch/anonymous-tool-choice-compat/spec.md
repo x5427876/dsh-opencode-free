@@ -172,3 +172,10 @@ Labels: ready-for-agent
 - [原始重跑驗收](../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/acceptance.md)記錄 L1／read／pwsh 成功但 L0 HTTP 400。[差分診斷](../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/l0-diagnosis.md)記錄 none／省略／恢復 none 得到 400／200／400。這些只證明當時指定模型的觀察，不是全模型驗收。
 - 官方模型 API 的既有觀察只有 created、id、object、owned_by，沒有費率與端點欄位。實作時須讀取[官方模型資料](https://opencode.ai/v2/docs/console/models/)及其動態來源。模型數量與範例 ID 都是當時觀察，不得寫成固定驗收名單。
 - 目標是所有符合範圍的模型實際通過。共用機制與嚴格判定只能保證結果如實呈現，不能保證共用匿名額度或上游服務永遠可用。
+
+## Implementation outcome — 2026-10-15
+
+票 01–04 已完成。274 個離線測試、型別、建置、打包、tarball consumer 與雙軸審查通過。
+票 05 已執行一輪隔離驗收：8 個已確認免費對話模型均通過 L0、L1、read、pwsh。
+官方清單仍有 4 個項目缺少明確端點分類資料。完整驗收退出碼為 2，規格保持 open。
+詳見[驗收報告](../../docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md)。
