@@ -21,7 +21,7 @@ async function verify(t, change = () => {}) {
     peerDependencies: { '@deepseek-ai/dsh-llm': '0.2.1-alpha.3' },
   }))
   const asset = join(root, 'dsh-opencode-free-0.3.4.tgz')
-  assert.equal(spawnSync('tar', ['-czf', asset, '-C', root, 'package/package.json']).status, 0)
+  assert.equal(spawnSync('tar', ['-czf', 'dsh-opencode-free-0.3.4.tgz', 'package/package.json'], { cwd: root }).status, 0)
   const digest = 'sha256:' + createHash('sha256').update(await readFile(asset)).digest('hex')
   const responses = {
     [`${github}/git/ref/tags/v0.3.4`]: { body: { ref: 'refs/tags/v0.3.4', object: { type: 'tag', sha: tagObject } } },

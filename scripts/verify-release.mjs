@@ -44,7 +44,7 @@ async function main() {
   let bytes, manifest
   try {
     bytes = readFileSync(asset)
-    manifest = JSON.parse(execFileSync('tar', ['-xOf', '-', 'package/package.json'], {
+    manifest = JSON.parse(execFileSync('tar', ['-xzOf', '-', 'package/package.json'], {
       input: bytes, encoding: 'utf8', maxBuffer: 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'],
     }))
   } catch {
