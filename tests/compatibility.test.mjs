@@ -1029,7 +1029,15 @@ test('GUARD: a gate or a quota wall is never retried on another channel', async 
   }
 })
 
-test('GUARD: dead is only concluded when every channel that was asked finished', async () => {
+test('GUARD: dead is only concluded when every channel that was asked finished', async (t) => {
+  // Control expiry explicitly: a real 5ms deadline can turn even the 404 or
+  // socket fixture into a timeout on a busy runner before its result is read.
+  let deadline
+  t.mock.method(AbortSignal, 'timeout', () => {
+    deadline = new AbortController()
+    return deadline.signal
+  })
+
   // A 404 down the wrong channel reads exactly like a dead model — that is why
   // the sweep exists at all. But a channel that never FINISHED has said nothing
   // about the model, and "this request did not complete" is not "this model is
@@ -1048,13 +1056,13 @@ test('GUARD: dead is only concluded when every channel that was asked finished',
     e.cause = Object.assign(new Error('socket disconnected'), { code: 'ECONNRESET' })
     throw e
   }
-  // Never answers. It rejects past the probe's own deadline with the error that
-  // deadline produces, so the row says "timeout" for the reason a real timeout
-  // does — rather than this test asserting a classification nothing can reach.
-  const TIMEOUT = () =>
-    new Promise((_, reject) => {
-      setTimeout(() => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), 30)
-    })
+  // Expire the actual probe signal, then surface the same socket error. This
+  // checks that signal expiry, not the provider's flattened error, decides why
+  // the channel could not answer, without depending on elapsed wall-clock time.
+  const TIMEOUT = () => {
+    deadline.abort()
+    return TRANSPORT()
+  }
 
   const p = plugin.zenProvider(
     () => 'probe-session',
