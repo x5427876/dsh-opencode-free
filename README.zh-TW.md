@@ -18,12 +18,13 @@
 > 安裝第三方插件前，請先讀 DSH 的
 > [安全說明](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)。
 
-> 本地 0.3.4 開發修改使用新的 inference 端點；這不代表 registry 的
-> 0.3.4 已包含修復，本次工作不會發布套件。
+> 0.3.4 使用新的 inference 端點。維護者會另行發布 npm 套件；
+> Git 標籤本身不代表 registry 已提供此版本。
 >
-> [單模型實測](docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md)：
-> Windows 隔離 DSH 的文字／read／pwsh 已成功，但 L0 探測收到 HTTP 429。
-> 即使 compat 退出碼為 0，嚴格驗收仍未完成；未另跑第二輪。
+> [Windows headless 實測](docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md)：
+> 8 個選定模型通過 L0／文字／read／pwsh。另有 4 個官方項目分類未明，
+> 完整驗收仍未完成（退出碼 2）。此輪實測早於 compat 包裝函式重構；
+> Web、Desktop 與 compaction 仍未驗證。
 
 ## 功能
 

@@ -4,7 +4,9 @@ All notable user-visible changes to `dsh-opencode-free` are recorded here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.4] - 2026-10-15
+
+Supports DeepSeek Harness `0.2.1-alpha.3`.
 
 ### Changed
 
@@ -17,7 +19,7 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pass; L2 checks host JSON call/result evidence, not just final text. Reports
   retain allowlisted comparisons and runtime provenance, without raw events.
 
-- **Local 0.3.4 inference migration (not published).** Requests and availability
+- **Inference endpoint migration.** Requests and availability
   checks use `/inference/v1`. Fetch and Node HTTP guards match only the exact
   HTTPS origin and path descendants; cached model metadata is rederived with
   the current provider identity without deleting preferences or verdicts.
@@ -33,6 +35,9 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Compat report privacy.** Retain allowlisted failure codes/status/markers
   instead of raw DSH error lines that can echo conversations or tool arguments;
   classifications and bounded backoff remain unchanged.
+- **Shared compat stream preparation.** Both compat stream methods now use one
+  private wrapper. Delegation, method binding, reasoning options, and anonymous
+  tool restoration retain their existing behavior.
 - **Single-model Windows evidence, not full acceptance.** One isolated DSH
   0.2.1-alpha.3 round with local 0.3.4 and anonymous Muse Spark 1.3 verified
   nonempty text, read nonce, and pwsh hash. Its L0 probe was HTTP 429; strict
@@ -44,9 +49,21 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `@deepseek-ai/schemastery` `~3.18.5-alpha.2`. DSH `0.2.1-alpha.3` moves `pi-ai`
   from `^1.0.2` to `^1.1.0`, so the `pi-ai` peer moves with it. The pin stays
   exact, so `0.2.1-alpha.2` is no longer supported by this release; stay on
-  `0.3.3` for it. Plugin behaviour is unchanged: the requests the plugin sends to
-  Zen through the DSH adapter are identical on `0.2.1-alpha.2` and `0.2.1-alpha.3`,
-  including the anonymous `read` and `bash` tool gate.
+  `0.3.3` for it.
+
+### Validation and limitations
+
+- `pnpm run check` passes on Windows with Node.js `24.13.0` and pnpm `11.19.0`:
+  strict types, build, 275 offline tests, and package creation. The compat wrapper
+  tests passed before and after refactoring; public type declarations are unchanged.
+- The [2026-10-15 isolated Windows headless run](docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md)
+  verified L0, text, read, and pwsh for 8 selected free conversational models.
+  Four official entries remain unclassified, so the run exited `2` and full
+  acceptance remains incomplete. This evidence predates the compat wrapper
+  refactor; no new live run was performed for the release preparation.
+- Web, Desktop, compaction, and other platforms remain unverified by that run.
+  Anonymous availability depends on upstream admission and the shared egress-IP
+  bucket. Keyed requests do not establish anonymous acceptance.
 
 ## [0.3.3] - 2026-10-12
 

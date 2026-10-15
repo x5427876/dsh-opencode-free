@@ -1508,46 +1508,32 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
     }
     const original = stash.get(api)!;
     const fallbackSession = randomUUID();
-    const origStream = (original.stream as (...args: never[]) => unknown).bind(original);
-    const origStreamSimple = (original.streamSimple as (...args: never[]) => unknown).bind(original);
+    // No reasoning default here: compat omission means off for both methods.
+    const wrapStream = (stream: (...args: never[]) => unknown) => {
+      const origStream = stream.bind(original);
+      return (model: Model<Api>, context: never, options: StreamOptions) => {
+        if ((model as Model<Api>).provider !== PROVIDER_ID)
+          return origStream(model as never, context as never, options as never);
+        const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
+        const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
+        const ctx = gate.context;
+        const recorder = createTransportRecorder(
+          options?.fetch as FetchFunction | undefined,
+          options?.maxTokens ?? model.maxTokens,
+        );
+        const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
+        debugLog(
+          `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
+        );
+        const out = origStream(model as never, ctx as never, processed as never);
+        return withGuidance(out as object, gate, recorder);
+      };
+    };
     registerApiProvider(
       {
         api: api as Parameters<typeof registerApiProvider>[0]["api"],
-        stream: ((model: Model<Api>, context: never, options: StreamOptions) => {
-          if ((model as Model<Api>).provider !== PROVIDER_ID)
-            return origStream(model as never, context as never, options as never);
-          const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-          const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-          const ctx = gate.context;
-          const recorder = createTransportRecorder(
-            options?.fetch as FetchFunction | undefined,
-            options?.maxTokens ?? model.maxTokens,
-          );
-          const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
-          debugLog(
-            `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
-          );
-          const out = origStream(model as never, ctx as never, processed as never);
-          return withGuidance(out as object, gate, recorder);
-        }) as never,
-        streamSimple: ((model: Model<Api>, context: never, options: StreamOptions) => {
-          if ((model as Model<Api>).provider !== PROVIDER_ID)
-            return origStreamSimple(model as never, context as never, options as never);
-          // No reasoning default here: compat omission means off.
-          const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
-          const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-          const ctx = gate.context;
-          const recorder = createTransportRecorder(
-            options?.fetch as FetchFunction | undefined,
-            options?.maxTokens ?? model.maxTokens,
-          );
-          const processed = compatRequestOptions(options, getSessionId, fallbackSession, recorder);
-          debugLog(
-            `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
-          );
-          const out = origStreamSimple(model as never, ctx as never, processed as never);
-          return withGuidance(out as object, gate, recorder);
-        }) as never,
+        stream: wrapStream(original.stream as (...args: never[]) => unknown) as never,
+        streamSimple: wrapStream(original.streamSimple as (...args: never[]) => unknown) as never,
       },
       "dsh-opencode-free",
     );

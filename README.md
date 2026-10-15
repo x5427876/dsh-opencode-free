@@ -22,13 +22,13 @@ install OpenCode, log in, get an API key, or run a separate server.
 > DSH's [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)
 > before installing third-party plugins.
 
-> Local 0.3.4 development changes target the new inference endpoint. This is
-> not a claim that the registry's 0.3.4 contains these fixes; no release is made
-> by this work.
+> Version 0.3.4 targets the new inference endpoint. npm publication is a separate
+> maintainer step; a Git tag alone does not establish registry availability.
 >
-> [Single-model evidence](docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md):
-> Windows isolated DSH text/read/pwsh passed, but its L0 probe received HTTP 429.
-> Strict acceptance is incomplete despite compat exit code 0; no second round ran.
+> [Windows headless evidence](docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md):
+> 8 selected models passed L0/text/read/pwsh. Four official entries remain
+> unclassified, so full acceptance is incomplete (exit code 2). This run predates
+> the compat wrapper refactor; Web, Desktop, and compaction remain unverified.
 
 ## Features
 
