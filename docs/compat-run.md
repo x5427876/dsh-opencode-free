@@ -3,7 +3,7 @@
 The compat run answers one question for each DSH release: do Zen's free models
 still work through **real DSH** with this plugin? It installs a given DSH
 version and the plugin packed from this repository into a throwaway
-environment, sends one request per free model through a headless DSH, and
+environment, verifies each official free conversational target through headless DSH, and
 prints a matrix with the reason for each result.
 
 It is not the plugin's **probe (探測)**. The probe is the user-facing
@@ -31,13 +31,13 @@ Run it through pnpm, not `node` directly. The script calls pnpm through
 ## Running it
 
 ```sh
-pnpm compat --dsh 0.2.1-alpha.3
+pnpm compat --dsh 0.2.1-alpha.3 --tools --out <unique-report-directory>
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `--dsh <version>` | Required, no default. The DSH release to install. It must equal the exact peer pin of `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` in `package.json`. Otherwise the run stops before installing anything, because DSH would skip the plugin. |
-| `--model <id>` | Asks one model only. The id must be a free model Zen serves now; otherwise the run stops with exit code 3 before installing anything. The warmup probe round also asks only that model, because the others are switched off in the overlay. The report says it was a single-model run, so its exit code 0 means that one model, not the catalogue. |
+| `--model <id>` | Asks one officially classified free conversational model only; otherwise exit 3 before installation. Other models are hidden during warmup. A pass covers that selected model only. |
 | `--tools` | Also verifies a tool round-trip (L2). Off by default to keep the run short. |
 | `--keep` | Keeps the temp environment and prints its path, for debugging. By default it is deleted. |
 | `--out <dir>` | Writes the matrix (`.md`) and JSON into `<dir>`. Without it, nothing is written to the working tree. |
@@ -49,10 +49,14 @@ pnpm compat --dsh 0.2.1-alpha.3
 
 1. **Preconditions.** It checks `--dsh` and the peer pin before any install or
    request.
-2. **Live list.** It fetches Zen's `/models` list and keeps the ids that
-   models.dev marks free. The report lists ids only in the live list and ids only
-   in the plugin's builtin list. If either source fails, the run stops with exit
-   code 2. It never falls back to the builtin list.
+2. **Official dynamic targets.** Each round fetches the official `/models`
+   list and official Console endpoint/pricing tables. Only officially free
+   conversational models become targets. Paid and non-conversational models
+   carry exclusion evidence. Missing or conflicting classifications remain
+   unresolved, preventing full acceptance; those IDs receive no inference.
+   models.dev supplements metadata but cannot silently remove official targets.
+   Empty targets and unavailable official sources exit 2. The report retains
+   source URLs/times and a per-round snapshot, never a fallback acceptance list.
 3. **Isolated environment.** It creates a fresh directory under the system temp
    directory and uses pnpm to install `@deepseek-ai/dsh@<version>`. It runs
    `pnpm pack` on this repository and installs the tarball into the built-in
@@ -66,7 +70,8 @@ pnpm compat --dsh 0.2.1-alpha.3
    spend a second request on a session title.
 5. **Warmup (L0).** One DSH process boots and waits on stdin. The run calls the
    plugin's public panel routes: `POST /refresh`, `POST /probe`, `GET /probe`
-   until the round ends, and `GET /catalog`. It never reads the plugin's cache
+   until the round ends, and `GET /catalog`. Both membership and an actual ok
+   probe are required. Extra inferred probe targets prevent acceptance. It never reads the plugin's cache
    file. The round's per-model results and the picker list become L0. Because
    the plugin records the round, the later processes do not start another one.
 6. **L1.** For each model, one headless DSH process sends `Reply with OK only.`
@@ -82,6 +87,12 @@ pnpm compat --dsh 0.2.1-alpha.3
    model cannot pass by guessing or echoing. Each step is judged and reported on
    its own.
 
+L1/L2 use the pinned host's `--json` mode. L1 requires a completed process and
+a single nonempty final assistant answer. L2 also checks the host tool name,
+call/result ID pairing, arguments, completed result, and nonce/hash in both the
+tool result and final answer. Raw events remain in memory; reports retain only
+comparison booleans. A correct-looking answer without tool evidence fails.
+
 Models are spaced 3 seconds apart. A 429 is retried after 30 seconds, then
 after 60 seconds. A model that still gets 429 is `rate-limited`. If three models
 in a row are rate-limited, the run stops and lists the rest as unverified. The
@@ -93,8 +104,8 @@ run has no overall time limit.
 | --- | --- | --- |
 | `ok` | Answered through DSH (and passed both tool steps with `--tools`). | – |
 | `rate-limited` | Still 429 after back-off. Inconclusive: neither a pass nor a failure. | 2 |
-| `upstream-down` | Upstream says the model is unavailable (`Model/Endpoint is unavailable`, HTTP 5xx), or the warmup round judged it dead. | no |
-| `gate-refused` | HTTP 403/401. Zen's admission policy may have changed, so revisit the anonymous tool gate. | no |
+| `upstream-down` | Upstream says the model is unavailable (`Model/Endpoint is unavailable`, HTTP 5xx), or the warmup round judged it dead. | 2 |
+| `gate-refused` | HTTP 403/401. Zen's admission policy may have changed, so revisit the anonymous tool gate. | 2 |
 | `plugin-fault` | Anything on the plugin or DSH side: `NO_ADAPTER`, `UNKNOWN_MODEL`, the plugin not loaded, an empty reply, a hang, a live model missing from the picker, or a failed tool step. | 1 |
 | `unverified` | Not asked, because the run stopped after three rate-limited models in a row or the warmup failed. | 2 |
 
@@ -102,8 +113,8 @@ Model failure reasons retain only allowlisted DSH codes, HTTP status, and
 known gate/unavailability markers, not raw error lines that may echo tool
 arguments or conversation content. Classification and finite backoff are unchanged.
 
-The report also records each model's layer. L0 means the model is in the DSH
-picker and in Zen's list. L1 means DSH returned a reply. L2 means the tool
+The report also records each model's layer. L0 requires provider catalogue
+membership and a successful probe. L1 means DSH returned a reply. L2 means the tool
 round-trip passed. The report also gives the effort level used and the reason
 for any failure.
 
@@ -111,9 +122,9 @@ for any failure.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Every model was verified and none is a `plugin-fault`. |
+| 0 | A nonempty target set passed all requested layers, including L0. Full-model L0/L1/L2 acceptance additionally requires `--tools` and no `--model`. |
 | 1 | At least one `plugin-fault`, or the setup or warmup failed. Something needs fixing. This takes priority over 2. |
-| 2 | Nothing is broken, but the run did not finish: models are `rate-limited` or unverified, or the live list could not be fetched. Run it again later. |
+| 2 | Incomplete: upstream refusals/unavailability, quota, empty targets, uncertain official classifications, scope drift, or unverified evidence remain. This does not establish a plugin fault. |
 | 3 | A precondition was refused: `--dsh` was missing or does not match the peer pin, or an argument is invalid. Nothing was installed or sent. |
 
 ## Keyed comparison
@@ -142,3 +153,8 @@ profile plus an overlay. It uses the same `PiAiAdapter` path as the web
 profile, but it is not the profile users run, so a pass is **not** a web UI
 verification. The JSON contains the same facts as the matrix and also
 includes each model's warmup probe row.
+
+The JSON also includes per-layer comparisons, official selection evidence,
+resolved runtime versions, the tarball hash, source revision, and explicit
+requested-scope/full-model acceptance flags. L1/L2 success does not override a
+failed L0. See [the pinned acceptance baseline](compat-acceptance-alpha3.md).

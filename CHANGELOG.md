@@ -8,6 +8,15 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Anonymous tool-choice compatibility.** Tool-less requests retain substantive
+  admission declarations without forcing `tool_choice: none`. Caller choices
+  remain intact; incomplete streamed tool names are held before host dispatch.
+- **Strict dynamic compat acceptance.** Official live IDs and official pricing/
+  endpoint evidence determine free conversational targets. Uncertain metadata
+  remains unresolved. L0 failures, empty scope and upstream refusals no longer
+  pass; L2 checks host JSON call/result evidence, not just final text. Reports
+  retain allowlisted comparisons and runtime provenance, without raw events.
+
 - **Local 0.3.4 inference migration (not published).** Requests and availability
   checks use `/inference/v1`. Fetch and Node HTTP guards match only the exact
   HTTPS origin and path descendants; cached model metadata is rederived with

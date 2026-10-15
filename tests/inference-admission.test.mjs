@@ -72,19 +72,19 @@ test('later tool removals cannot discard admission declarations or the system pr
     await provider.streamSimple(model, input, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
     assert.deepEqual(body.tools.map(t => (t.function ?? t).name).sort(), ['bash', 'read'])
     assert.ok(JSON.stringify(body).includes('Keep this host instruction.'))
-    assert.equal(body.tool_choice, 'none')
+    assert.equal(body.tool_choice, undefined)
   }
   assert.deepEqual(input, before)
 })
 
-test('tool-less anonymous requests declare substantive tools but disable execution', async () => {
+test('tool-less anonymous requests keep admission declarations without an unsupported tool choice', async () => {
   const provider = zenProvider()
   for (const api of ['openai-responses', 'openai-completions']) {
     const model = provider.getModels().find(m => m.api === api)
     let body
     await provider.streamSimple(model, context, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
     const tools = body.tools.map(t => t.function ?? t)
-    assert.equal(body.tool_choice, 'none')
+    assert.equal(body.tool_choice, undefined)
     assert.ok(tools.every(t => Object.keys(t.parameters.properties).length > 0))
     assert.ok(tools.every(t => t.description.includes('Unavailable in this request')))
     assert.equal(tools.find(t => t.name === 'read').parameters.properties.filePath.type, 'string')
@@ -163,4 +163,47 @@ test('warm catalogue rederives cached records with current identity and preserve
     assert.equal(catalog.current().probedAt, 100)
     assert.deepEqual(catalog.current().models.map(m => m.id), ['available', 'retired'])
   } finally { await rm(dir, { recursive: true, force: true }) }
+})
+
+test('fragmented admission tool names never reach the host as tool-call events', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const chunks = [
+    { tool_calls: [{ index: 0, id: 'call_probe', type: 'function', function: { name: '', arguments: '' } }] },
+    { tool_calls: [{ index: 0, function: { name: 'read', arguments: '{"filePath":"private"}' } }] },
+  ].map(delta => ({ id: 'test', choices: [{ index: 0, delta, finish_reason: null }] }))
+  chunks.push({ id: 'test', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+  const observed = []
+  const stream = provider.streamSimple(model, context, {
+    apiKey: 'public', maxRetries: 0,
+    fetch: async () => new Response(new ReadableStream({
+      async start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`))
+          await new Promise(resolve => setTimeout(resolve, 10))
+        }
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'))
+        controller.close()
+      },
+    }), { headers: { 'Content-Type': 'text/event-stream' } }),
+  })
+  await assert.rejects(async () => { for await (const event of stream) if (event.type.startsWith('toolcall_')) observed.push(event.type) }, /unavailable admission tool/)
+  assert.deepEqual(observed, [])
+})
+
+test('explicit caller tool choices survive anonymous and keyed requests', async () => {
+  for (const api of ['openai-responses', 'openai-completions']) {
+    const provider = zenProvider()
+    const model = provider.getModels().find(m => m.api === api)
+    for (const apiKey of ['public', 'fixture-key']) for (const choice of ['none', 'auto', 'required']) {
+      let body
+      const options = { apiKey, maxRetries: 0,
+        onPayload: payload => ({ ...payload, tool_choice: choice }),
+        fetch: async (_, init) => { body = JSON.parse(init.body); return refused() },
+      }
+      await provider.streamSimple(model, context, options).result()
+      assert.equal(body.tool_choice, choice)
+      if (apiKey !== 'public') assert.ok(!body.tools?.length)
+    }
+  }
 })

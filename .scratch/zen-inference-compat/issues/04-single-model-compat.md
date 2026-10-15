@@ -46,3 +46,17 @@ Parent: 新 inference 准入相容性與單模型相容性驗證規格。
 - Driver-owned temp environment was removed and absence verified; no existing DSH/profile/credentials changed, no release/tag/publication. Existing uncommitted reports and .env.local remain excluded from this commit.
 - Standards/Spec review found and fixed the later-toolsRemoved admission bug with a red → green fixture. Added both APIs, both stream methods, main/compat/context matrix and emitted cache-key/session assertions. Model error summaries retain allowlisted signals, not echoed tool inputs or conversation content.
 - Final parallel review: Standards found no new blocking documented breach; Spec found no new blocking code issue, with the L0 acceptance gap explicitly retained. Its checklist-status note was corrected here. Fragmented JSON argument fixtures were also added to both SSE channels and passed without further production changes or live requests.
+
+## Comments
+
+### 2026-10-15 authorized retry
+
+The user separately requested a rerun. One isolated anonymous single-model compat round completed at minimal effort. L1, read nonce, and Windows pwsh hash passed. L0 picker membership passed, but the probe returned `unknown (HTTP 400)`. Exit code 0 does not satisfy strict acceptance. Ticket 04 remains open; the L0 checkbox remains unchecked. No further live round was sent.
+
+[Retry acceptance report](../../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/acceptance.md) and adjacent JSON preserve the evidence. The driver's temporary environment was removed and its absence checked. Existing DSH processes, profiles, credentials, and pre-existing working-tree changes were preserved. No production code changed.
+
+### 2026-10-15 L0 HTTP 400 diagnosis
+
+The user requested continued diagnosis. Baseline / omit tool_choice / restored baseline yielded Responses HTTP 400 / 200 / 400. The failure identifies parameter `tool_choice`, type `invalid_request_error`. The zero-host-tools gate forces `tool_choice: "none"`; the successful differential omits it. The alternate channel reports `ModelProtocolUnsupported`. Five inference requests were sent across the three diagnostic invocations, all anonymous and for the selected model only.
+
+[Diagnosis and fix boundary](../../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/l0-diagnosis.md). No production fix was applied. A fix must preserve rejection of unavailable admission-tool calls and then pass strict isolated DSH acceptance. Ticket 04 remains open; diagnostic payload modification is not a full compat pass.

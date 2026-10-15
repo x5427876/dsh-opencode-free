@@ -10,14 +10,14 @@
 //
 // Node's child-process API only, no shell: the same on Windows, macOS, Linux.
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { fetchSection } from '../lib/catalog.js'
-import { builtinFreeModels, fetchZenModelIds } from '../lib/zen-provider.js'
+import { fetchCompatCatalogue } from './compat-catalogue.mjs'
 import { CompatPreconditionError, runCompat } from './compat-core.mjs'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -67,7 +67,7 @@ async function main() {
         osLabel: `${platform()} ${release()} ${arch()}, Node ${process.version}`,
         now: () => new Date(),
         tmpDir: join(tmpdir(), 'dsh-compat-reports'),
-        catalogue,
+        catalogue: fetchCompatCatalogue,
         driver,
         sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
         writeFile: async (path, content) => {
@@ -86,15 +86,6 @@ async function main() {
     }
     throw error
   }
-}
-
-/** Zen's served ids, models.dev's opencode records, and the plugin's builtin floor. */
-async function catalogue() {
-  const zenIds = await fetchZenModelIds(fetch, AbortSignal.timeout(15_000))
-  if (zenIds === null) throw new Error('Zen /models did not return a model list')
-  const section = await fetchSection({ fetchImpl: fetch, timeoutMs: 30_000 })
-  if (section.kind !== 'ok') throw new Error(`models.dev: ${section.kind === 'failed' ? section.reason : section.kind}`)
-  return { zenIds, modelsDev: section.section, builtinIds: builtinFreeModels().map((model) => model.id) }
 }
 
 /**
@@ -119,6 +110,8 @@ function createDriver({ dsh, keep }) {
     const env = { ...process.env, DSH_HOME: paths().home }
     // The plugin reads this variable itself, so an anonymous run must not inherit it.
     delete env.OPENCODE_API_KEY
+    delete env.DSH_OPENCODE_FREE_DEBUG
+    delete env.DEBUG
     if (apiKey !== undefined) env.OPENCODE_API_KEY = apiKey
     return env
   }
@@ -146,7 +139,7 @@ function createDriver({ dsh, keep }) {
   async function step(label, args, cwd) {
     const run = start(args, { cwd, env: childEnv(undefined), input: '' })
     const code = await run.exited
-    if (code !== 0) throw new Error(`${label} exited with code ${code}: ${tail(run.output().stderr || run.output().stdout)}`)
+    if (code !== 0) throw new Error(`${label} exited with code ${code}`)
     return run.output().stdout
   }
 
@@ -206,6 +199,11 @@ function createDriver({ dsh, keep }) {
       await step('installing the plugin', [process.execPath, dshBin, 'plugin', '--profile', 'headless', 'add', `file:${join(root, tarball)}`], root)
       port = await freePort()
       console.error(`compat: DSH ${dsh} and ${tarball} installed under ${root}`)
+      const versions = {}
+      for (const name of ['@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai', '@earendil-works/pi-ai']) {
+        versions[name] = JSON.parse(await readFile(join(root, 'dsh', 'node_modules', name, 'package.json'), 'utf8')).version
+      }
+      return { versions, pluginSource: 'local working-tree tarball', pluginSha256: createHash('sha256').update(await readFile(join(root, tarball))).digest('hex'), sourceRevision: (await step('source revision', ['git', 'rev-parse', 'HEAD'], REPO)).trim() }
     },
 
     /**
@@ -227,7 +225,7 @@ function createDriver({ dsh, keep }) {
       let exitCode
       void run.exited.then((code) => (exitCode = code))
       const call = async (path, init) => {
-        const response = await fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(60_000) })
+        const response = await fetch(`${base}${path}`, { ...init, signal: AbortSignal.timeout(path === '/probe' && init?.method === 'POST' ? ROUND_TIMEOUT_MS : 60_000) })
         if (!response.ok) throw new Error(`${init?.method ?? 'GET'} ${path} answered HTTP ${response.status}`)
         return await response.json()
       }
@@ -235,7 +233,7 @@ function createDriver({ dsh, keep }) {
         const bootDeadline = Date.now() + BOOT_TIMEOUT_MS
         for (;;) {
           if (exitCode !== undefined) {
-            throw new Error(`DSH exited (code ${exitCode}) before the plugin's routes answered: ${tail(run.output().stderr)}`)
+            throw new Error(`DSH exited (code ${exitCode}) before the plugin's routes answered`)
           }
           try {
             await call('/catalog')
@@ -261,7 +259,7 @@ function createDriver({ dsh, keep }) {
         console.error(`compat: warmup: the probe round asked ${asked} model(s)`)
         const snapshot = await call('/catalog')
         if (snapshot.source !== 'models.dev') throw new Error(`the plugin's catalogue is ${snapshot.source}, not models.dev`)
-        return { visible: snapshot.visible, probe: progress }
+        return { visible: snapshot.visible, probe: progress, targets: Object.entries(progress.results ?? {}).filter(([, row]) => row.code !== 'not-listed').map(([id]) => id) }
       } finally {
         run.child.kill()
         await run.exited
@@ -275,7 +273,7 @@ function createDriver({ dsh, keep }) {
       console.error(`compat: ${model} ${what}${effort === undefined ? '' : ` effort=${effort}`}${apiKey === undefined ? '' : ' (keyed)'}`)
       await writeOverlay({ model, effort })
       for (const [name, content] of Object.entries(files)) await writeFile(join(ws, name), content)
-      const run = start([process.execPath, dshBin, '--profile', 'headless', '--patch', paths().overlay, '-'], {
+      const run = start([process.execPath, dshBin, '--profile', 'headless', '--patch', paths().overlay, '--json', '-'], {
         cwd: ws,
         env: childEnv(apiKey),
         input: task,
@@ -288,7 +286,7 @@ function createDriver({ dsh, keep }) {
       const exitCode = await run.exited
       clearTimeout(timer)
       for (const name of Object.keys(files)) await rm(join(ws, name), { force: true })
-      return { ...run.output(), exitCode, timedOut }
+      return { ...run.output(), exitCode, timedOut, format: 'headless-json', cwd: ws }
     },
 
     abort() {
@@ -333,11 +331,6 @@ function freePort() {
 
 function delay(ms) {
   return new Promise((done) => setTimeout(done, ms))
-}
-
-/** The last few lines of a child's output, for an error message. */
-function tail(text) {
-  return String(text ?? '').trim().split(/\r?\n/).slice(-5).join(' | ').slice(-800)
 }
 
 process.exitCode = await main().catch((error) => {

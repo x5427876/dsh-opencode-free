@@ -248,9 +248,16 @@ schemas and history map `file_path` ↔ `filePath` and `timeoutMs` ↔ `timeout`
 while preserving host-required fields and execution semantics. Usage guidance
 is adapted to DSH's text-only `read` and actual shell; it does not advertise
 OpenCode's directory or media capabilities. Requests without tools get
-substantive admission-only declarations with `tool_choice: none`; calls to
-missing tools are rejected before host dispatch. Keyed requests are unchanged.
+substantive admission-only declarations without forcing `tool_choice: none`.
+Explicit caller choices are retained. Calls to missing tools are rejected before
+host dispatch, including incomplete streamed names. Keyed requests are unchanged.
 The minimum upstream description/schema requirements remain unverified.
+
+For full compatibility acceptance, use the [compat run](docs/compat-run.md)
+with `--tools` and no single-model selector. Each round obtains official dynamic
+free conversational targets; unresolved source data prevents full acceptance.
+L0, text, read and shell evidence must all pass. Upstream refusal, quota and
+unavailability are incomplete results, not successful exit-code-0 runs.
 
 The availability probe re-asserts the `read` and `bash` tool names on the final
 payload, at the last boundary before the bytes leave. Everything above that

@@ -140,3 +140,68 @@ Labels: ready-for-human
 票 01–03 已完成；248 個離線測試、型別／建置／打包與 tarball consumer 檢查通過。唯一授權的隔離單模型 compat 已執行，L1、read nonce、Windows pwsh hash 成功，但 L0 probe 為 HTTP 429，故不宣稱完整驗收通過。
 
 票 04 維持 open / ready-for-human；沒有第二輪，也不會未經另行授權重跑。[嚴格驗收報告](../../docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md)及相鄰 JSON 保存結果與界限。
+
+## Authorized retry — 2026-10-15
+
+使用者另行要求重跑。本次完成一輪相同模型的隔離匿名 compat。L1、read nonce 與 Windows pwsh hash 通過。L0 picker 成員資格通過，但探測回傳 HTTP 400，分類為 unknown。因此完整驗收仍未通過，票 04 維持 open / ready-for-human。退出碼 0 不覆蓋 L0 結果。本次未修改正式程式碼，也未追加其他 live 輪次。暫存環境已清除並確認不存在。
+
+[重跑驗收報告](../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/acceptance.md)及相鄰 JSON 保存本次結果。前段「沒有第二輪」描述的是前次驗收當時的狀態。
+
+## L0 diagnosis — 2026-10-15
+
+已定位 HTTP 400：無工具請求的 gate 強制加入 `tool_choice: "none"`，指定模型的 Responses 通道以 invalid_request_error 拒絕該欄位。原設定／只移除欄位／恢復原設定的結果為 HTTP 400／200／400。這不解釋前次 HTTP 429。本次只完成診斷，未修改正式程式碼。後續修復須保留拒絕執行補位工具的防護，再完成嚴格 L0／L1／L2 驗收。[診斷紀錄](../../docs/compat-reports/zen-inference-2026-10-15-retry-081206/l0-diagnosis.md)。
+
+## Tool-choice design discussion — 2026-10-15
+
+以下是後續機制調整的已確認方向，不改寫前次單模型驗收結果，也不表示已完成實作。
+
+- 使用者接受共用規則，適用目前及未來加入的 Zen 免費模型，涵蓋探測、一般對話、標題與對話壓縮等匿名請求入口，不維護逐模型例外清單。
+- 模型要求呼叫補位工具時，明確失敗並阻止執行，不自動重送。不將補位工具視為宿主可執行能力。
+- 使用者將驗收目標提高為所有模型通過，並已確認測試指 `pnpm run build && node scripts/compat-run.mjs` 的既有相容性驗證，不是對話壓縮測試。機制仍須涵蓋無工具入口，但不因此增加專門的對話壓縮 live 驗收。
+- 所有目標模型均須實際通過。429、逾時、上游拒絕與未驗證項目不得算通過；不能靠縮減目標集合達成全部通過。
+- 查核確認 `gateOptions` 與 `enforceAnonymousTools` 均可能寫入 `tool_choice: "none"`。設計須涵蓋兩者，並驗證串流事件與最終結果均不會把補位工具交給宿主執行。
+- 目前僅記錄設計決策。未修改正式程式碼，也未發送本次設計討論的 live 請求。
+
+### Confirmed acceptance direction — 2026-10-15
+
+- 建議沿用 `--tools`，讓所有目標模型均須通過 L0 picker 與探測、L1 非空回覆、L2 read nonce 與 Windows pwsh hash。移除 `--model` 限制，驗整份目標集合。
+- 建議直接收緊既有 compat 的退出碼，不增加第二套 strict 模式。退出碼 0 僅表示本輪所有目標模型均完成所要求的步驟；保留失敗分類，讓上游拒絕或未完成回傳非零，不能一律誤標為插件故障。
+- 建議在每輪開始時固定 Zen 即時清單與 models.dev 免費清單的交集，報告列出完整目標集合。執行中失敗或下線的目標仍保留原列，不以縮減集合達成全數通過；下一輪重新取得清單。
+- 共用策略須處理正常 gate 與最終 payload backstop。有真實宿主工具時，保留呼叫端既有工具選擇語意。帶 key 與其他 provider 保持原行為。
+- 保留既有有限 429 退避及連續限額停止規則。禁止補位工具呼叫的防護不得啟動自動重送；這與原有 429 退避是不同情況。
+
+使用者已接受全模型 L0／L1／L2、收緊退出碼與固定本輪目標集合的建議，並要求先核對 DSH 0.2.1-alpha.3 的契約，再進入機制實作。
+
+### Exact-host acceptance review — 2026-10-15
+
+[驗收基準查核](../../docs/compat-acceptance-alpha3.md)對照本地精確版本 LLM／adapter，以及已驗 SHA-512 的七個官方 0.2.1-alpha.3 套件產物。現有 headless／PiAiAdapter 方向正確；L1 的退出 0 且 assistant 文字非空有宿主契約支持。L0 直接呼叫 provider，與 L1／L2 的 adapter 路徑須分別描述。
+
+查核確認目前 L0 失敗、gate-refused、upstream-down 及空目標集合可能未阻止退出 0。L2 只查回覆包含 nonce／hash，不能證明使用指定工具。建議利用此版正式支援的 headless `--json`，於記憶體核對工具名稱、呼叫 ID、宿主參數、工具結果與 final；報告僅留判定欄位，不保存原始事件內容。
+
+本輪三個既有針對性離線測試通過；這證明現有寬鬆判定的行為，不表示新基準已實作或驗收通過。未修改正式程式碼，未發 live 請求。詳細基準仍供使用者確認後作為後續實作依據。
+
+### Dynamic official target source — 2026-10-15
+
+使用者明確要求目標模型來自官方動態清單。每輪須重新取得資料，不能使用寫死名單、內建表或上輪報告決定測試範圍。本輪保存的目標快照僅供核對測過哪些模型，不是下一輪的清單來源。
+
+原提案以 Zen 即時清單與 models.dev 免費資料求交集。官方 API 是否能直接提供免費與端點資訊、models.dev 應保留為篩選來源或僅作補充資料，正在查核。若改變目錄來源責任，須明確重審 ADR-0002，不能暗中覆蓋其決策。
+
+查核結果：官方 `/inference/v1/models` 目前回傳 85 個模型，但每個模型僅有 created／id／object／owned_by，沒有免費或端點欄位。官方文件另列費率及通道；models.dev 是 OpenCode 採用的補充資料來源，不能稱作 inference API 本身的欄位契約。建議讓官方即時在列資料主導成員範圍；資料缺漏須明列未確認，不得靜默剔除以達成全數通過。
+
+官方清單包含免費的 `jev-1.13-free`，其 `/systemone` 是結構化決策 API，不能套用既有文字／read／pwsh 標準。「所有免費對話模型」或「包含此不同 API 的所有免費模型」是尚待確認的範圍分歧。此次僅查目錄 GET 與公開文件，未發送推理請求。
+
+### Confirmed design baseline — 2026-10-15
+
+使用者已確認驗收範圍為「官方動態在列的所有免費對話模型」。上方的交集提案與待確認記錄保留為討論歷史；以本節、[驗收基準](../../docs/compat-acceptance-alpha3.md)及 [ADR-0004](../../docs/adr/0004-official-dynamic-compat-targets.md)的定稿為準。
+
+- 每輪重新讀取官方清單，以目前官方費率與端點資料辨識免費對話模型。models.dev 補充能力與推理資料；缺少資料須明列未確認，不能靜默縮減驗收範圍。
+- 非對話模型列出排除原因與官方依據，不計為通過。免費對話模型若缺少插件傳輸支援，仍保留為未通過的驗收目標。
+- 本輪保存目標快照，下一輪重新取得清單。正式插件的目錄政策仍依 ADR-0002；驗收清單獨立建立，才有能力發現正式目錄漏列模型。
+- 機制採共用匿名准入策略，同時處理兩個強制 none 的寫入點。無工具且呼叫端沒有指定工具選擇時，保留實質補位宣告並省略 tool_choice；有宿主工具或呼叫端明確選擇時，保留其語意。
+- 補位呼叫須在變成宿主可執行呼叫前遭拒絕。離線測試須涵蓋串流及最終結果，也須涵蓋分片工具名稱。不自動重送補位呼叫。
+- 所有目標均須在同一輪通過 L0／L1／L2，才算完整驗收；以此版 headless --json 核對 L2 工具名稱、呼叫配對、參數、結果與最終答案。報告僅保存安全判定欄位。
+- 沿用精確 DSH 0.2.1-alpha.3、目前工作樹 tarball、隔離 headless 與有限 429 退避。不升級宿主、不發布，也不變更使用者 profile 或執行中的 DSH。
+
+本階段已完成設計與驗收標準定稿。正式機制、驗收器與離線測試尚未修改；本階段沒有執行全模型 live 驗收，不能宣稱目標模型已全部通過。
+
+後續實作以新發布的[共用匿名工具選擇與全模型相容性規格](../anonymous-tool-choice-compat/spec.md)為準。該規格為 open／ready-for-agent；本文件保留原單模型功能與討論歷史。

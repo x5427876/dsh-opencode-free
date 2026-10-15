@@ -5,7 +5,8 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { isFree, thinkingLevelMapFor } from '../lib/catalog.js'
+import { thinkingLevelMapFor } from '../lib/catalog.js'
+import { parseHeadlessOutput, verifyToolEvidence } from './compat-evidence.mjs'
 
 /** A precondition failed: nothing was installed and no request was sent. */
 export class CompatPreconditionError extends Error {}
@@ -56,9 +57,7 @@ export async function runCompat(options, deps) {
     }
     return await finish(report, 2, options, deps)
   }
-  const models = live.zenIds
-    .filter((id) => live.modelsDev[id] !== undefined && isFree(live.modelsDev[id]))
-    .map((id) => ({ id, effort: lowestEffort(live.modelsDev[id]) }))
+  const models = live.targets.map(({ id, api }) => ({ id, api, effort: lowestEffort(live.modelsDev[id] ?? {}) }))
   const liveIds = new Set(models.map((model) => model.id))
   if (only !== undefined && !liveIds.has(only)) {
     throw new CompatPreconditionError(
@@ -70,13 +69,18 @@ export async function runCompat(options, deps) {
     error: null,
     onlyLive: models.map((model) => model.id).filter((id) => !builtinIds.has(id)),
     onlyBuiltin: live.builtinIds.filter((id) => !liveIds.has(id)),
+    ...live.selection,
   }
 
   const selected = only === undefined ? models : models.filter((model) => model.id === only)
+  const unresolved = (live.selection.unresolved ?? []).filter(row => only === undefined || row.id === only)
+  if (selected.length === 0) {
+    return await finish({ header, catalogue, warmup: null, models: selected.map(({ id, effort }) => ({ id, effort: effort ?? null, effortNote: NO_LEVELS, keyed: null, tools: null, l0: null, verdict: 'unverified', layer: null, reason: 'official target selection incomplete' })), unverified: selected.map(model => model.id) }, 2, options, deps)
+  }
   // The plugin's probe round asks every model that is switched on, so a
   // single-model run switches the others off for the warmup.
   const hidden =
-    only === undefined ? undefined : [...new Set([...live.zenIds, ...live.builtinIds])].filter((id) => id !== only)
+    [...new Set([...live.zenIds, ...live.builtinIds, ...Object.keys(live.modelsDev)])].filter(id => !selected.some(model => model.id === id && model.api !== null))
   const results = []
   let warmup
   try {
@@ -90,13 +94,18 @@ export async function runCompat(options, deps) {
     const ordered = [...selected.filter(answered), ...selected.filter((model) => !answered(model))]
     let streak = 0
     let asked = false
-    for (const { id, effort } of ordered) {
+    for (const { id, effort, api } of ordered) {
       const base = { id, effort: effort ?? null, effortNote: effort === undefined ? NO_LEVELS : '', keyed: null, tools: null }
       if (!warmup.ok) {
         results.push({ ...base, verdict: 'unverified', layer: null, reason: 'not run: the warmup failed', l0: null })
         continue
       }
-      const l0 = { inPicker: warmup.visible.includes(id), probe: probeRow(warmup.probe[id]) }
+      const probe = warmup.probe[id]
+      const l0 = { inPicker: warmup.visible.includes(id), probe: probeRow(probe), pass: warmup.visible.includes(id) && probe?.status === 'ok', code: probe?.code ?? null, http: probe?.http ?? 0 }
+      if (api === null) {
+        results.push({ ...base, l0, verdict: 'unverified', layer: null, reason: 'unsupported official transport' })
+        continue
+      }
       if (!l0.inPicker) {
         // Zen lists it but the picker does not offer it. The plugin drops a
         // model only on a `dead` probe verdict, which upstream has to earn.
@@ -108,7 +117,7 @@ export async function runCompat(options, deps) {
           layer: null,
           reason: dead
             ? `warmup probe judged it dead: ${l0.probe}`
-            : 'listed by Zen and free on models.dev, but missing from the DSH picker',
+            : 'official free conversational model missing from the DSH catalogue',
         })
         continue
       }
@@ -119,7 +128,7 @@ export async function runCompat(options, deps) {
       if (asked) await deps.sleep(MODEL_SPACING_MS)
       asked = true
       const verdict = await attempt(ask, deps.sleep, { model: id, effort, task: L1_TASK })
-      let result = { ...base, l0, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason }
+      let result = { ...base, l0, l1: { pass: verdict.verdict === 'ok', verdict: verdict.verdict, reason: verdict.reason }, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason }
       if (options.tools === true && verdict.verdict === 'ok') result = { ...result, ...(await toolRoundTrip(ask, deps, { model: id, effort })) }
       // Anonymous stays the subject (it is the plugin's promise). A keyed
       // re-run only separates "quota dry or gate changed" from "plugin broken",
@@ -127,8 +136,12 @@ export async function runCompat(options, deps) {
       if (key !== undefined && (result.verdict === 'rate-limited' || result.verdict === 'gate-refused')) {
         result = { ...result, keyed: classify(await ask({ model: id, effort, task: L1_TASK, apiKey: key })) }
       }
-      results.push(result)
       streak = result.verdict === 'rate-limited' ? streak + 1 : 0
+      if (!l0.pass && result.verdict !== 'plugin-fault') {
+        const failure = l0.code === 'quota-exhausted' ? 'rate-limited' : ['anon-gated', 'bad-key'].includes(l0.code) ? 'gate-refused' : l0.code === 'dead' || l0.http >= 500 ? 'upstream-down' : 'unverified'
+        result = { ...result, verdict: result.verdict === 'ok' ? failure : result.verdict, reason: `L0 ${l0.probe}${result.reason ? `; ${result.reason}` : ''}` }
+      }
+      results.push(result)
     }
   } finally {
     await deps.driver.dispose()
@@ -136,11 +149,12 @@ export async function runCompat(options, deps) {
   const report = {
     header,
     catalogue,
-    warmup: { ok: warmup.ok, error: warmup.error, visible: warmup.visible },
+    warmup: { ok: warmup.ok, error: warmup.error, visible: warmup.visible, runtime: warmup.runtime ?? null, unexpectedTargets: warmup.targets.filter(id => !selected.some(model => model.id === id && model.api !== null)) },
     models: results,
     unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
   }
-  return await finish(report, warmup.ok ? exitCodeFor(results) : 1, options, deps)
+  const code = warmup.ok ? exitCodeFor(results) : 1
+  return await finish(report, code === 0 && (unresolved.length > 0 || report.warmup.unexpectedTargets.length > 0) ? 2 : code, options, deps)
 }
 
 /**
@@ -149,7 +163,7 @@ export async function runCompat(options, deps) {
  * working tree.
  */
 async function finish(report, exitCode, options, deps) {
-  const full = { ...report, exitCode }
+  const full = { ...report, exitCode, acceptance: { scope: report.header.model === undefined ? 'all-official-free-conversational' : 'selected-model', requiredLayers: ['L0', 'L1', ...(report.header.tools ? ['L2-read', 'L2-shell'] : [])], complete: exitCode === 0, fullModelAcceptance: exitCode === 0 && report.header.tools && report.header.model === undefined } }
   const text = renderMatrix(full)
   const json = `${JSON.stringify(full, null, 2)}\n`
   const stem = `compat-${full.header.dshVersion}-${full.header.date.slice(0, 10)}`
@@ -169,13 +183,12 @@ async function finish(report, exitCode, options, deps) {
 const EXIT_MEANING = {
   0: 'every model verified, no plugin-fault',
   1: 'plugin-fault (or the setup/warmup failed): something on the plugin or DSH side needs fixing',
-  2: 'not broken, but not finished: rate-limited or unverified models remain, run again later',
+  2: 'incomplete: upstream, selection, scope or verification evidence remains unresolved',
 }
 
 /**
  * What the exit code means for this run. A single-model run never says "every
- * model verified": exit code 0 also covers gate-refused and upstream-down, so
- * the sentence has to come from the one model's own verdict.
+ * model verified": success applies only to the requested scope and layers.
  */
 function resultMeaning(report) {
   const { model } = report.header
@@ -213,7 +226,12 @@ function renderMatrix(report) {
   }
   if (report.warmup !== null) {
     lines.push(`- Warmup: ${report.warmup.ok ? 'ok' : `FAILED — ${report.warmup.error}`}`)
+    if (report.warmup.unexpectedTargets?.length) lines.push(`- Unexpected probe targets: ${report.warmup.unexpectedTargets.map(cell).join(', ')}`)
   }
+  lines.push(`- Required layers: ${report.acceptance.requiredLayers.join(', ')}`, `- Full-model L0/L1/L2 acceptance: ${report.acceptance.fullModelAcceptance ? 'passed' : 'not passed'}`)
+  for (const source of report.catalogue.sources ?? []) lines.push(`- Source: ${source.url} (${source.at}, ${source.status})`)
+  for (const row of report.catalogue.excluded ?? []) lines.push(`- Excluded: ${cell(row.id)} — ${cell(row.reason)}`)
+  for (const row of report.catalogue.unresolved ?? []) lines.push(`- Unresolved: ${cell(row.id)} — ${cell(row.reason)}`)
   lines.push(
     '',
     '| model | verdict | layer | effort | L0 probe | L2 tools | with key | reason |',
@@ -243,16 +261,17 @@ function cell(value) {
  * A failure here is never a quiet pass: nothing is verified and the run fails.
  */
 async function warmUp(deps, hidden) {
+  let runtime
   try {
-    await deps.driver.setup()
+    runtime = await deps.driver.setup()
   } catch (error) {
-    return { ok: false, error: `setup: ${describe(error)}`, visible: [], probe: {} }
+    return { ok: false, error: `setup: ${describe(error)}`, visible: [], probe: {}, targets: [] }
   }
   try {
     const round = await deps.driver.warmup(hidden === undefined ? undefined : { hidden })
-    return { ok: true, error: null, visible: [...round.visible], probe: { ...round.probe?.results } }
+    return { ok: true, error: null, visible: [...round.visible], probe: { ...round.probe?.results }, targets: [...(round.targets ?? [])], runtime }
   } catch (error) {
-    return { ok: false, error: `warmup: ${describe(error)}`, visible: [], probe: {} }
+    return { ok: false, error: `warmup: ${describe(error)}`, visible: [], probe: {}, targets: [] }
   }
 }
 
@@ -293,7 +312,7 @@ const RATE_LIMIT_STREAK = 3
 async function attempt(ask, sleep, request) {
   const once = async () => {
     const output = await ask(request)
-    return { ...classify(output), stdout: output.stdout }
+    return { ...classify(output), stdout: output.stdout, evidence: output.evidence, cwd: output.cwd }
   }
   let verdict = await once()
   for (const wait of RATE_LIMIT_BACKOFF_MS) {
@@ -329,31 +348,30 @@ async function toolRoundTrip(ask, deps, base) {
   const command = deps.platform === 'darwin' ? SHELL_COMMANDS.darwin : SHELL_COMMANDS[tool]
   const readNonce = nonce()
   await deps.sleep(MODEL_SPACING_MS)
-  const read = await toolStep(ask, deps.sleep, { ...base, task: READ_TASK, files: { [READ_FILE]: readNonce } }, readNonce)
+  const read = await toolStep(ask, deps.sleep, { ...base, task: READ_TASK, files: { [READ_FILE]: readNonce } }, readNonce, { tool: 'read', file: READ_FILE })
   const shellNonce = nonce()
   const expected = createHash('sha256').update(shellNonce).digest('hex').slice(0, 16)
   const task = `Use the ${tool} tool to run this exact command, then reply with its output only: ${command}`
   await deps.sleep(MODEL_SPACING_MS)
-  const shell = { tool, ...(await toolStep(ask, deps.sleep, { ...base, task, files: { [SHELL_FILE]: shellNonce } }, expected)) }
+  const shell = { tool, ...(await toolStep(ask, deps.sleep, { ...base, task, files: { [SHELL_FILE]: shellNonce } }, expected, { tool, command })) }
   const tools = { read, shell }
   if (read.pass && shell.pass) return { tools, verdict: 'ok', layer: 'L2', reason: '' }
   const failures = [
     ...(read.pass ? [] : [{ step: 'read step', ...read }]),
     ...(shell.pass ? [] : [{ step: `shell step (${tool})`, ...shell }]),
   ]
-  const verdict = failures.some((failure) => failure.verdict === 'plugin-fault') ? 'plugin-fault' : 'rate-limited'
+  const verdict = failures.some((failure) => failure.verdict === 'plugin-fault') ? 'plugin-fault' : failures[0].verdict
   const reason = failures.map((failure) => `${failure.step}: ${failure.reason}`).join('; ')
   return { tools, verdict, layer: 'L1', reason }
 }
 
-async function toolStep(ask, sleep, request, expected) {
+async function toolStep(ask, sleep, request, expected, step) {
   const result = await attempt(ask, sleep, request)
   if (result.verdict === 'rate-limited') return { pass: false, verdict: 'rate-limited', reason: result.reason }
-  if (result.verdict !== 'ok') return { pass: false, verdict: 'plugin-fault', reason: result.reason }
-  if (!result.stdout.toLowerCase().includes(expected.toLowerCase())) {
-    return { pass: false, verdict: 'plugin-fault', reason: 'the reply did not contain this run\'s nonce' }
-  }
-  return { pass: true, verdict: 'ok', reason: '' }
+  if (result.verdict !== 'ok') return { pass: false, verdict: result.verdict, reason: result.reason }
+  const evidence = verifyToolEvidence(result.evidence, { ...step, cwd: result.cwd ?? process.cwd() }, expected)
+  const pass = Object.values(evidence).every(Boolean)
+  return { pass, verdict: pass ? 'ok' : 'plugin-fault', reason: pass ? '' : 'host tool execution evidence did not match this step', evidence }
 }
 
 function nonce() {
@@ -374,7 +392,8 @@ function redactingDriver(driver, key) {
   }
   return async (request) => {
     const output = await driver.run(request)
-    return { ...output, stdout: scrub(output.stdout), stderr: scrub(output.stderr) }
+    const evidence = output.format === 'headless-json' ? parseHeadlessOutput(output.stdout) : undefined
+    return { ...output, evidence, stdout: scrub(evidence === undefined ? output.stdout : evidence.text), stderr: scrub(output.stderr) }
   }
 }
 
@@ -387,6 +406,7 @@ const VERIFICATION_PATH =
 function classify(output) {
   // A hang is the stream never ending, which is the plugin/DSH side's to explain.
   if (output.timedOut === true) return { verdict: 'plugin-fault', reason: 'no answer within the driver timeout' }
+  if (output.exitCode === 0 && output.evidence?.valid === false) return { verdict: 'plugin-fault', reason: 'invalid headless JSON evidence' }
   if (output.exitCode === 0 && output.stdout.trim() !== '') return { verdict: 'ok', reason: '' }
   const line = errorLine(output.stderr)
   if (output.exitCode === 0) return { verdict: 'plugin-fault', reason: 'empty reply' }
@@ -435,6 +455,6 @@ function errorLine(stderr) {
 function exitCodeFor(results) {
   if (results.some((result) => result.verdict === 'plugin-fault')) return 1
   // "Not broken, but not finished: run again later" (ADR 0003).
-  if (results.some((result) => result.verdict === 'rate-limited' || result.verdict === 'unverified')) return 2
+  if (results.length === 0 || results.some((result) => result.verdict !== 'ok')) return 2
   return 0
 }

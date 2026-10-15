@@ -9,6 +9,8 @@
 
 **Status**: accepted
 
+**Scope clarification (2026-10-15)**: 本決策管理正式插件的模型目錄。相容性驗證的官方動態目標來源依 [ADR-0004](0004-official-dynamic-compat-targets.md)；該決策亦更新下文關於官方端點資料的歷史前提。
+
 **Context**
 
 若以 Pi 內建表作為唯一的目錄來源：宿主以 peer 依賴鎖定 `pi-ai` 版本，插件無法隨上游

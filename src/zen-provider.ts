@@ -581,7 +581,6 @@ type CallRestoration = {
   restoreRead?: boolean;
   restoreTimeout?: boolean;
   unavailable?: string[];
-  disableTools?: boolean;
 };
 
 /** Rename only an owned top-level field; leave host constraints and other arguments intact. */
@@ -670,18 +669,7 @@ export function applyAnonymousToolGate<T>(
         : message)
       : [createInitialSystemMessage(undefined, stubs as never) as unknown as TranscriptMessage, ...messages];
   }
-  return { context: { ...(context as Record<string, unknown>), messages } as T, restoreShell, restoreRead, restoreTimeout, unavailable, disableTools: current.length === 0 };
-}
-
-function gateOptions<T extends StreamOptions>(options: T = {} as T, gate: CallRestoration): T {
-  if (!gate.disableTools) return options;
-  return {
-    ...options,
-    onPayload: (async (payload: unknown, model: never) => {
-      const out = await options?.onPayload?.(payload, model);
-      return { ...((out ?? payload) as Record<string, unknown>), tool_choice: "none" };
-    }) as T["onPayload"],
-  };
+  return { context: { ...(context as Record<string, unknown>), messages } as T, restoreShell, restoreRead, restoreTimeout, unavailable };
 }
 
 /** Restore owned argument aliases in place; SSE events share their partial message. */
@@ -767,7 +755,7 @@ function enforceAnonymousTools(payload: unknown): unknown {
     const tool = admissionTool(name);
     return responses ? { type: "function", ...tool } : { type: "function", function: tool };
   };
-  return { ...body, tools: [...existing, ...missing.map(stub)], ...(existing.length === 0 ? { tool_choice: "none" } : {}) };
+  return { ...body, tools: [...existing, ...missing.map(stub)] };
 }
 
 const QUOTA_PATTERN = /FreeUsageLimitError|usage[\s\S]{0,40}(exceeded|limit)|rate[\s-]?limit|quota/i;
@@ -1538,7 +1526,7 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           debugLog(
             `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
           );
-          const out = origStream(model as never, ctx as never, gateOptions(processed, gate) as never);
+          const out = origStream(model as never, ctx as never, processed as never);
           return withGuidance(out as object, gate, recorder);
         }) as never,
         streamSimple: ((model: Model<Api>, context: never, options: StreamOptions) => {
@@ -1556,7 +1544,7 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
           debugLog(
             `${identitySummary(new Headers(processed.headers as HeadersInit | undefined), "compat")} ${shapeSummary(ctx, options)}`,
           );
-          const out = origStreamSimple(model as never, ctx as never, gateOptions(processed, gate) as never);
+          const out = origStreamSimple(model as never, ctx as never, processed as never);
           return withGuidance(out as object, gate, recorder);
         }) as never,
       },
@@ -1992,10 +1980,29 @@ function withGuidance<T extends object>(stream: T, restoreShell: boolean | CallR
         if (typeof iter !== "function") return Reflect.get(target, prop, target);
         const inner = (iter as () => AsyncIterableIterator<unknown>).bind(target);
         return async function* () {
+          const pending: unknown[] = [];
+          const incomplete = new Set<number>();
+          const unavailable = typeof restoreShell === "object" ? restoreShell.unavailable ?? [] : [];
           for await (const event of inner()) {
             if (restoreShell) restoreAdmissionCalls(event, restoreShell);
+            const frame = event as { type?: string; contentIndex?: number; partial?: { content?: { name?: string }[] } };
+            if (frame.type?.startsWith("toolcall_") && typeof frame.contentIndex === "number") {
+              const name = frame.partial?.content?.[frame.contentIndex]?.name ?? "";
+              if (frame.type === "toolcall_end") incomplete.delete(frame.contentIndex);
+              else if (unavailable.some(tool => tool.startsWith(name))) incomplete.add(frame.contentIndex);
+            }
+            // Hold incomplete tool names until the host can distinguish a real
+            // tool from an unavailable declaration. Preserve event order.
+            if (incomplete.size > 0 || pending.length > 0) {
+              pending.push(event);
+              if (incomplete.size > 0) continue;
+              for (const held of pending) yield mapEventErrorToGuidance(held, recorder);
+              pending.length = 0;
+              continue;
+            }
             yield mapEventErrorToGuidance(event, recorder);
           }
+          if (pending.length > 0) throw new Error("Unresolved unavailable admission tool name; no host execution is permitted.");
         };
       }
       const value = Reflect.get(target, prop, target);
@@ -2123,13 +2130,13 @@ export function zenProvider(
     stream(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(model, gateOptions(options, gate), gate.context);
+      const { processed, recorder } = requestOptions(model, options, gate.context);
       return withGuidance(provider.stream(model, gate.context, processed), gate, recorder);
     },
     streamSimple(model, context, options) {
       const key = (options as { apiKey?: unknown } | undefined)?.apiKey;
       const gate = applyAnonymousToolGate(swapCompactionPrompt(toTranscript(context), key), key);
-      const { processed, recorder } = requestOptions(model, gateOptions(options, gate), gate.context);
+      const { processed, recorder } = requestOptions(model, options, gate.context);
       return withGuidance(
         provider.streamSimple(model, gate.context, {
           ...processed,

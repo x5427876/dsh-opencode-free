@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-15T00:12:10.58Z",
+  "localDate": "2026-10-15T08:12:10.580+08:00",
+  "sourceCommit": "8fa8fe9",
+  "pluginVersion": "0.3.4",
+  "pluginSource": "local working-tree tarball; not a published release",
+  "dshVersion": "0.2.1-alpha.3",
+  "os": "win32 10.0.26200 x64, Node v24.13.0",
+  "model": "muse-spark-1.3-contributor-free",
+  "anonymousOnly": true,
+  "effortL1L2": "minimal",
+  "completedCompatRoundsThisRequest": 1,
+  "warmupModelsAsked": 1,
+  "publicFreeIntersection": true,
+  "l0": {
+    "httpStatus": 400,
+    "inPicker": true,
+    "probePassed": false,
+    "probeCode": "unknown"
+  },
+  "l1": {
+    "nonemptyDshReply": true
+  },
+  "l2": {
+    "shellTool": "pwsh",
+    "separateFileHashPassed": true,
+    "readNoncePassed": true
+  },
+  "compatExitCode": 0,
+  "strictAcceptancePassed": false,
+  "strictAcceptanceStatus": "incomplete: L0 probe HTTP 400, unknown classification",
+  "buildPassed": true,
+  "offlineChecksRerun": false,
+  "isolatedTemporaryEnvironmentRemoved": true,
+  "existingProfilesOrDshProcessesChanged": false,
+  "publishedOrTagged": false,
+  "runnerReport": "compat-0.2.1-alpha.3-2026-10-15.json"
+}
