@@ -32,7 +32,7 @@ fails when a file below disagrees with them.
 - `docs/compat-run.md`: the example `--dsh` version.
 - `CHANGELOG.md`: a new leading section that says `Supports DeepSeek Harness \`<version>\``.
 - Prose that names an old host version, such as the `pi-ai 0.87` wording in
-  `src/zen-provider.ts` and `docs/reverse-engineering.md`. Search the previous
+  `src/zen-provider.ts` and `docs/protocol-notes.md`. Search the previous
   version and major `pi-ai` number; no test covers this.
 
 Then run `pnpm install` and `pnpm run check`. Tests that read the `pi-ai` builtin

@@ -1,5 +1,10 @@
 # Agent installation guide
 
+For other tasks, use [the documentation index](docs/README.md) to select the
+relevant guide. Read `docs/archive/` or `docs/compat-reports/` only when tracing
+a specific historical decision or verification result; they are not current
+installation instructions or a task backlog.
+
 Use this guide when a user asks an Agent to install, update, verify, or remove
 `dsh-opencode-free`.
 
@@ -105,9 +110,12 @@ selectable. Only when the user explicitly requests a quota-consuming live
 check, ask the Agent to send one short message with a Zen free model and
 confirm the reply. Never promise anonymous success: the anonymous tier is
 a shared per-egress-IP bucket that upstream gates without notice; if the
-live check fails gated, point to the key path in `README.md` instead of
-retrying installation. Key setup itself is verified quota-light with
-`scripts/reverify.sh` lamp ③ (see `README.md`).
+live check fails gated, point to the key setup in [the usage guide](docs/usage.md#optional-zen-key)
+instead of retrying installation. For key verification or whole-catalogue cache
+recovery, read the corresponding steps and authorization limits in
+[the usage guide](docs/usage.md) before acting. `scripts/reverify.sh` still uses
+the legacy endpoint, random session time region, and empty tool declarations;
+its lamps do not verify the current plugin's admission or key path.
 
 ## Failure handling
 

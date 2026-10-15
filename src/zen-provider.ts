@@ -823,7 +823,7 @@ export function anonGateMarker(bodyText: string): AnonGateMarker {
 // request: that path already applies the OpenCode CLI identity
 // (requestOptions), injects the `read` + `bash` tool names the anonymous gate
 // requires (applyAnonymousToolGate — a tool-less probe 403s on every model,
-// see docs/reverse-engineering.md §8), and maps upstream failures to guidance.
+// see docs/protocol-notes.md), and maps upstream failures to guidance.
 
 /**
  * The shortest thing a model will answer. A bare greeting, not an instruction:

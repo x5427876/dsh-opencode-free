@@ -1,5 +1,8 @@
 # GitHub Issues 遷移索引
 
+> 歷史對照；下列狀態只代表遷移當時，不代表目前 Issue 狀態。
+> 日常工作使用[現行 GitHub 流程](../agents/issue-tracker.md)。
+
 日期：2026-10-15。來源提交：`8e7b0b434e126ae657c0b50cd6820ab788964cb5`。
 
 遷移 4 份規格與 25 張正式票，共 29 個 Issues。逐一核對標題、完整本文、狀態與標籤。
@@ -8,7 +11,8 @@
 
 父子關係：25/25 使用 GitHub 原生 sub-issues。
 相依關係：29/29 使用 GitHub 原生 issue dependencies；完整阻擋關係也列於各票本文。
-正式規格與票以 GitHub 為準。本地原檔只保留連結。
+正式規格與票以 GitHub 為準。遷移完成後，本地 `.scratch/` 目錄與全部 30 份連結／說明檔已移除。
+下表的原檔路徑僅作歷史索引，不代表檔案仍存在；請直接開啟對應的 GitHub Issue。
 舊 drafts 目錄共 6 個 Markdown 檔已依使用者要求移除，沒有建立重複 Issues。
 
 本次沒有推送程式碼或分支。Issues 中的原始碼與證據路徑指向本地來源提交，不宣稱未推送的檔案可從 GitHub 開啟。

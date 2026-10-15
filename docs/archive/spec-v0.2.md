@@ -1,5 +1,8 @@
 # Spec v0.2：匿名被閘時的可用性
 
+> 歷史版本規格，不是目前操作指南或待辦。現行操作見[使用指南](../usage.zh-TW.md)，
+> 模型目錄政策見 [ADR-0002](../adr/0002-catalogue-source-of-truth.md)。
+
 ## Problem Statement
 
 `opencode-zen-free` 在對話模型選單可見、可選，但匿名出口被上游閘住時
@@ -49,7 +52,7 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
     anonymous success.
 14. As an upgrading user, I want zero breaking config changes, so that v0.1
     installs keep working untouched.
-15. As a new user, I want the bypass nature disclosed before I rely on it,
+15. As a new user, I want the unofficial access risks disclosed before I rely on it,
     so that the next upstream breakage is expected, not a betrayal.
 16. As a maintainer, I want ADR-0001 revisited automatically when anonymous
     behavior changes, so that the session-id approximation never rots silently.
@@ -68,7 +71,7 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
   models.dev），模型可見性由每日至多一輪、按順序發送的最小探針決定，這一輪花匿名
   額度。取捨與防護（`inconclusive` 絕不改可見性）見
   `docs/adr/0002-catalogue-source-of-truth.md`，並在 README 披露。
-- 訊息用語遵守專案 glossary：共用 bucket 稱匿名額度；bypass 性質在 README
+- 訊息用語遵守專案 glossary：共用 bucket 稱匿名額度；非官方存取風險在 README
   揭露一次為限，不在每次錯誤重複。
 - 尊重 ADR-0001：本版本不動會話 id 方案；匿名行為變化時重審該 ADR。
 - 錯誤指引只測外部行為（給定狀態碼＋報文→指引），不斷言 header 內部。
@@ -93,5 +96,5 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
 
 - 本 spec 位於 `docs/spec-v0.2.md`：它記錄的是已發布的決策，不隨 issue 搬家。
   Issue 與其他 spec 已移至 GitHub Issues，約定見 `docs/agents/issue-tracker.md`。
-- 整個功能是 bypass 性質：Zen 一改報文用詞，分類映射即漂移；
+- 此功能依賴上游目前的回應格式：Zen 一改報文用詞，分類映射即漂移；
   重驗腳本是唯一的漂移偵測器。

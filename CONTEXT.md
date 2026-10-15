@@ -1,17 +1,17 @@
 # dsh-opencode-free
 
-本插件仿冒 OpenCode CLI 身份使用 Zen keyless 層。術語以此為準
-（技術段落不用「模仿」，立場段落用「bypass」）。
+本插件使用 OpenCode CLI 格式的請求標頭與會話識別碼存取 Zen keyless 層。
+術語以此為準，文件以具體請求行為與驗證範圍描述實作。
 
 ## Language
 
-**仿冒 CLI 身份**：
-本插件送出與 OpenCode CLI 逐字節同構的身份（UA、會話 id、專案標記），使上游把請求當 CLI 發的。
-_Avoid_: 模仿、假裝、偽裝
+**CLI 請求格式**：
+OpenCode CLI 使用的 User-Agent、會話識別碼、專案標記與工具宣告格式。
+本插件送出這些格式的欄位，但不是官方 OpenCode CLI。
 
-**bypass**：
-在上游沒有第三方合約的情況下通過 keyless 層的准入檢查；200 不代表被允許。
-_Avoid_: 借用、蹭用、繞過檢查（動詞片語，不作名詞）
+**非官方匿名存取**：
+在沒有第三方存取保證的情況下，以匿名身份呼叫 Zen keyless 層；HTTP 200
+只表示請求成功，不代表上游授權或承諾支援第三方客戶端。
 
 **匿名額度**：
 Zen 按出口 IP 共用的試用 bucket（input＋output＋reasoning 合計）；同 IP 重度使用會集體耗盡。

@@ -780,7 +780,7 @@ test('GUARD: the probe re-asserts its admission tools on the final payload', asy
   // probe's outgoing body carried NO `tools`, and upstream answered
   // `403 FreeTierError: "OpenCode's free tier can only be used from within
   // OpenCode"` — the documented consequence of a tool-less request at this tier
-  // (docs/reverse-engineering.md 8). The same code outside the host sent the
+  // (docs/archive/protocol-history.md §8). The same code outside the host sent the
   // tools and was admitted, so the loss happens between the context gate and
   // the wire, somewhere this plugin does not own.
   //

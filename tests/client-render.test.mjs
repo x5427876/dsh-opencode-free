@@ -691,7 +691,7 @@ test("a refused round names the upstream, never the reader's network", async () 
   // The 03:31:17 round recorded eleven HTTP statuses and zero transport
   // failures: nothing reached the network layer. The banner called it "当时的
   // 网络状况", which sent the reader to debug a proxy/VPN/DNS path that was
-  // never broken — and the repo's own reverse-engineering notes forbid reading a
+  // never broken — and the repo's own protocol notes forbid reading a
   // FreeTierError body as a verdict about the IP. Same for the per-row advice:
   // "匿名额度被闸" claims the cause the evidence does not support.
   const refused = {

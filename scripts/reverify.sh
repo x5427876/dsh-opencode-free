@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 上游閘門重驗：紅綠燈。詳見 docs/reverse-engineering.md。
+# 上游閘門重驗：紅綠燈。詳見 docs/protocol-notes.md。
 #
 #   ./scripts/reverify.sh
 #

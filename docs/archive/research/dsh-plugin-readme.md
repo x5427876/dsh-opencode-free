@@ -1,8 +1,26 @@
 # 研究：DSH 外掛 README 的最佳實踐
 
+> 歷史研究，不是目前文件待辦。文件入口見[現行索引](../../README.zh-TW.md)。
+
 日期：2026-10-03。問題：`dsh-opencode-free` 的 `README.md`／`README.zh-TW.md` 要符合哪些 DSH 套件慣例？
 
-來源都是 `deepseek-ai/deepseek-harness` 的 `master` 分支（會變動，不是凍結的規格）；社群來源另列並標明。對照的是本 repo 目前的 README，沒有改動任何檔案。
+來源都是 `deepseek-ai/deepseek-harness` 的 `master` 分支（會變動，不是凍結的規格）；社群來源另列並標明。以下比較保留 2026-10-03 研究時的 README 狀態，不是目前差距清單；研究當時沒有改動檔案。
+
+## 後續狀態（README 精簡重寫）
+
+- **已改善：** 中英 README 的章節、指令與文件入口對齊；兩者都有第三方風險、
+  DSH SAFETY.md、行程層級攔截與驗證限制說明。
+- **內容保留、結構取代：** 模型看到的工具與提示改寫、token 與前綴影響，改用
+  「模型請求有哪些改動」的精簡表格與段落；限制整合至「安全與限制」。
+  不再照搬 monorepo 的 H3／H4 標題層級及結尾順序，因其不是外部插件的強制要求。
+- **入口與細節分離：** README 保留安裝與快速使用；更新間隔、快取復原與 key
+  驗證移至[中英使用指南](../../usage.zh-TW.md)。分析來源與證據界限見
+  [協定分析紀錄](../../protocol-notes.md)，不再以 Pi 插件介紹作為實作來源。
+- **未處理：** peer 的開發依賴配置、locale／icon 等套件變更仍不在本次文件範圍。
+  本補註沒有重新查證遠端 topic、npm 發布狀態或移動分支內容。
+
+下文的「現況」「缺」與「決定」均指原研究時間；目前工程缺口以
+[差距紀錄](../../standards-gap.md)為準。
 
 ## 一手來源說了什麼
 
@@ -35,7 +53,7 @@
 - [deepseekplugin.org 的收錄要求](https://deepseekplugin.org/en/docs/submit-plugin)：README 或 repo 描述要清楚說明是 DeepSeek Harness 外掛。
 - 社群市場（例如 [dsh-manager](https://github.com/KYZHXL/dsh-manager)）以 npm 搜尋 `dsh-plugin` 標籤的套件。本專案 `package.json` 的 `keywords` 已含 `dsh-plugin`。
 
-## 對照目前的 README
+## 對照研究當時的 README
 
 | 實踐 | 來源等級 | 現況 |
 | --- | --- | --- |

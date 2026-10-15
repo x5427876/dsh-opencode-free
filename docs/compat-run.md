@@ -1,160 +1,111 @@
-# Compat run (相容性驗證)
+# Compat run
 
-The compat run answers one question for each DSH release: do Zen's free models
-still work through **real DSH** with this plugin? It installs a given DSH
-version and the plugin packed from this repository into a throwaway
-environment, verifies each official free conversational target through headless DSH, and
-prints a matrix with the reason for each result.
+Developer verification through a packed plugin and real headless DSH, not the
+user-facing availability probe. Run before releasing support for a new DSH
+version. **It sends real inference requests, consumes shared anonymous quota,
+and requires explicit authorization.** It stays outside CI ([ADR-0003](adr/0003-compat-run-not-in-ci.md)).
 
-It is not the plugin's **probe (探測)**. The probe is the user-facing
-availability round built into the plugin. It calls the provider directly and
-covers the models the user has switched on. The compat run is a developer
-procedure. It goes through DSH's `PiAiAdapter`, which is where host upgrades
-have broken the plugin before, and it covers every free model Zen serves. See
-[`CONTEXT.md`](../CONTEXT.md).
+## Run
 
-## When to run it
-
-Run it before releasing support for a new DSH version (see
-[`AGENTS.md`](../AGENTS.md#dsh-upgrades)). It is not part of CI. The anonymous
-quota is shared per egress IP, so a CI result would depend on other people's
-usage ([ADR 0003](adr/0003-compat-run-not-in-ci.md)).
-
-## Prerequisites
-
-Node (matching `engines` in `package.json`) and pnpm. No Zen key, no global DSH,
-no bash. It runs the same way on Windows, macOS, and Linux.
-
-Run it through pnpm, not `node` directly. The script calls pnpm through
-`npm_execpath` so that it needs no shell.
-
-## Running it
+Use Node matching `package.json` and pnpm from this clone. No global DSH or Zen
+key is required. Run through pnpm: the driver needs its `npm_execpath`.
 
 ```sh
 pnpm compat --dsh 0.2.1-alpha.3 --tools --out <unique-report-directory>
 ```
 
 | Option | Meaning |
-| --- | --- |
-| `--dsh <version>` | Required, no default. The DSH release to install. It must equal the exact peer pin of `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` in `package.json`. Otherwise the run stops before installing anything, because DSH would skip the plugin. |
-| `--model <id>` | Asks one officially classified free conversational model only; otherwise exit 3 before installation. Other models are hidden during warmup. A pass covers that selected model only. |
-| `--tools` | Also verifies a tool round-trip (L2). Off by default to keep the run short. |
-| `--keep` | Keeps the temp environment and prints its path, for debugging. By default it is deleted. |
-| `--out <dir>` | Writes the matrix (`.md`) and JSON into `<dir>`. Without it, nothing is written to the working tree. |
+|---|---|
+| `--dsh <version>` | Required; must match both exact DSH peer pins in `package.json`. |
+| `--tools` | Adds read and shell checks. Required for full L0/L1/L2 acceptance. |
+| `--model <id>` | Restricts the run to one officially classified free conversational model; cannot establish full-model acceptance. |
+| `--out <dir>` | Writes allowlisted Markdown and JSON reports. Without it, no report is written to the working tree. |
+| `--keep` | Retains the temporary environment for debugging; otherwise it is removed. |
 
-`OPENCODE_API_KEY` is detected from the environment. It is not an option (see
-[Keyed comparison](#keyed-comparison)).
+Use a unique output directory. Platform support is established only by the
+recorded run, not by the driver's cross-platform implementation.
 
-## What it does
+## Scope and isolation
 
-1. **Preconditions.** It checks `--dsh` and the peer pin before any install or
-   request.
-2. **Official dynamic targets.** Each round fetches the official `/models`
-   list and official Console endpoint/pricing tables. Only officially free
-   conversational models become targets. Paid and non-conversational models
-   carry exclusion evidence. Missing or conflicting classifications remain
-   unresolved, preventing full acceptance; those IDs receive no inference.
-   models.dev supplements metadata but cannot silently remove official targets.
-   Empty targets and unavailable official sources exit 2. The report retains
-   source URLs/times and a per-round snapshot, never a fallback acceptance list.
-3. **Isolated environment.** It creates a fresh directory under the system temp
-   directory and uses pnpm to install `@deepseek-ai/dsh@<version>`. It runs
-   `pnpm pack` on this repository and installs the tarball into the built-in
-   `headless` profile with `DSH_HOME` pointing at the temp directory. It never
-   reads or changes `~/.dsh`, and it never starts, stops, or restarts an existing
-   DSH.
-4. **Overlay.** Each DSH process gets a `--patch` overlay with three entries. It
-   adds the `webServer` service that the plugin requires, using a free port
-   bound to `127.0.0.1`. It sets the default model and `reasoningEffort`, and
-   it disables `session-title-llm`. Without that last change, every run would
-   spend a second request on a session title.
-5. **Warmup (L0).** One DSH process boots and waits on stdin. The run calls the
-   plugin's public panel routes: `POST /refresh`, `POST /probe`, `GET /probe`
-   until the round ends, and `GET /catalog`. Both membership and an actual ok
-   probe are required. Extra inferred probe targets prevent acceptance. It never reads the plugin's cache
-   file. The round's per-model results and the picker list become L0. Because
-   the plugin records the round, the later processes do not start another one.
-6. **L1.** For each model, one headless DSH process sends `Reply with OK only.`
-   at the model's lowest published effort level. A model without published
-   levels (a toggle model or no list) uses the default and is marked
-   `no published levels (無等級可選)`. In that case the reasoning mapping was not
-   exercised. A non-empty reply passes. Models that answered in the warmup
-   round run first. The others follow in Zen's order.
-7. **L2 (`--tools`).** A model that passed L1 is asked to read a file containing
-   a random nonce and reply with its contents. It is then asked to run a shell
-   command that prints the SHA-256 prefix of a second nonce file: `pwsh` on
-   Windows, `bash` elsewhere. The nonce never appears in the prompt, so a
-   model cannot pass by guessing or echoing. Each step is judged and reported on
-   its own.
+1. Check the requested version against both peer pins before installation.
+2. Fetch official live model IDs and current official pricing/endpoint evidence
+   afresh each round. Classify free conversational targets independently of the
+   plugin catalogue ([ADR-0004](adr/0004-official-dynamic-compat-targets.md)).
+   Paid/non-conversational exclusions need evidence; uncertain IDs receive no
+   inference and prevent complete acceptance. Missing models.dev metadata cannot
+   silently remove an official target. Never reuse a report as the next target list.
+3. Pack the working tree and install it with the requested DSH in a fresh
+   temporary `DSH_HOME` and workspace. Do not read or change user profiles,
+   credentials, or running DSH processes.
+4. Apply a headless overlay supplying the required loopback `webServer`, model
+   selection and reasoning effort, with title inference disabled. Anonymous
+   runs do not inherit `OPENCODE_API_KEY`.
+5. Record the fixed target snapshot and actual probe targets. Do not drop failed
+   models or combine different rounds to manufacture complete coverage.
 
-L1/L2 use the pinned host's `--json` mode. L1 requires a completed process and
-a single nonempty final assistant answer. L2 also checks the host tool name,
-call/result ID pairing, arguments, completed result, and nonce/hash in both the
-tool result and final answer. Raw events remain in memory; reports retain only
-comparison booleans. A correct-looking answer without tool evidence fails.
+## Required evidence
 
-Models are spaced 3 seconds apart. A 429 is retried after 30 seconds, then
-after 60 seconds. A model that still gets 429 is `rate-limited`. If three models
-in a row are rate-limited, the run stops and lists the rest as unverified. The
-run has no overall time limit.
+| Layer | Pass condition |
+|---|---|
+| L0 | Target is in the provider catalogue and the actual availability probe returns `ok`. Catalogue membership is not a rendered picker test. |
+| L1 | Real DSH finishes with exit 0 and exactly one valid final event containing nonempty assistant text. Status/thinking events alone do not pass. |
+| L2 read | A host `read` call targets the current nonce file, with a paired completed result and the nonce in both result and final reply. |
+| L2 shell | A host `pwsh` call on Windows, `bash` elsewhere, executes the intended hash command on a second random file; paired result and final reply contain the expected hash. |
 
-## Verdicts
+The nonce/hash is absent from the prompt. Validate restored host arguments,
+call/result IDs and order, file paths after normal resolution, required command
+semantics, and completed results (`isError !== true`). Wrong tools, truncated or
+malformed evidence, missing pairs, and final text without tool execution do not
+pass. Preserve separate layer outcomes; later success cannot erase a failed L0.
 
-| Verdict | Meaning | Affects exit code |
-| --- | --- | --- |
-| `ok` | Answered through DSH (and passed both tool steps with `--tools`). | – |
-| `rate-limited` | Still 429 after back-off. Inconclusive: neither a pass nor a failure. | 2 |
-| `upstream-down` | Upstream says the model is unavailable (`Model/Endpoint is unavailable`, HTTP 5xx), or the warmup round judged it dead. | 2 |
-| `gate-refused` | HTTP 403/401. Zen's admission policy may have changed, so revisit the anonymous tool gate. | 2 |
-| `plugin-fault` | Anything on the plugin or DSH side: `NO_ADAPTER`, `UNKNOWN_MODEL`, the plugin not loaded, an empty reply, a hang, a live model missing from the picker, or a failed tool step. | 1 |
-| `unverified` | Not asked, because the run stopped after three rate-limited models in a row or the warmup failed. | 2 |
+L1/L2 use the host's JSON mode and lowest published valid reasoning effort;
+where no levels are published, use and report the default. This does not test
+all reasoning levels. Full acceptance needs a nonempty complete target set,
+`--tools`, no `--model`, and every required layer passing in the same round.
 
-Model failure reasons retain only allowlisted DSH codes, HTTP status, and
-known gate/unavailability markers, not raw error lines that may echo tool
-arguments or conversation content. Classification and finite backoff are unchanged.
+## Verdicts and exit codes
 
-The report also records each model's layer. L0 requires provider catalogue
-membership and a successful probe. L1 means DSH returned a reply. L2 means the tool
-round-trip passed. The report also gives the effort level used and the reason
-for any failure.
+| Verdict | Meaning |
+|---|---|
+| `ok` | All requested checks passed, including L0. |
+| `rate-limited` | HTTP 429 remains after finite backoff. |
+| `gate-refused` | Upstream authentication/admission refusal (401/403). |
+| `upstream-down` | Upstream unavailability or a warmup `dead` result. |
+| `plugin-fault` | Confirmed integration/behavior failure: missing adapter/model, empty reply, hang, missing catalogue coverage, or failed tool evidence. |
+| `unverified` | Required checks were not completed. |
 
-## Exit codes
+| Exit | Meaning |
+|---|---|
+| `0` | Nonempty targets passed every requested check; full-model acceptance additionally requires the complete scope above. |
+| `1` | Setup/warmup failure or confirmed plugin/host fault; takes priority over incomplete upstream evidence. |
+| `2` | Incomplete: quota, upstream refusal/unavailability, empty targets, uncertain classifications, scope drift, or unverified evidence. Not a pass or proof of a plugin fault. |
+| `3` | Refused arguments/version/selection precondition; no installation or inference for the refused run. |
 
-| Code | Meaning |
-| --- | --- |
-| 0 | A nonempty target set passed all requested layers, including L0. Full-model L0/L1/L2 acceptance additionally requires `--tools` and no `--model`. |
-| 1 | At least one `plugin-fault`, or the setup or warmup failed. Something needs fixing. This takes priority over 2. |
-| 2 | Incomplete: upstream refusals/unavailability, quota, empty targets, uncertain official classifications, scope drift, or unverified evidence remain. This does not establish a plugin fault. |
-| 3 | A precondition was refused: `--dsh` was missing or does not match the peer pin, or an argument is invalid. Nothing was installed or sent. |
+Models are spaced 3 seconds apart. HTTP 429 backoff is 30 then 60 seconds; after
+three consecutive rate-limited models, stop and mark the rest unverified. No
+unbounded retries or automatic retries of unavailable admission-tool calls.
+There is no overall run time limit.
 
-## Keyed comparison
+## Quota and keyed comparison
 
-When `OPENCODE_API_KEY` is set, a model whose anonymous verdict is
-`rate-limited` or `gate-refused` gets one extra L1 request with the key. The
-result appears in the `with key` column next to the anonymous verdict. It does
-not replace that verdict or change the exit code, because the anonymous path is
-what the plugin promises. Without a key, the run does not repeat any request.
-Anonymous requests never inherit the key. The report records only whether a key
-was present. The key is removed from all DSH output before classification.
+Warmup probes enabled targets; L1 adds one request per tested model, L2 adds two,
+and channel fallback or finite retries can add more. Do not promise a fixed
+quota cost or anonymous success.
 
-## Quota
+If `OPENCODE_API_KEY` is present, an anonymous `rate-limited` or `gate-refused`
+model gets one extra keyed L1 comparison. It does not replace the anonymous
+verdict, change its exit code, or establish anonymous acceptance. Reports record
+key presence only, never the key.
 
-The run spends the shared anonymous quota. The warmup sends one request for each
-model the plugin lists. L1 sends at least one more request for each model.
-`--tools` adds two more, and each 429 retry adds another. When the quota is
-already used up, the honest result is `rate-limited` or unverified, with exit
-code 2.
+## Reports and limits
 
-## Reading the report
+Keep raw JSON events in memory. Persist only allowlisted status, classifications,
+durations, layer/tool names and comparison booleans; not credentials, request
+bodies, conversations, reasoning, or tool inputs/results. Record source revision,
+packed tarball hash, resolved runtime versions, OS/Node, target sources/times,
+requested layers, selection gaps, and runner/strict outcomes.
 
-The header records the DSH version, plugin version, date, OS, key presence,
-`--tools`, and the verification path. The path is the built-in `headless`
-profile plus an overlay. It uses the same `PiAiAdapter` path as the web
-profile, but it is not the profile users run, so a pass is **not** a web UI
-verification. The JSON contains the same facts as the matrix and also
-includes each model's warmup probe row.
-
-The JSON also includes per-layer comparisons, official selection evidence,
-resolved runtime versions, the tarball hash, source revision, and explicit
-requested-scope/full-model acceptance flags. L1/L2 success does not override a
-failed L0. See [the pinned acceptance baseline](compat-acceptance-alpha3.md).
+Headless results do not establish Web/Desktop UI or compaction behavior. Read
+[dated reports](compat-reports/) only for the recorded environment. The original
+alpha.3 inspection and false-pass analysis are [archived](archive/compat-acceptance-alpha3.md),
+not an additional current procedure to execute.

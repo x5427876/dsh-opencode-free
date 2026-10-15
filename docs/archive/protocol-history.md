@@ -1,12 +1,18 @@
-# Pi 插件作者如何仿冒 OpenCode CLI 身份：逆向考據
+# OpenCode CLI 請求格式：歷史比較紀錄
 
-本文件考據 `pi-opencode-direct` 作者是怎麼把 OpenCode CLI 的行為
-逆向出來、再逐一仿冒的，以及每一項仿冒在 `dsh-opencode-free`
-的對應位置。所有斷言都對著第一手來源驗過（見文末）。
+> **歷史附錄，非現行規格：** 下文保留舊考據內容與既有補註，用語已統一為技術描述，
+> 供追查當時的比較、來源歸屬與假設。部分結論已被後續差分推翻；Pi 插件比較不是目前實作來源說明。
+> 現行依據與驗證界限見 [OpenCode CLI 協定分析紀錄](../protocol-notes.md)。
+> 不要依下文的舊腳本燈號、端點或重試建議操作。
 
-術語：技術段落一律用「仿冒 CLI 身份」，立場段落用「bypass」；
-不用「模仿」（見 `CONTEXT.md`）。
+本文件保留先前對 `pi-opencode-direct` 的分析：其 OpenCode CLI 請求欄位、
+行為比較，以及當時記錄的 `dsh-opencode-free` 對應位置。
+文末保留原參考來源；當時結論的有效範圍以後續補註為準。
 
+術語見 [CONTEXT.md](../../CONTEXT.md)。
+
+> **2026-10-14 UTC 後續診斷：** 已用 Node 與套件真實 provider 取得匿名回覆，不需要改 TLS。舊端點、hash session 的時間區段、空工具定義各自有拒絕證據；§3、§8 與下方較早的 TLS 推論不能當成目前准入規格。詳見[完整差分與驗證限制](research/zen-admission-2026-10-14.md)。
+>
 > ⏳ 時效：本文件記錄的是帶日期的實測觀察，不是上游的承諾。上游無第三方合約，行為隨時會變；
 > 若 `scripts/reverify.sh` 出現非預期燈號，先重跑腳本確認，仍異常則按
 > 「方法：MITM 錄封包 + 差分」重驗並更新本文件與 ADR。
@@ -69,7 +75,7 @@
   pi-ai 換了 context 形狀時，插件的改寫會靜默失效（§9）。在舊依賴下測試照樣全綠，
   要先把依賴裝成新版 DSH 的套件再跑測試，並在 DSH 真正的呼叫路徑（`Models.streamSimple()`）上驗證。
 
-## 仿冒對照表
+## 請求格式對照表
 
 ### 1. 傳輸：Zen 原生端點，不經中轉
 
@@ -79,12 +85,12 @@ SSE）。插件同樣直連，不裝 OpenCode、不起 server、不用 LiteLLM�
 - Pi 版：`BASE_URL` + `openAIResponsesApi()` / `openAICompletionsApi()`
 - 我們：`src/zen-provider.ts` 的 `BASE_URL`、`zenProvider()`（同名同值）
 
-### 2. 身份四件套：仿冒 CLI 身份
+### 2. 四項 CLI 身份欄位
 
 | 欄位 | 真 CLI 的值 | 插件做法 |
 |---|---|---|
 | `Authorization` |（匿名時）字面 `Bearer public` | `compatRequestOptions()` 從有效 key 重建，杜絕 stale header 錯配 |
-| `User-Agent` | `opencode/<版本> ai-sdk/provider-utils/<版本> runtime/bun/<版本>`（洩漏了 CLI 跑在 Bun 上） | `OPENCODE_USER_AGENT` 照抄格式，只把尾段換成自家插件名（⚠️ 未驗證，見下） |
+| `User-Agent` | `opencode/<版本> ai-sdk/provider-utils/<版本> runtime/bun/<版本>`（洩漏了 CLI 跑在 Bun 上） | `OPENCODE_USER_AGENT` 使用相同格式，只把尾段換成自家插件名（⚠️ 未驗證，見下） |
 | `x-opencode-client` | `cli` | `OPENCODE_CLIENT = "cli"` |
 | `x-opencode-project` | `global` | `OPENCODE_PROJECT = "global"` |
 
@@ -118,12 +124,12 @@ return prefix + "_" + timeBytes.toString("hex") + randomBase62(LENGTH - 12)
   後段當 base62——**結構合法、每會話穩定、會話間不同**，但不含真實時間。
 
 上游閘的是「結構非法」（64 hex、裸 base62 會被拒），不是「時間是否真實」，
-所以這個近似能過。同理 `requestHeader()` 仿 `msg_` 做純隨機（上游不驗證，
+所以這個近似能過。同理 `requestHeader()` 使用 `msg_` 格式搭配純隨機值（上游不驗證，
 只求像）。
 
 > ⚠️ 推論（未驗證）：「只驗結構、不驗時間真實性」是推論——已證結構非法
 > 會死（64 hex / 裸 base62 被拒）。2026-09-27 重播時每次都用純隨機的
-> `ses_` id（不含真實時間），請求都通過，所以時間造假在當時可以通過。
+> `ses_` id（不含真實時間），請求都通過，所以非時間編碼的值在當時可以通過。
 
 親和三處同值：`x-opencode-session` ＝ `x-client-request-id` ＝
 `prompt_cache_key`（body 欄位）。`x-client-request-id` 是 MITM 發現的：
@@ -138,7 +144,7 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
   openai-completions}` 且 `cost` 全零的模型——能力與限額沿用 Pi 官方
   元數據，不自己猜。
 - 對應：`freeModels()` + `zenProvider().refreshModels()`；
-  我們原樣移植（`src/zen-provider.ts`）。
+  當時記錄為相同處理（`src/zen-provider.ts`）。
 
 ### 5. 加密重播：後端輪轉的 400 重試
 
@@ -150,9 +156,9 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
 特徵字串來自真實失敗報文。
 
 - 對應：`isEncryptedContentError()`、`stripStaleReasoning()`、
-  `withEncryptedContentFallback()`（我們原樣移植）。
+  `withEncryptedContentFallback()`（當時記錄為相同處理）。
 
-### 6. 壓縮提示詞：逐字節抄 CLI binary
+### 6. 壓縮提示詞：CLI binary 內容對照
 
 匿名壓縮 Pi 自家提示詞 403、OpenCode 原文 200——差分定位到 developer
 內容後，作者從 CLI binary 抽出原文。已驗證與
@@ -161,8 +167,8 @@ Pi core 壓縮時強制 `cacheRetention: "none"`，pi-ai 會吞掉自己的親�
 
 插件只在「短、獨立、匿名」的壓縮請求上替換，絕不碰對話內容與有 key
 請求：`swapCompactionPrompt()`。它同時處理舊的 `{ systemPrompt }` 形狀與
-pi-ai 0.87 的 transcript 形狀（提示詞在 system 訊息裡；transcript 分支照抄
-Pi 0.1.7，請求帶工具時不替換）。見 §9。
+pi-ai 0.87 的 transcript 形狀（提示詞在 system 訊息裡；當時記錄的 transcript 分支與
+Pi 0.1.7 相同，請求帶工具時不替換）。見 §9。
 
 > ⚠️ 未驗證：重播顯示 system prompt 內容不影響閘門（§8）。
 > 「Pi 壓縮提示詞 403」可能其實是壓縮請求不帶 `read`／`bash` 工具造成的。
@@ -180,7 +186,7 @@ Pi 0.1.7，請求帶工具時不替換）。見 §9。
 3. 兜底：包 `globalThis.fetch`（`patchGlobalFetchForZen`，嚴格限定 Zen
    網域）與 `node:http/https`（`patchNodeHttpForZen`，給 axios 風格呼叫）。
 
-三層都 reload-safe（pristine-original stash，不疊包裝）。我們三層全移植，
+三層都 reload-safe（pristine-original stash，不疊包裝）。當時記錄的插件也有這三層，
 僅把 debug env 改名 `DSH_OPENCODE_FREE_DEBUG`、stash key 加 `dsh` 前綴。
 
 ### 8. 工具名稱閘門：必須有 `read` 與 `bash`
@@ -190,7 +196,7 @@ Pi 0.1.7，請求帶工具時不替換）。見 §9。
 
 - `stream: true`；
 - `tools` 同時含名稱**剛好是** `read` 與 `bash` 的工具（大小寫敏感；
-  描述與 schema 不看，空 schema 的假工具也過）。
+  描述與 schema 不看，空 schema 的測試工具也過）。
 
 重播結果（同一個 Pi body，匿名 `Bearer public`，每次只改一項）：
 
@@ -201,9 +207,9 @@ Pi 0.1.7，請求帶工具時不替換）。見 §9。
 | 拿掉 `tools`／`tools: []` | 403 |
 | 只留 `read`，或只留 `bash` | 403 |
 | 只留 `read` + `bash`（原始定義） | 200 |
-| 假工具 `read` + `bash`（空 schema、描述 `x`） | 200 |
+| 測試工具 `read` + `bash`（空 schema、描述 `x`） | 200 |
 | 大寫 `Read` + `Bash` | 403 |
-| 13 個假工具 `foo0`…`foo12` | 403 |
+| 13 個測試工具 `foo0`…`foo12` | 403 |
 | 不帶工具，把工具 JSON 塞進 prompt 補足大小 | 403（不是大小門檻） |
 | DSH Windows 組合 `read, write, edit, glob, grep, pwsh` | 403 |
 | DSH Linux 組合 `read, write, edit, glob, grep, bash` | 200 |
@@ -287,13 +293,13 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
 
 註：這套手動拼裝的實機驗證由相容性驗證（`pnpm compat --dsh <版本>`）
 以同樣的隔離 `DSH_HOME` + headless + overlay 路徑自動完成，見
-[`docs/compat-run.md`](compat-run.md)。
+[`docs/compat-run.md`](../compat-run.md)。
 
-## 我們相對 Pi 版的改編（非仿冒部分）
+## 當時記錄的 DSH 整合差異
 
 - **DSH 化**：Pi 的 `pi.registerProvider()` → DSH 的
   `ctx.llm.registerAdapter([PROVIDER_ID], new PiAiAdapter(...))`
- （`src/index.ts`），profile 欄位抄 `dsh-claude-subscription`。
+ （`src/index.ts`），profile 欄位參考 `dsh-claude-subscription`。
 - **key 優先順序**：Pi 版是 stored credential → `OPENCODE_API_KEY` →
   匿名；v1 無持久登入，改為 `config.apiKey` → `OPENCODE_API_KEY` → 匿名。
 - **pi-ai 版本跟 DSH**：插件的 pi-ai peer 必須和 DSH `dsh-llm-pi-ai` 用的
@@ -327,7 +333,7 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
   |---|---|
   | 官方 OpenCode 1.19.0，`muse-spark-1.3-contributor-free`，直連 | 成功，回覆 `OK` |
   | 同一個 CLI，經本機 Node 轉發代理（標頭與 body 逐項原樣轉發） | 403 FreeTierError |
-  | `reverify.sh` ②（curl：串流、`read`+`bash`、仿冒身份，含 `x-opencode-session-id`） | 403 FreeTierError |
+  | `reverify.sh` ②（curl：串流、`read`+`bash`、CLI 格式身份欄位，含 `x-opencode-session-id`） | 403 FreeTierError |
   | 上一列再加 `--http1.1`、`Accept-Encoding`、`Connection: keep-alive` 的各種組合 | 403 |
   | 上一列改送官方 CLI 的 11 個工具名稱，UA 改為 `opencode/1.19.0` | 403 |
   | DSH `0.2.1-alpha.2` 與 `0.2.1-alpha.3` 的 compat run（Node，匿名，9 個模型） | 全部 403 |
@@ -339,10 +345,10 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
   已排除：標頭集合、body 形狀、工具集、UA 版本、HTTP 版本、編碼標頭、DSH 版本。
   推論（未驗證）：伺服器分辨的是官方 CLI 的連線方式。官方 CLI 跑在 Bun 上，DSH 與插件跑在 Node 上，
   curl 又是另一種。TLS 指紋是主要候選，但沒有 Bun 客戶端對照，所以不能確定。
-  這次調查沒有嘗試偽造 TLS 指紋。
+  這次調查沒有調整 TLS 指紋。
 
   後果：加上工具閘門對策後 `reverify.sh` ② 曾為綠，現在為紅，但這不代表官方客戶端被擋。
-  匿名請求目前只有官方客戶端能過；帶 key 的路徑未測試（本機沒有 `OPENCODE_API_KEY`）。
+  在這一輪較早的測試中，匿名請求只有官方客戶端能過；帶 key 的路徑當時未測試（本機沒有 `OPENCODE_API_KEY`）。同日後續的 [Node／provider 差分](research/zen-admission-2026-10-14.md) 已取得匿名回覆，因此「只有官方客戶端能過」與 TLS 根因推論不再成立為目前結論。
   DSH `0.2.1-alpha.3` 因此沒有匿名 live 驗證。
 - 第三方說法（本專案未驗證）：免費額度是整出口 IP 共用的 trial bucket。
   就算屬實，也不是上述 403 的原因（見 §8 與「診斷原則」）。多方回報收緊：
@@ -354,7 +360,7 @@ provider。provider 拿到的是 `TranscriptContext`（執行時就是 `{ messag
 
 ## 來源
 
-- Pi 插件本體與逆向日誌：https://github.com/Aymendje/pi-opencode-direct
+- Pi 插件本體與分析日誌：https://github.com/Aymendje/pi-opencode-direct
 - `id.ts`（dev 分支，已逐字對）：https://raw.githubusercontent.com/sst/opencode/dev/packages/opencode/src/id/id.ts
 - `compaction.txt`（已逐字對）：https://raw.githubusercontent.com/sst/opencode/dev/packages/opencode/src/agent/prompt/compaction.txt
 - UA 閘（第三方驗證）：https://github.com/anomalyco/opencode/issues/42500

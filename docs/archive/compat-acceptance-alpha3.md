@@ -1,5 +1,9 @@
 # Compat acceptance baseline for DSH 0.2.1-alpha.3
 
+> Archived design and exact-version inspection. Planned-change wording below
+> describes the baseline, not unfinished implementation work to repeat. Use the
+> [current compat guide](../compat-run.md) for operation and acceptance rules.
+
 Reviewed: 2026-10-15, Asia/Taipei. Repository source: `8fa8fe9` plus the existing working tree. Scope: the existing `scripts/compat-run.mjs`, not conversation compaction.
 
 The user confirmed all officially listed free conversational models as the scope, full-model L0/L1/L2 acceptance, a fresh official dynamic list each round, and exit code 0 only when every target passes. This document is the confirmed design and acceptance baseline for implementation. No runner or provider behavior has changed yet.
@@ -51,7 +55,7 @@ The release also documents that headless defaults to environment/.env credential
 
 ## Baseline gaps before implementation
 
-The following table records the runner before this change. The implementation now addresses these gaps; [the integration report](compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md) records verification and remaining limits. Historical line references below identify the baseline, not the updated source.
+The following table records the runner before this change. The implementation now addresses these gaps; [the integration report](../compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md) records verification and remaining limits. Historical line references below identify the baseline, not the updated source.
 
 | Gap | Local evidence | Required adjustment |
 | --- | --- | --- |
@@ -85,7 +89,7 @@ Confirmed source policy: official live IDs establish which models are currently 
 
 The endpoint also lists `jev-1.13-free`. Official documentation describes it as a free structured-decision model on `/inference/v1/systemone`, rather than a text-generation model. The user confirmed free conversational models as the acceptance scope. Record this non-conversational exclusion with its official evidence, without counting it as passed. A free conversational model on a transport the plugin does not yet support remains a target with an unresolved/failed coverage row; transport support is not an exclusion rule.
 
-[ADR-0004](adr/0004-official-dynamic-compat-targets.md) records this acceptance-source decision and its relationship to [ADR-0002](adr/0002-catalogue-source-of-truth.md). The runtime catalogue remains governed by ADR-0002 in this design; the acceptance set must independently detect its coverage gaps. ADR-0002's historical claim that Zen does not publish per-model endpoints is qualified by the current official endpoint table. This decision does not add new runtime transports or silently change user-visible catalogue policy.
+[ADR-0004](../adr/0004-official-dynamic-compat-targets.md) records this acceptance-source decision and its relationship to [ADR-0002](../adr/0002-catalogue-source-of-truth.md). The runtime catalogue remains governed by ADR-0002 in this design; the acceptance set must independently detect its coverage gaps. ADR-0002's historical claim that Zen does not publish per-model endpoints is qualified by the current official endpoint table. This decision does not add new runtime transports or silently change user-visible catalogue policy.
 
 ## Tool-choice adjustment design
 
@@ -151,4 +155,4 @@ This expands to the existing build plus compat-run script. Do not supply --model
 - Sent no live inference requests. Did not run a new compat round, full offline suite, full build, tarball consumer, Web/Desktop test or compaction test.
 - Changed documentation only. Original reports and pre-existing working-tree changes remain preserved.
 
-Applicable project rules: A1, C1/C3, Q1–Q5, S1–S3, U1, D1/D2, R2/R4. See [engineering standards](standards.md), [gap ledger](standards-gap.md) and [ADR-0003](adr/0003-compat-run-not-in-ci.md).
+Applicable project rules: A1, C1/C3, Q1–Q5, S1–S3, U1, D1/D2, R2/R4. See [engineering standards](../standards.md), [gap ledger](../standards-gap.md) and [ADR-0003](../adr/0003-compat-run-not-in-ci.md).

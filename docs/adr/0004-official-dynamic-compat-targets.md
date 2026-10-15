@@ -16,4 +16,4 @@
 
 ADR-0002 中「Zen 不公開某個模型跑在哪個端點」是歷史前提；[目前官方文件](https://opencode.ai/v2/docs/console/models/)已公開模型端點表。後續設計不得把舊前提當作目前事實。
 
-完整 L0／L1／L2、退出碼與資料保護條件見[驗收基準](../compat-acceptance-alpha3.md)。[ADR-0003](0003-compat-run-not-in-ci.md)的有限額度、不進 CI 與 429 不確定判定繼續適用。
+完整 L0／L1／L2、退出碼與資料保護條件見[相容性驗證指南](../compat-run.md)。[ADR-0003](0003-compat-run-not-in-ci.md)的有限額度、不進 CI 與 429 不確定判定繼續適用。
