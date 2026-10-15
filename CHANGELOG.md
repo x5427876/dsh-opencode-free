@@ -8,6 +8,28 @@ this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Local 0.3.4 inference migration (not published).** Requests and availability
+  checks use `/inference/v1`. Fetch and Node HTTP guards match only the exact
+  HTTPS origin and path descendants; cached model metadata is rederived with
+  the current provider identity without deleting preferences or verdicts.
+- **Valid session time encoding.** Retain one descending, time-encoded OpenCode
+  ID per DSH session in memory, instead of filling its time region with a hash.
+  Affinity headers and cache keys remain consistent; request IDs are unchanged.
+- **Anonymous tool admission.** Replace empty-schema placeholders with substantive,
+  non-executable admission declarations. Adapt DSH read/shell usage and pair
+  `file_path`/`filePath`, `timeoutMs`/`timeout`, and `pwsh`/`bash` mappings across
+  schemas, histories, SSE events, and results. Host constraints and keyed requests
+  are retained; missing-tool calls are rejected. Minimum upstream rules are not
+  fully known; offline fixtures alone do not establish live DSH compatibility.
+- **Compat report privacy.** Retain allowlisted failure codes/status/markers
+  instead of raw DSH error lines that can echo conversations or tool arguments;
+  classifications and bounded backoff remain unchanged.
+- **Single-model Windows evidence, not full acceptance.** One isolated DSH
+  0.2.1-alpha.3 round with local 0.3.4 and anonymous Muse Spark 1.3 verified
+  nonempty text, read nonce, and pwsh hash. Its L0 probe was HTTP 429; strict
+  acceptance remains incomplete despite compat exit code 0. No additional round
+  ran. See the [acceptance report](docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md).
+
 - **Targets DeepSeek Harness `0.2.1-alpha.3`.** The peer pins move to
   `@deepseek-ai/dsh-llm` and `@deepseek-ai/dsh-llm-pi-ai` `0.2.1-alpha.3` and
   `@deepseek-ai/schemastery` `~3.18.5-alpha.2`. DSH `0.2.1-alpha.3` moves `pi-ai`

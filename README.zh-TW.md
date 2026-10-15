@@ -18,6 +18,13 @@
 > 安裝第三方插件前，請先讀 DSH 的
 > [安全說明](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)。
 
+> 本地 0.3.4 開發修改使用新的 inference 端點；這不代表 registry 的
+> 0.3.4 已包含修復，本次工作不會發布套件。
+>
+> [單模型實測](docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md)：
+> Windows 隔離 DSH 的文字／read／pwsh 已成功，但 L0 探測收到 HTTP 429。
+> 即使 compat 退出碼為 0，嚴格驗收仍未完成；未另跑第二輪。
+
 ## 功能
 
 - 在 DSH 模型選單的 `opencode-zen-free` provider 下提供 Zen 免費模型。
@@ -193,19 +200,24 @@ unset OPENCODE_API_KEY
 ## 運作原理
 
 插件透過 DSH 的 `PiAiAdapter` 註冊 `opencode-zen-free` provider，用 pi-ai
-自己的傳輸層直接連到 `https://opencode.ai/zen/v1`：Muse Spark 用 Responses，
+自己的傳輸層直接連到 `https://opencode.ai/inference/v1`：Muse Spark 用 Responses，
 其他模型用 Chat Completions。做法參考 Pi 的
 [`pi-opencode-direct`](https://github.com/Aymendje/pi-opencode-direct)。
 
 匿名層只接受看起來像 OpenCode CLI 的請求：
 
-- OpenCode 的 `User-Agent` 和 `x-opencode-*` header，加上格式正確的 `ses_` session ID；
+- OpenCode 的 `User-Agent` 和 `x-opencode-*` header，加上有效時間編碼的 `ses_` ID；
+  每個 DSH session 在進程內保留同一身份，不持久化登入；
 - `stream: true`；
-- 名稱剛好是 `read` 和 `bash` 的工具。
+- 名為 `read` 與 `bash` 的實質工具宣告（只有名稱不足以准入）。
 
 DSH 在 Windows 上提供的是 `pwsh`，不是 `bash`。匿名請求時，插件把 `pwsh`
-送成 `bash`，回傳的呼叫再改回 `pwsh`。不帶工具的請求（標題、壓縮）會補上
-不可用的佔位工具。帶 API key 的請求永遠不改寫。
+送成 `bash`，回傳再還原為 `pwsh`。匿名 schema 與歷史成對轉換
+`file_path` ↔ `filePath`、`timeoutMs` ↔ `timeout`，保留宿主必填欄位與執行語意。
+使用說明配合 DSH 的純文字 `read` 與實際 shell，不宣告 OpenCode 的目錄、影像或
+PDF 讀取能力。無工具請求補上實質的准入專用宣告，設定 `tool_choice: none`；
+不存在的工具若被呼叫，會在交給宿主前拒絕。帶 key 請求不改寫。
+上游描述與 schema 的最小准入規則仍未完整驗證。
 
 可用性探測會在位元組離開前的最後一道邊界上，重新保證 `read` 和 `bash` 這兩個工具名
 還在。那條邊界以上的每一層都可能把它們弄丟，而沒有它們的請求在每個模型上都會被拒——
@@ -222,7 +234,8 @@ DSH 在 Windows 上提供的是 `pwsh`，不是 `bash`。匿名請求時，插�
 - `globalThis.fetch`
 - `node:http` 與 `node:https` 的 `request` 和 `get`
 
-範圍嚴格限定在 Zen 的 base URL `https://opencode.ai/zen/v1`。其他主機與路徑原封不動，
+範圍嚴格限定在 HTTPS origin 與 `/inference/v1` 路徑及其子路徑，
+base URL 為 `https://opencode.ai/inference/v1`。其他主機與路徑原封不動，
 參數逐位元組保留。重複載入不會重複包裝（原始函式存放在 `globalThis` 的
 `__dshOpenCodeFree*` 下），插件卸載時會還原。同一個行程裡若有其他擴充也呼叫這個
 base URL，它們的請求同樣會帶上這組身份 header。
@@ -292,7 +305,7 @@ pnpm run check      # typecheck、測試、打包
 
 #### Token 影響
 
-只有名稱不同，描述與參數不變。
+增加使用說明並轉換參數名稱；保留宿主限制、必填命令描述與其他參數。
 
 #### KV Cache 影響
 
@@ -304,7 +317,8 @@ session 在帶 key 與匿名之間切換時，工具名稱改變，快取無法�
 #### 模型看到什麼
 
 請求缺少名為 `read` 或 `bash` 的工具時（標題、compaction，或沒有這兩個工具的
-profile），每個缺少的工具都會補上一個無參數的定義，描述為：
+profile），每個缺少的工具都會補上實質的文字讀檔或 shell schema 與使用說明，
+描述最後加上：
 
 ```markdown
 Unavailable in this request. Do not call.
@@ -312,7 +326,8 @@ Unavailable in this request. Do not call.
 
 #### Token 影響
 
-有條件：受影響的請求最多多兩個簡短的工具定義。
+有條件：受影響的請求最多多兩個實質工具定義。無工具請求停用工具選擇；
+不存在的工具若被意外呼叫，會拒絕而非執行。這些宣告不增加宿主能力。
 
 #### KV Cache 影響
 

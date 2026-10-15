@@ -22,6 +22,14 @@ install OpenCode, log in, get an API key, or run a separate server.
 > DSH's [safety notice](https://github.com/deepseek-ai/deepseek-harness/blob/master/SAFETY.md)
 > before installing third-party plugins.
 
+> Local 0.3.4 development changes target the new inference endpoint. This is
+> not a claim that the registry's 0.3.4 contains these fixes; no release is made
+> by this work.
+>
+> [Single-model evidence](docs/compat-reports/zen-inference-2026-10-14-single-model-9c31d7a4/acceptance.md):
+> Windows isolated DSH text/read/pwsh passed, but its L0 probe received HTTP 429.
+> Strict acceptance is incomplete despite compat exit code 0; no second round ran.
+
 ## Features
 
 - Free Zen models in the DSH model picker, under the `opencode-zen-free` provider.
@@ -222,21 +230,27 @@ upstream has a problem.
 ## How it works
 
 The plugin registers the `opencode-zen-free` provider through DSH's
-`PiAiAdapter`. It sends requests straight to `https://opencode.ai/zen/v1` with
+`PiAiAdapter`. It sends requests straight to `https://opencode.ai/inference/v1` with
 pi-ai's own transports: Responses for Muse Spark, Chat Completions for the
 other models. The approach follows Pi's
 [`pi-opencode-direct`](https://github.com/Aymendje/pi-opencode-direct).
 
 The anonymous tier accepts a request only when it looks like the OpenCode CLI:
 
-- the OpenCode `User-Agent` and `x-opencode-*` headers, with a valid `ses_` session ID;
+- the OpenCode `User-Agent` and `x-opencode-*` headers, with a time-encoded `ses_`
+  ID retained per DSH session for the process lifetime (no persisted login);
 - `stream: true`;
-- tools named exactly `read` and `bash`.
+- substantive declarations for tools named `read` and `bash` (names alone are insufficient).
 
 On Windows, DSH ships `pwsh` instead of `bash`. For anonymous requests, the
-plugin sends `pwsh` as `bash` and renames the returned calls back to `pwsh`.
-Requests without tools (titles, compaction) get inert placeholder tools.
-Requests with an API key are never rewritten.
+plugin sends `pwsh` as `bash` and restores returned calls to `pwsh`. Anonymous
+schemas and history map `file_path` ↔ `filePath` and `timeoutMs` ↔ `timeout`,
+while preserving host-required fields and execution semantics. Usage guidance
+is adapted to DSH's text-only `read` and actual shell; it does not advertise
+OpenCode's directory or media capabilities. Requests without tools get
+substantive admission-only declarations with `tool_choice: none`; calls to
+missing tools are rejected before host dispatch. Keyed requests are unchanged.
+The minimum upstream description/schema requirements remain unverified.
 
 The availability probe re-asserts the `read` and `bash` tool names on the final
 payload, at the last boundary before the bytes leave. Everything above that
@@ -255,7 +269,8 @@ does not make itself still carry the OpenCode identity:
 - `globalThis.fetch`
 - `node:http` and `node:https` — their `request` and `get`
 
-The scope is strictly the Zen base URL `https://opencode.ai/zen/v1`. Every other
+The scope is strictly the HTTPS origin and `/inference/v1` path or its descendants.
+The base URL is `https://opencode.ai/inference/v1`. Every other
 host and path is passed through untouched, with the original arguments
 byte-for-byte. The wraps are idempotent across reloads (the pristine originals
 are stashed on `globalThis` under `__dshOpenCodeFree*`) and are restored when the
@@ -337,7 +352,8 @@ result of the conversation. Calls the model returns as `bash` reach DSH as
 
 #### Token effect
 
-None beyond the name itself: the description and parameters are unchanged.
+Additional usage guidance, plus parameter-name mappings. Host constraints,
+required command descriptions, and other parameters are retained.
 
 #### KV Cache effect
 
@@ -350,8 +366,8 @@ between a key and anonymous changes the tool name and invalidates reuse.
 #### What the model sees
 
 When a request lacks a tool named `read` or `bash` (titles, compaction, or a
-profile without those tools), each missing one is added with no parameters and
-the description:
+profile without those tools), each missing one receives a substantive text-read
+or shell schema and usage guidance, ending with:
 
 ```markdown
 Unavailable in this request. Do not call.
@@ -359,7 +375,9 @@ Unavailable in this request. Do not call.
 
 #### Token effect
 
-Conditional: up to two short tool definitions per affected request.
+Conditional: up to two substantive tool definitions per affected request.
+Tool-less requests disable tool choice; an unexpected call to a missing tool
+is rejected, not executed. These declarations add no host capabilities.
 
 #### KV Cache effect
 

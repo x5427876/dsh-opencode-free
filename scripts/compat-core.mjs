@@ -390,7 +390,9 @@ function classify(output) {
   if (output.exitCode === 0 && output.stdout.trim() !== '') return { verdict: 'ok', reason: '' }
   const line = errorLine(output.stderr)
   if (output.exitCode === 0) return { verdict: 'plugin-fault', reason: 'empty reply' }
-  const reason = line || `exit code ${output.exitCode} with no error line`
+  // Classify with the original line in memory, but never persist its content:
+  // upstream and tool-validation errors can echo conversations or arguments.
+  const reason = line ? failureSummary(line) : `exit code ${output.exitCode} with no error line`
   const status = upstreamStatus(line)
   if (status === 429 || /^dsh: RATE_LIMIT:/.test(line)) return { verdict: 'rate-limited', reason }
   // Before the status checks: Ling's "Endpoint is unavailable" arrives as a 400.
@@ -405,6 +407,20 @@ const UPSTREAM_DOWN_PATTERN = /\b(?:Model|Endpoint) is unavailable\b/i
 function upstreamStatus(line) {
   const match = /\bHTTP (\d{3})\b/.exec(line)
   return match === null ? null : Number(match[1])
+}
+
+const SAFE_DSH_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'PROVIDER_ERROR', 'AUTH_FAILED', 'RATE_LIMIT', 'TIMEOUT', 'TRANSPORT', 'INVALID_INPUT'])
+
+/** Allowlisted signals only; truncating or masking a key is not content redaction. */
+function failureSummary(line) {
+  const code = /^dsh: ([A-Z][A-Z0-9_]+):/.exec(line)?.[1]
+  const status = upstreamStatus(line)
+  const parts = [code !== undefined && SAFE_DSH_CODES.has(code) ? `dsh: ${code}` : 'DSH failure']
+  if (status !== null) parts.push(`HTTP ${status}`)
+  if (/\bModel is unavailable\b/i.test(line)) parts.push('Model is unavailable')
+  if (/\bEndpoint is unavailable\b/i.test(line)) parts.push('Endpoint is unavailable')
+  if (/FreeTierError/.test(line)) parts.push('FreeTierError')
+  return parts.join('; ')
 }
 
 /** The last `dsh: CODE: message` line, which is where DSH reports a failed run. */

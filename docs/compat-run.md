@@ -98,6 +98,10 @@ run has no overall time limit.
 | `plugin-fault` | Anything on the plugin or DSH side: `NO_ADAPTER`, `UNKNOWN_MODEL`, the plugin not loaded, an empty reply, a hang, a live model missing from the picker, or a failed tool step. | 1 |
 | `unverified` | Not asked, because the run stopped after three rate-limited models in a row or the warmup failed. | 2 |
 
+Model failure reasons retain only allowlisted DSH codes, HTTP status, and
+known gate/unavailability markers, not raw error lines that may echo tool
+arguments or conversation content. Classification and finite backoff are unchanged.
+
 The report also records each model's layer. L0 means the model is in the DSH
 picker and in Zen's list. L1 means DSH returned a reply. L2 means the tool
 round-trip passed. The report also gives the effort level used and the reason

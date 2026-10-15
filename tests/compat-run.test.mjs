@@ -445,6 +445,15 @@ test('with a key only rate-limited and gate-refused models are re-run once, besi
   assert.equal(exitCode, 2)
 })
 
+test('compat reports retain failure signals but never echo conversation or tool arguments', async () => {
+  const sensitive = 'private-conversation-and-tool-command'
+  const { deps, writes } = world({ replies: { 'alpha-free': [failed(`dsh: PROVIDER_ERROR: ${sensitive} Bearer public (HTTP 403) FreeTierError`)] } })
+  const { report, text } = await runCompat({ dsh: PIN, out: 'out' }, deps)
+  assert.equal(report.models[0].verdict, 'gate-refused')
+  assert.match(report.models[0].reason, /PROVIDER_ERROR.*HTTP 403/)
+  assert.doesNotMatch(JSON.stringify(report) + text + JSON.stringify(writes), new RegExp(`${sensitive}|Bearer public`))
+})
+
 test('the key never reaches the report, the JSON or the matrix, even when upstream echoes it', async () => {
   const echo = failed(`dsh: AUTH_FAILED: Zen key 無效 Bearer ${FAKE_KEY} rejected（上游 HTTP 401）`)
   const { deps, writes } = world({

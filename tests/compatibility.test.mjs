@@ -57,6 +57,7 @@ const plugin = await import('../src/index.ts')
 const { PiAiAdapter } = await import('@deepseek-ai/dsh-llm-pi-ai')
 const { resolveRetryPolicy } = await import('@deepseek-ai/dsh-llm')
 const { normalizeContext, getCurrentSystemPrompt } = await import('@earendil-works/pi-ai')
+const { getApiProvider } = await import('@earendil-works/pi-ai/compat')
 
 // HERMETIC SANDBOX — installed before any test body runs.
 //
@@ -207,7 +208,7 @@ test('registers opencode-zen-free through the PiAiAdapter seam', async () => {
   assert.ok(models.length > 0, 'expected at least one free model')
   for (const m of models) {
     assert.equal(m.provider, PROVIDER_ID)
-    assert.ok(m.baseUrl?.includes('opencode.ai/zen'), m.id)
+    assert.equal(m.baseUrl, 'https://opencode.ai/inference/v1', m.id)
     assert.ok(
       Object.values(m.cost).every((c) => c === 0),
       m.id,
@@ -526,22 +527,27 @@ test('request path surfaces guidance on gate failures (fixture transport)', asyn
   assert.match(errEv.error.errorMessage, /匿名額度/)
 })
 
-test('anonymous requests satisfy the read+bash tool gate and map pwsh back', async () => {
-  // Live replay 2026-09-27: Zen's anonymous tier 403s unless tools include
-  // `read` and `bash` by name; DSH on Windows exposes `pwsh` instead.
+for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${api} requests preserve DSH tool roundtrips`, async () => {
+  // The pinned DSH contracts differ from the inference admission parameters.
+  // Exercise history and SSE restoration without replacing host execution.
   const p = plugin.zenProvider(
     () => 's',
     () => undefined,
   )
-  const model = p.getModels().find((m) => m.api === 'openai-responses')
-  const tool = (name) => ({ name, description: name, parameters: { type: 'object', properties: {} } })
+  const model = p.getModels().find((m) => m.api === api)
   const ctx = {
-    tools: [tool('read'), tool('pwsh')],
+    tools: [
+      { name: 'read', description: 'Read a UTF-8 text file.', parameters: { type: 'object', properties: { file_path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['file_path'] } },
+      { name: 'pwsh', description: 'Execute a PowerShell command.', parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['command', 'description'] } },
+    ],
     messages: [
       { role: 'user', content: 'ls', timestamp: 1 },
       {
         role: 'assistant',
-        content: [{ type: 'toolCall', id: 'call_0|fc_0', name: 'pwsh', arguments: {} }],
+        content: [
+          { type: 'toolCall', id: 'call_0|fc_0', name: 'pwsh', arguments: { command: 'Get-Date', description: 'Read the current date', timeoutMs: 1000 } },
+          { type: 'toolCall', id: 'call_read|fc_read', name: 'read', arguments: { file_path: 'fixture.txt', offset: 2, limit: 3 } },
+        ],
         api: model.api,
         provider: model.provider,
         model: model.id,
@@ -564,20 +570,29 @@ test('anonymous requests satisfy the read+bash tool gate and map pwsh back', asy
         isError: false,
         timestamp: 3,
       },
+      { role: 'toolResult', toolCallId: 'call_read|fc_read', toolName: 'read', content: [{ type: 'text', text: 'fixture lines' }], isError: false, timestamp: 3 },
     ],
   }
-  const sse = [
+  const before = structuredClone(ctx)
+  const shellArgs = JSON.stringify({ timeout: 1000, command: 'Get-Date', description: 'Read the current date' })
+  const readArgs = JSON.stringify({ filePath: 'fixture.txt', offset: 2, limit: 3 })
+  const responseEvents = [
     {
       type: 'response.output_item.added',
       output_index: 0,
       item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'bash', arguments: '' },
     },
-    { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_1', delta: '{}' },
+    { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_1', delta: shellArgs.slice(0, 35) },
+    { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_1', delta: shellArgs.slice(35) },
     {
       type: 'response.output_item.done',
       output_index: 0,
-      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'bash', arguments: '{}' },
+      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'bash', arguments: shellArgs },
     },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'read', arguments: '' } },
+    { type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_2', delta: readArgs.slice(0, 20) },
+    { type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_2', delta: readArgs.slice(20) },
+    { type: 'response.output_item.done', output_index: 1, item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'read', arguments: readArgs } },
     {
       type: 'response.completed',
       response: {
@@ -587,40 +602,73 @@ test('anonymous requests satisfy the read+bash tool gate and map pwsh back', asy
       },
     },
   ]
-    .map((e) => `data: ${JSON.stringify(e)}\n\n`)
-    .join('')
-  const run = async (context, apiKey) => {
+  const completionEvents = [
+    { id: 'c1', object: 'chat.completion.chunk', model: model.id, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [
+      { index: 0, id: 'call_1', type: 'function', function: { name: 'bash', arguments: shellArgs.slice(0, 35) } },
+      { index: 1, id: 'call_2', type: 'function', function: { name: 'read', arguments: readArgs.slice(0, 20) } },
+    ] }, finish_reason: null }] },
+    { id: 'c1', object: 'chat.completion.chunk', model: model.id, choices: [{ index: 0, delta: { tool_calls: [
+      { index: 0, function: { arguments: shellArgs.slice(35) } },
+      { index: 1, function: { arguments: readArgs.slice(20) } },
+    ] }, finish_reason: null }] },
+    { id: 'c1', object: 'chat.completion.chunk', model: model.id, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } },
+  ]
+  const sse = (api === 'openai-responses' ? responseEvents : completionEvents)
+    .map((e) => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n'
+  const run = async (context, apiKey, streamSimple = p.streamSimple.bind(p)) => {
     let body
+    let headers
     const events = []
-    const s = p.streamSimple(model, context, {
+    const s = streamSimple(model, context, {
       apiKey,
       maxRetries: 0,
       fetch: async (_url, init) => {
         body = JSON.parse(init.body)
+        headers = new Headers(init.headers)
         return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } })
       },
     })
     for await (const ev of s) events.push(ev)
-    return { body, events, result: await s.result() }
+    return { body, headers, events, result: await s.result() }
   }
-  const names = (body) => body.tools.map((t) => t.name).sort()
+  const names = (body) => body.tools.map((t) => (t.function ?? t).name).sort()
+  const history = (body) => body.input ?? body.messages.flatMap(m => m.tool_calls ?? []).map(c => ({ type: 'function_call', ...c.function }))
 
-  // DSH (Models.streamSimple) hands providers a normalized transcript; direct callers may pass a legacy Context.
-  for (const shape of [(c) => c, normalizeContext]) {
-    const anon = await run(shape(ctx), 'public')
+  // Main and compat paths both receive legacy or normalized host contexts.
+  const compat = getApiProvider(model.api)
+  assert.ok(compat)
+  for (const stream of [p.streamSimple.bind(p), compat.streamSimple.bind(compat), p.stream.bind(p), compat.stream.bind(compat)]) for (const shape of [(c) => c, normalizeContext]) {
+    const anon = await run(shape(ctx), 'public', stream)
     assert.deepEqual(names(anon.body), ['bash', 'read'])
-    assert.ok(anon.body.input.some((i) => i.type === 'function_call' && i.name === 'bash'))
-    assert.ok(!JSON.stringify(anon.body.input).includes('"pwsh"'))
+    const session = anon.headers.get('x-opencode-session')
+    assert.equal(anon.headers.get('x-client-request-id'), session)
+    if (api === 'openai-responses') {
+      assert.equal(anon.body.prompt_cache_key, session)
+      if (anon.headers.has('x-opencode-session-id')) assert.equal(anon.headers.get('x-opencode-session-id'), session)
+    }
+    assert.ok(history(anon.body).some((i) => i.type === 'function_call' && i.name === 'bash'))
+    assert.ok(!JSON.stringify(history(anon.body)).includes('"pwsh"'))
     assert.equal(anon.result.content.find((c) => c.type === 'toolCall').name, 'pwsh')
     const end = anon.events.find((ev) => ev.type === 'toolcall_end')
     assert.equal(end.toolCall.name, 'pwsh')
-    assert.equal(ctx.tools[1].name, 'pwsh', 'caller context must not be mutated')
+    assert.deepEqual(end.toolCall.arguments, { command: 'Get-Date', description: 'Read the current date', timeoutMs: 1000 })
+    const returnedRead = anon.result.content.find(c => c.type === 'toolCall' && c.name === 'read')
+    assert.deepEqual(returnedRead.arguments, { file_path: 'fixture.txt', offset: 2, limit: 3 })
+    assert.deepEqual(anon.events.find(ev => ev.type === 'toolcall_end' && ev.toolCall.name === 'read').toolCall.arguments, returnedRead.arguments)
+    const historyShell = history(anon.body).find(i => i.type === 'function_call' && i.name === 'bash')
+    const historyRead = history(anon.body).find(i => i.type === 'function_call' && i.name === 'read')
+    assert.equal(JSON.parse(historyShell.arguments).timeout, 1000)
+    assert.deepEqual(JSON.parse(historyRead.arguments), { filePath: 'fixture.txt', offset: 2, limit: 3 })
+    assert.deepEqual(ctx, before, 'caller context must not be mutated')
 
-    const keyed = await run(shape(ctx), 'sk-test-key')
+    const keyed = await run(shape(ctx), 'sk-test-key', stream)
     assert.deepEqual(names(keyed.body), ['pwsh', 'read'])
+    assert.deepEqual(keyed.body.tools.map(t => t.function ?? t).find(t => t.name === 'pwsh').parameters, ctx.tools[1].parameters)
+    assert.equal(JSON.parse(history(keyed.body).find(i => i.type === 'function_call' && i.name === 'read').arguments).file_path, 'fixture.txt')
+    assert.equal(keyed.result.content.find(c => c.type === 'toolCall' && c.name === 'bash').arguments.timeout, 1000)
 
-    const bare = await run(shape({ messages: [{ role: 'user', content: 'title', timestamp: 1 }] }), 'public')
-    assert.deepEqual(names(bare.body), ['bash', 'read'])
+    // A server ignoring tool_choice:none must still never dispatch a filler.
+    await assert.rejects(run(shape({ messages: [{ role: 'user', content: 'title', timestamp: 1 }] }), 'public', stream), /unavailable admission tool/)
   }
 })
 
@@ -857,7 +905,7 @@ test("GUARD: the availability check is one cheap catalogue GET, in 9router's sha
     })
   })
   assert.equal(seen.length, 1, 'one request, and it is a GET of the catalogue')
-  assert.equal(seen[0].url, 'https://opencode.ai/zen/v1/models')
+  assert.equal(seen[0].url, 'https://opencode.ai/inference/v1/models')
   assert.equal(seen[0].init.method, undefined, 'no body, no method override: a plain GET')
   const headers = readNodeHeader(seen[0].init.headers, 'authorization')
   assert.equal(headers, 'Bearer public', 'the free tier runs on the literal "public" key')

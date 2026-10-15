@@ -10,7 +10,7 @@ Compare against the [engineering standards](standards.md). Reviewed baseline: co
 - **Confirmed gap**: code or configuration directly demonstrates a rule violation.
 - **Unverified**: available evidence is insufficient; this neither proves broken behavior nor establishes compliance.
 
-All items below remain open. This baseline does not change implementation, CI, dependency declarations, or user DSH settings, and does not include live checks.
+Items remain open unless a resolution is recorded below. The baseline itself did not change implementation, CI, dependency declarations, or user DSH settings, and did not include live checks.
 
 ## G1: Debug Logs Include Authorization Fragments
 
@@ -21,7 +21,8 @@ All items below remain open. This baseline does not change implementation, CI, d
 
 ## G2: Fetch Interception Matches Zen Paths by String Prefix
 
-- **P1 / Confirmed gap / A3**.
+- **Resolved locally (2026-10-14) / A3**: URL parsing now restricts guards to the HTTPS inference origin and exact `/inference/v1` base or descendants. `tests/inference-admission.test.mjs` verifies similar prefixes, other origins/protocols/ports, Request headers, and non-target argument identity. This is offline guard evidence, not a release or live-host claim.
+- Original baseline: **P1 / Confirmed gap / A3**.
 - Evidence: [isZenRequest](../src/zen-provider.ts) uses `startsWith(BASE_URL)` for strings, URLs, and Request URLs. `BASE_URL` is `https://opencode.ai/zen/v1`.
 - Impact: `https://opencode.ai/zen/v10/models` and `/zen/v1-other` also match the prefix, exceeding the required path scope. This is not evidence of credential leakage to an external host; no requests were sent for this inspection.
 - Acceptance: parse URLs and check the exact origin and path separators. Test valid descendant paths, similar paths, other hosts, ports, protocols, and Request inputs; verify that non-target requests are not rewritten.
