@@ -14,9 +14,6 @@ When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the 
 
 ## Where labels live
 
-The tracker is local markdown (see `issue-tracker.md`), which has no native labels. Record them as a `Labels:` line near the top of the issue or spec file, next to `Status:`, comma-separated:
+Use native GitHub issue labels. Keep the five canonical names in the table above. Create only missing labels; preserve existing labels and their settings.
 
-    Status: open
-    Labels: ready-for-agent
-
-`Status:` tracks `open | claimed | resolved`; `Labels:` tracks the triage role. They are independent: a `ready-for-agent` issue is still `Status: open` until someone claims it.
+GitHub open/closed state and assignees track progress independently of triage labels. Claim an open ticket by assigning the driving developer. Close it only after its completion criteria are verified. A local Markdown status is historical after migration.

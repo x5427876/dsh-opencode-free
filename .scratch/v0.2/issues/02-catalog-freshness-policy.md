@@ -1,12 +1,5 @@
-# 02: 目錄新鮮度政策＋刷新行為鎖死
+# 已移至 GitHub Issues
 
-**What to build:** 打包基線＋不背景刷新寫成政策（新鮮度信號是重驗①號燈）；
-刷新失敗保留目錄的行為被測試鎖死，移除的模型不應造成通用錯誤。
+正式內容與狀態：[02: 目錄新鮮度政策＋刷新行為鎖死](https://github.com/x5427876/dsh-opencode-free/issues/29)。
 
-**Blocked by:** None (can start immediately).
-
-**Status:** resolved
-
-- [ ] 離線刷新失敗時目錄保持不變
-- [ ] 政策寫進文件：無背景刷新、為何（副作用與額度成本）、信號是哪盞燈
-- [ ] 不動會話 id 方案（ADR-0001）
+此檔只保留舊路徑。請在 GitHub 更新規格、驗收條件與進度。

@@ -92,6 +92,6 @@ key 錯誤→檢查 key。Key 的設定路徑（plugin config 與環境變數）
 ## Further Notes
 
 - 本 spec 位於 `docs/spec-v0.2.md`：它記錄的是已發布的決策，不隨 issue 搬家。
-  Issue 與其他 spec 放在 `.scratch/<feature>/`，約定見 `docs/agents/issue-tracker.md`。
+  Issue 與其他 spec 已移至 GitHub Issues，約定見 `docs/agents/issue-tracker.md`。
 - 整個功能是 bypass 性質：Zen 一改報文用詞，分類映射即漂移；
   重驗腳本是唯一的漂移偵測器。

@@ -153,11 +153,11 @@ report verification limits and keep unrelated gap fixes out of scope.
 
 ### Issue tracker
 
-Issues live as local markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues for `x5427876/dsh-opencode-free`. Before creating, reading, claiming, or resolving work, read `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), recorded as a `Labels:` line in each issue file. See `docs/agents/triage-labels.md`.
+Use the five configured GitHub labels. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
