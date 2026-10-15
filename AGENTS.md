@@ -134,7 +134,8 @@ install request).
    means the run was not broken but did not finish because models are
    rate-limited or unverified: run it again later, and do not report them as
    passing. `3` means a precondition was refused and nothing ran.
-   `upstream-down` and `gate-refused` are reported but do not fail the run.
+   `upstream-down` and `gate-refused` mean verification is incomplete and return
+   exit code `2`; they are not plugin faults.
 
 The compat run is not the plugin's probe, and it is not part of CI
 ([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)).

@@ -9,6 +9,7 @@ import {
   fetchZenModelIds,
   isZenNodeRequestOptions,
   patchGlobalFetchForZen,
+  probeModel,
   sessionHeader,
   zenProvider,
 } from '../src/zen-provider.ts'
@@ -206,4 +207,15 @@ test('explicit caller tool choices survive anonymous and keyed requests', async 
       if (apiKey !== 'public') assert.ok(!body.tools?.length)
     }
   }
+})
+
+test('keyed probes do not inject anonymous admission tools', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  let body
+  await probeModel(model, { provider, apiKey: 'fixture-key', fetchImpl: async (_, init) => {
+    body = JSON.parse(init.body)
+    return refused()
+  } })
+  assert.equal(body.tools, undefined)
 })

@@ -805,3 +805,17 @@ test('unexpected inferred probe scope cannot be called full acceptance', async (
   assert.equal(report.acceptance.complete, false)
   assert.ok(text.includes('Unexpected probe targets: unexpected'))
 })
+
+test('mixed valid and malformed official model entries cannot shrink acceptance silently', async () => {
+  const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
+  const { deps, calls } = world({ zenIds: ['new-chat'] })
+  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: async url => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'new-chat' }, { model_id: 'new-official-free' }] })
+    if (String(url).includes('/console/models/')) return new Response(officialDocsFixture)
+    return Response.json({ opencode: { models: {} } })
+  } })
+  const { exitCode, report } = await runCompat({ dsh: PIN, tools: true }, deps)
+  assert.equal(exitCode, 2)
+  assert.equal(report.acceptance.complete, false)
+  assert.deepEqual(calls, [])
+})

@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { arch, platform, release, tmpdir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { fetchCompatCatalogue } from './compat-catalogue.mjs'
@@ -203,6 +203,7 @@ function createDriver({ dsh, keep }) {
       for (const name of ['@deepseek-ai/dsh-llm', '@deepseek-ai/dsh-llm-pi-ai', '@earendil-works/pi-ai']) {
         versions[name] = JSON.parse(await readFile(join(root, 'dsh', 'node_modules', name, 'package.json'), 'utf8')).version
       }
+      if (versions['@deepseek-ai/dsh-llm'] !== dsh || versions['@deepseek-ai/dsh-llm-pi-ai'] !== dsh) throw new Error('installed DSH peer versions do not match the requested version')
       return { versions, pluginSource: 'local working-tree tarball', pluginSha256: createHash('sha256').update(await readFile(join(root, tarball))).digest('hex'), sourceRevision: (await step('source revision', ['git', 'rev-parse', 'HEAD'], REPO)).trim() }
     },
 
@@ -300,6 +301,7 @@ function createDriver({ dsh, keep }) {
         console.error(`compat: kept ${root} (DSH_HOME=${paths().home})`)
         return
       }
+      if (dirname(resolve(root)) !== resolve(tmpdir()) || !basename(root).startsWith('dsh-compat-')) throw new Error('refusing cleanup outside the compat temporary directory')
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 })
     },
   }

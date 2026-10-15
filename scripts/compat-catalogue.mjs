@@ -1,10 +1,21 @@
 // Acceptance targets are independent of the plugin's current catalogue (ADR 0004).
 import { fetchSection } from '../lib/catalog.js'
-import { builtinFreeModels, fetchZenModelIds } from '../lib/zen-provider.js'
+import { builtinFreeModels, OPENCODE_USER_AGENT } from '../lib/zen-provider.js'
 
 export const OFFICIAL_MODELS = 'https://opencode.ai/inference/v1/models'
 export const OFFICIAL_DOCS = 'https://opencode.ai/v2/docs/console/models/'
 const SUPPLEMENT = 'https://models.dev/api.json'
+
+async function fetchOfficialIds(fetchImpl) {
+  const response = await fetchImpl(OFFICIAL_MODELS, {
+    signal: AbortSignal.timeout(15000),
+    headers: { Authorization: 'Bearer public', 'User-Agent': OPENCODE_USER_AGENT, 'x-opencode-client': 'cli' },
+  })
+  if (!response.ok) throw new Error('official model list unavailable')
+  const body = await response.json()
+  if (!Array.isArray(body?.data) || body.data.some(model => typeof model?.id !== 'string' || !model.id.trim() || model.id !== model.id.trim())) throw new Error('official model list schema changed')
+  return body.data.map(model => model.id)
+}
 
 const textOf = html => html.replace(/<[^>]*>/g, '').replace(/&(?:nbsp|amp|lt|gt|quot);/g, entity => ({ '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' })[entity]).replace(/\s+/g, ' ').trim()
 const labelOf = name => name.replace(/\s+\([^)]*\).*$/, '').toLowerCase()
@@ -45,7 +56,7 @@ function classify(zenIds, html) {
 
 export async function fetchCompatCatalogue({ fetchImpl = fetch, now = () => new Date() } = {}) {
   const results = await Promise.allSettled([
-    fetchZenModelIds(fetchImpl, AbortSignal.timeout(15000)),
+    fetchOfficialIds(fetchImpl),
     (async () => {
       const response = await fetchImpl(OFFICIAL_DOCS, { signal: AbortSignal.timeout(30000) })
       if (!response.ok) throw new Error(`official documentation HTTP ${response.status}`)

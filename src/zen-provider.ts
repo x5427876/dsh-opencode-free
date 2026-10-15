@@ -1182,6 +1182,7 @@ function usageOf(result: Record<string, unknown> | undefined): ProbeUsage | unde
  * catalogue-wide probe run.
  */
 async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutcome> {
+  const apiKey = deps.apiKey?.trim() || "public";
   const recorder = createRecordingFetch(deps.fetchImpl ?? globalThis.fetch);
   const context = {
     messages: [{ role: "user", content: PROBE_PROMPT, timestamp: deps.now?.() ?? Date.now() }],
@@ -1207,13 +1208,13 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
     // tried and reverted: it changed nothing about the host's refusals, and the
     // only thing it did change was the channel.
     const stream = deps.provider.streamSimple(model, context, {
-      apiKey: deps.apiKey ?? "public",
+      apiKey,
       maxTokens: deps.maxTokens ?? PROBE_MAX_TOKENS,
       // The default reasoning effort for muse-spark is xhigh; a probe only
       // needs any reply, so it asks for the cheapest one.
       reasoning: "low",
       // The last gate before the bytes leave. See enforceAnonymousTools.
-      onPayload: (payload: unknown) => enforceAnonymousTools(payload),
+      onPayload: (payload: unknown) => apiKey === "public" ? enforceAnonymousTools(payload) : payload,
       // A probe must not spend a second call confirming anything: without this
       // a 429 costs three requests instead of one, because the SDK's default
       // retry policy treats a rate limit as worth repeating. Production retries
