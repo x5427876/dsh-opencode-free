@@ -1,5 +1,6 @@
 // Parse host-owned JSON only in memory; reports receive comparison booleans.
-import { resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { basename, dirname, resolve } from 'node:path'
 
 export function parseHeadlessOutput(stdout) {
   const calls = new Map()
@@ -29,13 +30,25 @@ export function parseHeadlessOutput(stdout) {
   }
 }
 
+// The host reports canonical paths (macOS temp dirs live behind /var -> /private/var),
+// so compare through real paths. A file is already removed by now: use its directory's.
+function canonicalDir(path) {
+  const full = resolve(path)
+  try { return realpathSync(full) } catch { return full }
+}
+
+function canonical(path) {
+  const full = resolve(path)
+  return resolve(canonicalDir(dirname(full)), basename(full))
+}
+
 export function verifyToolEvidence(evidence, step, expected) {
   const contains = value => typeof value === 'string' && new RegExp(`(?:^|[^a-f0-9])${expected}(?=$|[^a-f0-9])`, 'i').test(value)
   const calls = evidence?.valid ? evidence.calls.filter(call => call.tool === step.tool) : []
   const argumentMatches = call => {
     const input = call.input
-    if (step.tool === 'read') return typeof input.file_path === 'string' && resolve(step.cwd, input.file_path) === resolve(step.cwd, step.file)
-    return typeof input.command === 'string' && input.command.trim() === step.command && (step.tool !== 'pwsh' || typeof input.description === 'string' && input.description.trim() !== '') && (input.workdir === undefined || typeof input.workdir === 'string' && resolve(step.cwd, input.workdir) === resolve(step.cwd)) && input.run_in_background !== true
+    if (step.tool === 'read') return typeof input.file_path === 'string' && canonical(resolve(step.cwd, input.file_path)) === canonical(resolve(step.cwd, step.file))
+    return typeof input.command === 'string' && input.command.trim() === step.command && (step.tool !== 'pwsh' || typeof input.description === 'string' && input.description.trim() !== '') && (input.workdir === undefined || typeof input.workdir === 'string' && canonicalDir(resolve(step.cwd, input.workdir)) === canonicalDir(step.cwd)) && input.run_in_background !== true
   }
   const matched = calls.filter(argumentMatches)
   return {

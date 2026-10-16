@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { runCompat } from '../scripts/compat-core.mjs'
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
@@ -684,6 +686,22 @@ test('official source metadata drives runner targets, exclusions and reports', a
   assert.ok(text.includes('decision-free'))
 })
 
+test('official endpoints under the provider-prefixed paths are classified like the unprefixed ones', async () => {
+  const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
+  const docs = officialDocsFixture
+    .replace('new-chat</td><td>https://opencode.ai/inference/v1/responses', 'new-chat</td><td>https://opencode.ai/inference/openai/v1/responses')
+    .replace('decision-free</td><td>https://opencode.ai/inference/v1/systemone', 'decision-free</td><td>https://opencode.ai/inference/systemone/v1/systemone')
+    .replace('<td>Paid</td><td>paid</td><td>https://opencode.ai/inference/v1/responses', '<td>Paid</td><td>paid</td><td>https://opencode.ai/inference/openai/v1/chat/completions')
+  const catalogue = await fetchCompatCatalogue({ fetchImpl: async url => {
+    if (String(url).endsWith('/models')) return Response.json({ data: ['new-chat', 'paid', 'decision-free'].map(id => ({ id })) })
+    if (String(url).includes('/console/models/')) return new Response(docs)
+    return Response.json({ opencode: { models: {} } })
+  }, now: () => new Date('2026-10-16T00:00:00Z') })
+  assert.deepEqual(catalogue.targets.map(row => [row.id, row.api]), [['new-chat', 'openai-responses']])
+  assert.deepEqual(catalogue.selection.excluded.map(row => [row.id, row.reason]), [['paid', 'paid'], ['decision-free', 'non-conversational']])
+  assert.deepEqual(catalogue.selection.unresolved, [])
+})
+
 test('unresolved official classifications prevent full acceptance without querying those IDs', async () => {
   const { deps, runs } = world()
   const prior = deps.catalogue
@@ -818,4 +836,22 @@ test('mixed valid and malformed official model entries cannot shrink acceptance 
   assert.equal(exitCode, 2)
   assert.equal(report.acceptance.complete, false)
   assert.deepEqual(calls, [])
+})
+
+test('tool evidence accepts the host reporting the canonical path of a symlinked workspace', async (t) => {
+  const { verifyToolEvidence } = await import('../scripts/compat-evidence.mjs')
+  const root = await mkdtemp(join(tmpdir(), 'compat-evidence-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const real = join(root, 'real')
+  const link = join(root, 'link')
+  await mkdir(real)
+  try { await symlink(real, link, 'dir') } catch { return t.skip('symlinks unavailable') }
+  const canonicalReal = await realpath(real)
+  const evidence = (input, tool = 'read') => ({ valid: true, text: 'abc123', calls: [{ tool, input, status: 'completed', result: 'abc123' }] })
+  const read = verifyToolEvidence(evidence({ file_path: join(canonicalReal, 'compat-read.txt') }), { tool: 'read', file: 'compat-read.txt', cwd: link }, 'abc123')
+  assert.deepEqual(read, { callMatched: true, argumentsMatched: true, resultMatched: true, finalMatched: true })
+  const shell = verifyToolEvidence(evidence({ command: 'echo', workdir: canonicalReal }, 'bash'), { tool: 'bash', command: 'echo', cwd: link }, 'abc123')
+  assert.equal(shell.argumentsMatched, true)
+  const other = verifyToolEvidence(evidence({ file_path: join(canonicalReal, 'other.txt') }), { tool: 'read', file: 'compat-read.txt', cwd: link }, 'abc123')
+  assert.equal(other.argumentsMatched, false)
 })

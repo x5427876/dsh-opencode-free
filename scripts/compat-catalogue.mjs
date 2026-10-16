@@ -46,9 +46,10 @@ function classify(zenIds, html) {
     if (!free.every(Boolean)) { unresolved.push({ id, reason: 'official price ambiguous' }); continue }
     let url
     try { url = new URL(endpoint) } catch { unresolved.push({ id, reason: 'official endpoint invalid' }); continue }
-    if (url.origin !== 'https://opencode.ai' || !url.pathname.startsWith('/inference/v1/')) { unresolved.push({ id, reason: 'official endpoint invalid' }); continue }
-    if (url.pathname === '/inference/v1/systemone') { excluded.push({ id, reason: 'non-conversational', source: OFFICIAL_DOCS }); continue }
-    const api = url.pathname === '/inference/v1/responses' ? 'openai-responses' : url.pathname === '/inference/v1/chat/completions' ? 'openai-completions' : null
+    const path = url.pathname.replace(/^\/inference\/(?:openai|systemone)\/v1\//, '/inference/v1/')
+    if (url.origin !== 'https://opencode.ai' || !path.startsWith('/inference/v1/')) { unresolved.push({ id, reason: 'official endpoint invalid' }); continue }
+    if (path === '/inference/v1/systemone') { excluded.push({ id, reason: 'non-conversational', source: OFFICIAL_DOCS }); continue }
+    const api = path === '/inference/v1/responses' ? 'openai-responses' : path === '/inference/v1/chat/completions' ? 'openai-completions' : null
     targets.push({ id, api, endpoint })
   }
   return { targets, excluded, unresolved }
