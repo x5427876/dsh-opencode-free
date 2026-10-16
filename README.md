@@ -35,7 +35,7 @@ Anonymous access is the default; a Zen API key is optional.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.1-alpha.3` (exact) |
+| DeepSeek Harness | `0.2.1-alpha.5` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each release supports exactly one DSH version. Do not ignore peer dependency
@@ -47,7 +47,7 @@ Check your DSH version, then install the pinned package:
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.3.4
+dsh plugin --profile web add dsh-opencode-free@0.3.5
 ```
 
 Replace `web` with your target profile. If already installed, use the update
@@ -75,6 +75,7 @@ dsh plugin --profile web remove dsh-opencode-free
 
 | Plugin | DSH |
 |---|---|
+| `0.3.5` | `0.2.1-alpha.5` |
 | `0.3.4` | `0.2.1-alpha.3` |
 | `0.3.3` | `0.2.1-alpha.2` |
 | `0.3.2` | `0.2.1-alpha.2` |

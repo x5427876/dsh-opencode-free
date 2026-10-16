@@ -1,0 +1,965 @@
+{
+  "header": {
+    "dshVersion": "0.2.1-alpha.5",
+    "pluginVersion": "0.3.5",
+    "date": "2026-10-16T14:04:19.073Z",
+    "os": "darwin 25.6.0 arm64, Node v26.9.0",
+    "keyed": false,
+    "tools": true,
+    "path": "Isolated DSH_HOME, built-in headless profile plus a --patch overlay (webServer on 127.0.0.1, default model). Same PiAiAdapter -> plugin path as the web profile, but not the profile users run: this is not a web UI verification."
+  },
+  "catalogue": {
+    "error": null,
+    "onlyLive": [
+      "beam-free",
+      "ll-alpha-free",
+      "nemotron-3.5-super-vl-free",
+      "deepseek-v4.1-flash-free",
+      "glm-5.3-flash-free"
+    ],
+    "onlyBuiltin": [
+      "exo-free",
+      "fledge-alpha-free",
+      "ling-3.0-flash-fin-free",
+      "ling-3.1-flash-free",
+      "nemotron-3-ultra-free"
+    ],
+    "excluded": [
+      {
+        "id": "jev-1.13-free",
+        "reason": "non-conversational",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-fable-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "jev-1.13",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-fable-5-1",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-haiku-4-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-haiku-5-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-4-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-4-6",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-4-7",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-4-8",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-opus-5-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-sonnet-4-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-sonnet-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "claude-sonnet-5-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "deepseek-v4.1-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.1-pro",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.5-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.5-flash-lite",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.6-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gemini-4-argon",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "glm-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "glm-5.1",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "glm-5.2",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "glm-5.3",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "glm-5.3-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5-codex",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5-nano",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.1",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.1-codex",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.1-codex-max",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.1-codex-mini",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.2",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.2-codex",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.3-codex-spark",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.4",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.4-pro",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.5-pro",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-6-astra",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-6-sol",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-6.1-sol",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-6-luna",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "grok-4.5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "grok-4.6",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "grok-4.7",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "grok-build-0.1",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "kimi-k2.5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "kimi-k2.6",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "kimi-k3",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "minimax-m2.5",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "minimax-m2.7",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "minimax-m3",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "muse-spark-1.2",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "muse-spark-1.3",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "mistral-large-4",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "qwen3.5-plus",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "qwen3.6-plus",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "qwen3.8-flash",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      },
+      {
+        "id": "qwen3.8-max",
+        "reason": "paid",
+        "source": "https://opencode.ai/v2/docs/console/models/"
+      }
+    ],
+    "unresolved": [
+      {
+        "id": "muse-spark-1.2-contributor-free",
+        "reason": "official endpoint missing or ambiguous"
+      },
+      {
+        "id": "test",
+        "reason": "official endpoint missing or ambiguous"
+      },
+      {
+        "id": "claude-opus-5-5-backup",
+        "reason": "official endpoint missing or ambiguous"
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "reason": "official endpoint missing or ambiguous"
+      }
+    ],
+    "targets": [
+      "big-pickle",
+      "beam-free",
+      "ll-alpha-free",
+      "mimo-v2.6-flash-free",
+      "muse-spark-1.3-contributor-free",
+      "nemotron-3.5-super-vl-free",
+      "nemotron-3.5-lightning-free",
+      "longcat-2.5-preview-free",
+      "deepseek-v4.1-flash-free",
+      "glm-5.3-flash-free",
+      "space-bunny-free"
+    ],
+    "sources": [
+      {
+        "url": "https://opencode.ai/inference/v1/models",
+        "at": "2026-10-16T14:04:19.721Z",
+        "status": "ok"
+      },
+      {
+        "url": "https://opencode.ai/v2/docs/console/models/",
+        "at": "2026-10-16T14:04:19.721Z",
+        "status": "ok"
+      },
+      {
+        "url": "https://models.dev/api.json",
+        "at": "2026-10-16T14:04:19.721Z",
+        "status": "ok"
+      }
+    ]
+  },
+  "warmup": {
+    "ok": true,
+    "error": null,
+    "visible": [
+      "big-pickle",
+      "deepseek-v4.1-flash-free",
+      "glm-5.3-flash-free",
+      "ll-alpha-free",
+      "longcat-2.5-preview-free",
+      "mimo-v2.6-flash-free",
+      "muse-spark-1.2-contributor-free",
+      "muse-spark-1.3-contributor-free",
+      "nemotron-3.5-lightning-free",
+      "nemotron-3.5-super-vl-free",
+      "space-bunny-free"
+    ],
+    "runtime": {
+      "versions": {
+        "@deepseek-ai/dsh-llm": "0.2.1-alpha.5",
+        "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-alpha.5",
+        "@earendil-works/pi-ai": "1.2.0"
+      },
+      "pluginSource": "local working-tree tarball",
+      "pluginSha256": "e36db0f41b354a234df58329f5de6f31f974058c05143229abbae62d312cd315",
+      "sourceRevision": "3775d6623bb6d14cd8f5078764200b7a4d9383f0"
+    },
+    "unexpectedTargets": []
+  },
+  "models": [
+    {
+      "id": "big-pickle",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "ll-alpha-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "mimo-v2.6-flash-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "muse-spark-1.3-contributor-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "nemotron-3.5-super-vl-free",
+      "effort": "minimal",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "longcat-2.5-preview-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "deepseek-v4.1-flash-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "space-bunny-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "ok",
+        "pass": true,
+        "code": null,
+        "http": 0
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "ok",
+      "layer": "L2",
+      "reason": ""
+    },
+    {
+      "id": "beam-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": null,
+      "l0": {
+        "inPicker": false,
+        "probe": "not probed",
+        "pass": false,
+        "code": null,
+        "http": 0
+      },
+      "verdict": "plugin-fault",
+      "layer": null,
+      "reason": "official free conversational model missing from the DSH catalogue"
+    },
+    {
+      "id": "nemotron-3.5-lightning-free",
+      "effort": null,
+      "effortNote": "no published levels (無等級可選)",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: timeout (HTTP 200)",
+        "pass": false,
+        "code": "timeout",
+        "http": 200
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "unverified",
+      "layer": "L2",
+      "reason": "L0 failed: timeout (HTTP 200)"
+    },
+    {
+      "id": "glm-5.3-flash-free",
+      "effort": "low",
+      "effortNote": "",
+      "keyed": null,
+      "tools": {
+        "read": {
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        },
+        "shell": {
+          "tool": "bash",
+          "pass": true,
+          "verdict": "ok",
+          "reason": "",
+          "evidence": {
+            "callMatched": true,
+            "argumentsMatched": true,
+            "resultMatched": true,
+            "finalMatched": true
+          }
+        }
+      },
+      "l0": {
+        "inPicker": true,
+        "probe": "failed: quota-exhausted (HTTP 429)",
+        "pass": false,
+        "code": "quota-exhausted",
+        "http": 429
+      },
+      "l1": {
+        "pass": true,
+        "verdict": "ok",
+        "reason": ""
+      },
+      "verdict": "rate-limited",
+      "layer": "L2",
+      "reason": "L0 failed: quota-exhausted (HTTP 429)"
+    }
+  ],
+  "unverified": [
+    "nemotron-3.5-lightning-free"
+  ],
+  "exitCode": 1,
+  "acceptance": {
+    "scope": "all-official-free-conversational",
+    "requiredLayers": [
+      "L0",
+      "L1",
+      "L2-read",
+      "L2-shell"
+    ],
+    "complete": false,
+    "fullModelAcceptance": false
+  }
+}

@@ -11,7 +11,7 @@ Use Node matching `package.json` and pnpm from this clone. No global DSH or Zen
 key is required. Run through pnpm: the driver needs its `npm_execpath`.
 
 ```sh
-pnpm compat --dsh 0.2.1-alpha.3 --tools --out <unique-report-directory>
+pnpm compat --dsh 0.2.1-alpha.5 --tools --out <unique-report-directory>
 ```
 
 | Option | Meaning |

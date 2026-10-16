@@ -30,7 +30,7 @@
 
 | 項目 | 版本 |
 |---|---|
-| DeepSeek Harness | `0.2.1-alpha.3`（必須完全相同） |
+| DeepSeek Harness | `0.2.1-alpha.5`（必須完全相同） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只支援一個 DSH 版本。四個執行期 peer 依賴都是必要的，請勿忽略
@@ -42,7 +42,7 @@ peer dependency 警告。
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.3.4
+dsh plugin --profile web add dsh-opencode-free@0.3.5
 ```
 
 請將 `web` 換成你的目標 profile。若已安裝，請改用下方的更新指令，不要重複新增。
@@ -69,6 +69,7 @@ dsh plugin --profile web remove dsh-opencode-free
 
 | 插件 | DSH |
 |---|---|
+| `0.3.5` | `0.2.1-alpha.5` |
 | `0.3.4` | `0.2.1-alpha.3` |
 | `0.3.3` | `0.2.1-alpha.2` |
 | `0.3.2` | `0.2.1-alpha.2` |

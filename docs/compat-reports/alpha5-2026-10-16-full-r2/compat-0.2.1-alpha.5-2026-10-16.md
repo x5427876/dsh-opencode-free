@@ -1,0 +1,110 @@
+# Compat run: DSH 0.2.1-alpha.5 + dsh-opencode-free 0.3.5
+
+- Date: 2026-10-16T14:04:19.073Z
+- OS: darwin 25.6.0 arm64, Node v26.9.0
+- Key: no (anonymous only)
+- Tools (L2): on
+- Path: Isolated DSH_HOME, built-in headless profile plus a --patch overlay (webServer on 127.0.0.1, default model). Same PiAiAdapter -> plugin path as the web profile, but not the profile users run: this is not a web UI verification.
+- Result: exit code 1 — plugin-fault (or the setup/warmup failed): something on the plugin or DSH side needs fixing
+
+- Live only (not in the builtin list): beam-free, ll-alpha-free, nemotron-3.5-super-vl-free, deepseek-v4.1-flash-free, glm-5.3-flash-free
+- Builtin only (not in the live list): exo-free, fledge-alpha-free, ling-3.0-flash-fin-free, ling-3.1-flash-free, nemotron-3-ultra-free
+- Warmup: ok
+- Required layers: L0, L1, L2-read, L2-shell
+- Full-model L0/L1/L2 acceptance: not passed
+- Source: https://opencode.ai/inference/v1/models (2026-10-16T14:04:19.721Z, ok)
+- Source: https://opencode.ai/v2/docs/console/models/ (2026-10-16T14:04:19.721Z, ok)
+- Source: https://models.dev/api.json (2026-10-16T14:04:19.721Z, ok)
+- Excluded: jev-1.13-free — non-conversational
+- Excluded: claude-fable-5 — paid
+- Excluded: jev-1.13 — paid
+- Excluded: claude-fable-5-1 — paid
+- Excluded: claude-haiku-4-5 — paid
+- Excluded: claude-haiku-5-5 — paid
+- Excluded: claude-opus-4-5 — paid
+- Excluded: claude-opus-4-6 — paid
+- Excluded: claude-opus-4-7 — paid
+- Excluded: claude-opus-4-8 — paid
+- Excluded: claude-opus-5 — paid
+- Excluded: claude-opus-5-5 — paid
+- Excluded: claude-sonnet-4-5 — paid
+- Excluded: claude-sonnet-4-6 — paid
+- Excluded: claude-sonnet-5 — paid
+- Excluded: claude-sonnet-5-5 — paid
+- Excluded: deepseek-v4.1-flash — paid
+- Excluded: deepseek-v4-pro — paid
+- Excluded: gemini-3-flash — paid
+- Excluded: gemini-3.1-pro — paid
+- Excluded: gemini-3.5-flash — paid
+- Excluded: gemini-3.5-flash-lite — paid
+- Excluded: gemini-3.6-flash — paid
+- Excluded: gemini-3.7-flash — paid
+- Excluded: gemini-3.8-flash — paid
+- Excluded: gemini-4-argon — paid
+- Excluded: glm-5 — paid
+- Excluded: glm-5.1 — paid
+- Excluded: glm-5.2 — paid
+- Excluded: glm-5.3 — paid
+- Excluded: glm-5.3-flash — paid
+- Excluded: gpt-5 — paid
+- Excluded: gpt-5-codex — paid
+- Excluded: gpt-5-nano — paid
+- Excluded: gpt-5.1 — paid
+- Excluded: gpt-5.1-codex — paid
+- Excluded: gpt-5.1-codex-max — paid
+- Excluded: gpt-5.1-codex-mini — paid
+- Excluded: gpt-5.2 — paid
+- Excluded: gpt-5.2-codex — paid
+- Excluded: gpt-5.3-codex — paid
+- Excluded: gpt-5.3-codex-spark — paid
+- Excluded: gpt-5.4 — paid
+- Excluded: gpt-5.4-mini — paid
+- Excluded: gpt-5.4-nano — paid
+- Excluded: gpt-5.4-pro — paid
+- Excluded: gpt-5.5 — paid
+- Excluded: gpt-5.5-pro — paid
+- Excluded: gpt-5.6-luna — paid
+- Excluded: gpt-5.6-sol — paid
+- Excluded: gpt-6-astra — paid
+- Excluded: gpt-6-sol — paid
+- Excluded: gpt-6.1-sol — paid
+- Excluded: gpt-6-luna — paid
+- Excluded: gpt-5.6-terra — paid
+- Excluded: grok-4.5 — paid
+- Excluded: grok-4.6 — paid
+- Excluded: grok-4.7 — paid
+- Excluded: grok-build-0.1 — paid
+- Excluded: kimi-k2.5 — paid
+- Excluded: kimi-k2.6 — paid
+- Excluded: kimi-k2.7-code — paid
+- Excluded: kimi-k3 — paid
+- Excluded: minimax-m2.5 — paid
+- Excluded: minimax-m2.7 — paid
+- Excluded: minimax-m3 — paid
+- Excluded: muse-spark-1.2 — paid
+- Excluded: muse-spark-1.3 — paid
+- Excluded: mistral-large-4 — paid
+- Excluded: qwen3.5-plus — paid
+- Excluded: qwen3.6-plus — paid
+- Excluded: qwen3.8-flash — paid
+- Excluded: qwen3.8-max — paid
+- Unresolved: muse-spark-1.2-contributor-free — official endpoint missing or ambiguous
+- Unresolved: test — official endpoint missing or ambiguous
+- Unresolved: claude-opus-5-5-backup — official endpoint missing or ambiguous
+- Unresolved: deepseek-v4-flash — official endpoint missing or ambiguous
+
+| model | verdict | layer | effort | L0 probe | L2 tools | with key | reason |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| big-pickle | ok | L2 | no published levels (無等級可選) | ok | read pass, bash pass | - | - |
+| ll-alpha-free | ok | L2 | low | ok | read pass, bash pass | - | - |
+| mimo-v2.6-flash-free | ok | L2 | no published levels (無等級可選) | ok | read pass, bash pass | - | - |
+| muse-spark-1.3-contributor-free | ok | L2 | minimal | ok | read pass, bash pass | - | - |
+| nemotron-3.5-super-vl-free | ok | L2 | minimal | ok | read pass, bash pass | - | - |
+| longcat-2.5-preview-free | ok | L2 | no published levels (無等級可選) | ok | read pass, bash pass | - | - |
+| deepseek-v4.1-flash-free | ok | L2 | low | ok | read pass, bash pass | - | - |
+| space-bunny-free | ok | L2 | low | ok | read pass, bash pass | - | - |
+| beam-free | plugin-fault | - | no published levels (無等級可選) | not probed | - | - | official free conversational model missing from the DSH catalogue |
+| nemotron-3.5-lightning-free | unverified | L2 | no published levels (無等級可選) | failed: timeout (HTTP 200) | read pass, bash pass | - | L0 failed: timeout (HTTP 200) |
+| glm-5.3-flash-free | rate-limited | L2 | low | failed: quota-exhausted (HTTP 429) | read pass, bash pass | - | L0 failed: quota-exhausted (HTTP 429) |
+
+Unverified: nemotron-3.5-lightning-free
