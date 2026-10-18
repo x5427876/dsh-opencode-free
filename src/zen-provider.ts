@@ -117,7 +117,7 @@ export function freeModels(): Model<Api>[] {
  * `zen-provider` does not import `catalog` at runtime (only its type), so
  * reading it the other way round introduces no cycle.
  */
-export const PLUGIN_VERSION = "0.3.5";
+export const PLUGIN_VERSION = "0.3.6";
 
 /** Derived, not written out: a second hardcoded copy is a second thing to forget. */
 export const OPENCODE_USER_AGENT = `opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/${PLUGIN_VERSION}`;
@@ -532,7 +532,7 @@ export function swapCompactionPrompt<T>(context: T, apiKey: unknown): T {
 const GATE_TOOLS = ["read", "bash"];
 const SHELL_ALIAS = "pwsh";
 // Usage adapted from OpenCode 1.19.0 read.txt / Windows shell guidance and
-// checked against DSH 0.2.1-alpha.5 fs/pwsh/bash contracts. Unlike OpenCode's
+// checked against DSH 0.2.1-rc.2 fs/pwsh/bash contracts. Unlike OpenCode's
 // read, DSH read is UTF-8 text only; do not advertise directory/media support.
 const READ_USAGE = `Read a UTF-8 text file and return line-numbered content. If the path does not exist, an error is returned.
 
