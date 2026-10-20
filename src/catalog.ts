@@ -47,6 +47,7 @@ export const DEFAULT_TTL_MS = 86_400_000;
  * argument, including why a competitor's shorter window really is a re-download, is
  * in `docs/adr/0002-catalogue-source-of-truth.md`.
  */
+
 /**
  * Floor between two MANUAL probe rounds. The automatic round is bounded by
  * `probedToday(lastProbeAt, now)` (one per local calendar day), but `forceProbes()` is reachable
@@ -201,13 +202,14 @@ export function thinkingLevelMapFor(record: CatalogRecord): Record<string, strin
  * the known opencode models (interleaved/toggle ⇒ completions, effort ⇒
  * responses).
  */
+
 export function channelFor(record: CatalogRecord, knownApis?: ReadonlyMap<string, Api>): Api {
   const id = typeof record.id === "string" ? record.id : undefined;
   if (id !== undefined && knownApis !== undefined) {
     const known = knownApis.get(id);
     if (known !== undefined) return known;
   }
-  if (record.interleaved !== undefined) return "openai-completions";
+  if (interleavedOf(record) !== undefined) return "openai-completions";
   const types = reasoningOptionTypes(record);
   if (types.includes("toggle")) return "openai-completions";
   if (types.includes("effort")) return "openai-responses";
@@ -271,8 +273,47 @@ function buildModel(
     // `compat` is transport-specific. Carrying the template's completions
     // overrides onto a responses model would misconfigure it, so a channel
     // change drops them and lets pi-ai auto-detect from baseUrl.
-    compat: (api === template.api ? template.compat : undefined) as Model<Api>["compat"],
+    // `interleaved` (reasoning_content) additionally requires passback on every
+    // assistant message in thinking mode with tools.
+    compat: compatFor(record, template, api) as Model<Api>["compat"],
   };
+}
+
+/**
+ * The `interleaved` value a models.dev record carries, if any. Single owner of
+ * the field's interpretation: `channelFor` treats any defined value as a
+ * completions signal, `compatFor` narrows it to a `reasoning_content` passback.
+ */
+function interleavedOf(record: CatalogRecord): unknown {
+  return record.interleaved;
+}
+
+/**
+ * Whether a models.dev record's reasoning is carried in a `reasoning_content`
+ * field that the endpoint requires on every assistant message in thinking mode
+ * when tools are present. Rule: `interleaved.field` is `reasoning_content`
+ * (or absent) ⇒ passback is required. Boolean `true` is intentionally not
+ * handled: no free model in the opencode section uses it.
+ */
+function requiresReasoningContentPassback(record: CatalogRecord): boolean {
+  const interleaved = interleavedOf(record);
+  if (!isPlainObject(interleaved)) return false;
+  const field = interleaved.field;
+  return field === undefined || field === "reasoning_content";
+}
+
+/**
+ * The compat block for one derived model. Dropped entirely when the channel
+ * changes, so a responses model never inherits completions overrides.
+ */
+function compatFor(
+  record: CatalogRecord,
+  template: Model<Api>,
+  api: Api,
+): Model<Api>["compat"] {
+  if (api !== template.api) return undefined;
+  if (!requiresReasoningContentPassback(record)) return template.compat;
+  return { ...template.compat, requiresReasoningContentOnAssistantMessages: true };
 }
 
 /**

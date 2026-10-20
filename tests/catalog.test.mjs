@@ -585,6 +585,25 @@ test('derive drops transport-specific compat when the channel changes', () => {
   assert.equal(responses.compat, undefined, "the template's completions compat must not leak onto responses")
 })
 
+test('derive sets reasoning_content passback for interleaved models', () => {
+  const { candidates } = derive(modelsDict(), { template: template() })
+  const interleaved = candidates.find((m) => m.id === 'big-pickle')
+  assert.equal(interleaved.compat?.requiresReasoningContentOnAssistantMessages, true,
+    'interleaved reasoning_content requires passback')
+  const spaceBunny = candidates.find((m) => m.id === 'space-bunny-free')
+  assert.equal(spaceBunny.compat?.requiresReasoningContentOnAssistantMessages, true,
+    'interleaved reasoning_content requires passback')
+})
+
+test('derive omits reasoning_content passback without interleaved', () => {
+  const { candidates } = derive(modelsDict(), { template: template() })
+  const noInterleaved = candidates.find((m) => m.id === 'ling-3.0-flash-fin-free')
+  assert.notEqual(noInterleaved.compat?.requiresReasoningContentOnAssistantMessages, true,
+    'no interleaved means no passback')
+  const responses = candidates.find((m) => m.id === 'muse-spark-1.3-contributor-free')
+  assert.equal(responses.compat, undefined, 'responses channel drops compat')
+})
+
 // ── T2 fetch + cache ────────────────────────────────────────────────────────
 
 test('GUARD: a provider record fed to derive yields an empty catalogue', () => {
