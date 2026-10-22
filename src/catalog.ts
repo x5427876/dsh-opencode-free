@@ -47,7 +47,6 @@ export const DEFAULT_TTL_MS = 86_400_000;
  * argument, including why a competitor's shorter window really is a re-download, is
  * in `docs/adr/0002-catalogue-source-of-truth.md`.
  */
-
 /**
  * Floor between two MANUAL probe rounds. The automatic round is bounded by
  * `probedToday(lastProbeAt, now)` (one per local calendar day), but `forceProbes()` is reachable
@@ -202,7 +201,6 @@ export function thinkingLevelMapFor(record: CatalogRecord): Record<string, strin
  * the known opencode models (interleaved/toggle ⇒ completions, effort ⇒
  * responses).
  */
-
 export function channelFor(record: CatalogRecord, knownApis?: ReadonlyMap<string, Api>): Api {
   const id = typeof record.id === "string" ? record.id : undefined;
   if (id !== undefined && knownApis !== undefined) {
@@ -280,9 +278,10 @@ function buildModel(
 }
 
 /**
- * The `interleaved` value a models.dev record carries, if any. Single owner of
- * the field's interpretation: `channelFor` treats any defined value as a
- * completions signal, `compatFor` narrows it to a `reasoning_content` passback.
+ * The raw `interleaved` value of a models.dev record, if any. The one place
+ * that key is read: `channelFor` treats any defined value as a completions
+ * signal, while `requiresReasoningContentPassback` narrows it to a
+ * `reasoning_content` passback.
  */
 function interleavedOf(record: CatalogRecord): unknown {
   return record.interleaved;
