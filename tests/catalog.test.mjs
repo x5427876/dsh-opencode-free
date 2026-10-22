@@ -598,10 +598,26 @@ test('derive sets reasoning_content passback for interleaved models', () => {
 test('derive omits reasoning_content passback without interleaved', () => {
   const { candidates } = derive(modelsDict(), { template: template() })
   const noInterleaved = candidates.find((m) => m.id === 'ling-3.0-flash-fin-free')
-  assert.notEqual(noInterleaved.compat?.requiresReasoningContentOnAssistantMessages, true,
-    'no interleaved means no passback')
-  const responses = candidates.find((m) => m.id === 'muse-spark-1.3-contributor-free')
-  assert.equal(responses.compat, undefined, 'responses channel drops compat')
+  assert.deepEqual(noInterleaved.compat, template().compat,
+    'without interleaved the template compat is inherited unchanged')
+})
+
+test('derive ignores interleaved signals that are not a reasoning_content field', () => {
+  const section = {
+    // OpenRouter-style structured reasoning: a different wire field, so the
+    // reasoning_content passback flag would be the wrong instruction.
+    'foreign-field-free': { cost: { input: 0, output: 0 }, interleaved: { field: 'reasoning_details' } },
+    // Bare boolean: the field name is unspecified, so no passback is claimed.
+    'boolean-interleaved-free': { cost: { input: 0, output: 0 }, interleaved: true },
+    // Arrays are not a record; they must not be read as an interleaved spec.
+    'array-interleaved-free': { cost: { input: 0, output: 0 }, interleaved: [] },
+  }
+  const { candidates } = derive(section, { template: template() })
+  for (const model of candidates) {
+    assert.equal(model.api, 'openai-completions', `${model.id} stays on completions`)
+    assert.equal(model.compat.requiresReasoningContentOnAssistantMessages, undefined,
+      `${model.id} takes no passback`)
+  }
 })
 
 // ── T2 fetch + cache ────────────────────────────────────────────────────────
