@@ -47,7 +47,7 @@ Check your DSH version, then install the pinned package:
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.3.6
+dsh plugin --profile web add dsh-opencode-free@0.3.7
 ```
 
 Replace `web` with your target profile. If already installed, use the update
@@ -75,6 +75,7 @@ dsh plugin --profile web remove dsh-opencode-free
 
 | Plugin | DSH |
 |---|---|
+| `0.3.7` | `0.2.1-rc.2` |
 | `0.3.6` | `0.2.1-rc.2` |
 | `0.3.5` | `0.2.1-alpha.5` |
 | `0.3.4` | `0.2.1-alpha.3` |
