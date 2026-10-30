@@ -11,7 +11,7 @@
 
 - **原生整合：** 模型出現在 DSH 模型選單的 **OpenCode Zen Free** 下，支援串流、推理、
   工具呼叫、用量與取消請求。
-- **自動更新目錄：** 模型資料取自 [models.dev](https://models.dev) 與 Zen 即時目錄，
+- **自動更新目錄：** 模型清單與資料取自 Zen 官方模型清單（僅限免費模型），
   可在插件詳情頁隱藏個別模型。
 - **可用性檢查：** 詳情頁提供檢查結果與延遲；額度限制與准入拒絕不會移除模型。
 
@@ -30,7 +30,7 @@
 
 | 項目 | 版本 |
 |---|---|
-| DeepSeek Harness | `0.2.1-rc.2`（必須完全相同） |
+| DeepSeek Harness | `0.2.1-rc.5`（必須完全相同） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只支援一個 DSH 版本。四個執行期 peer 依賴都是必要的，請勿忽略
@@ -42,7 +42,7 @@ peer dependency 警告。
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.3.7
+dsh plugin --profile web add dsh-opencode-free@0.4.0
 ```
 
 請將 `web` 換成你的目標 profile。若已安裝，請改用下方的更新指令，不要重複新增。
@@ -69,6 +69,7 @@ dsh plugin --profile web remove dsh-opencode-free
 
 | 插件 | DSH |
 |---|---|
+| `0.4.0` | `0.2.1-rc.5` |
 | `0.3.7` | `0.2.1-rc.2` |
 | `0.3.6` | `0.2.1-rc.2` |
 | `0.3.5` | `0.2.1-alpha.5` |
@@ -148,10 +149,9 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 - **除錯隱私：** `DSH_OPENCODE_FREE_DEBUG=1` 可啟用診斷。目前記錄包含 Authorization
   前綴與截斷的上游錯誤，請視為敏感資料，不要公開原始記錄。詳見
   [已知差距](docs/standards-gap.md#g1-debug-logs-include-authorization-fragments)。
-- **驗證範圍：** [Windows headless 報告](docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md)
-  記錄了 8 個選定模型通過 L0／文字／read／pwsh，另有 4 個官方項目分類未明
-  （退出碼 `2`）。此輪早於 compat 包裝函式重構；完整驗收、Web、Desktop 與
-  上下文壓縮仍未驗證。
+- **驗證範圍：** 相容性驗證結果不存放在儲存庫：結果取決於環境、版本、時間與共用的
+  匿名額度。需要目前的證據時，請依[相容性驗證指南](docs/compat-run.md)自行執行。
+  headless 驗證不涵蓋 Web、Desktop 與上下文壓縮。
 
 ## 疑難排解
 

@@ -11,13 +11,14 @@ Use Node matching `package.json` and pnpm from this clone. No global DSH or Zen
 key is required. Run through pnpm: the driver needs its `npm_execpath`.
 
 ```sh
-pnpm compat --dsh 0.2.1-rc.2 --tools --out <unique-report-directory>
+pnpm compat --dsh 0.2.1-rc.5 --tools --out .compat/<unique-name>
 ```
 
 | Option | Meaning |
 |---|---|
 | `--dsh <version>` | Required; must match both exact DSH peer pins in `package.json`. |
 | `--tools` | Adds read and shell checks. Required for full L0/L1/L2 acceptance. |
+| `--l0-only` | Checks every free conversational model at L0 alone, from the one warmup probe round: about one request per model and no L1 or L2. Cannot be combined with `--model` or `--tools`; never full acceptance. |
 | `--model <id>` | Restricts the run to one officially classified free conversational model; cannot establish full-model acceptance. |
 | `--out <dir>` | Writes allowlisted Markdown and JSON reports. Without it, no report is written to the working tree. |
 | `--keep` | Retains the temporary environment for debugging; otherwise it is removed. |
@@ -28,20 +29,27 @@ recorded run, not by the driver's cross-platform implementation.
 ## Scope and isolation
 
 1. Check the requested version against both peer pins before installation.
-2. Fetch official live model IDs and current official pricing/endpoint evidence
-   afresh each round. Classify free conversational targets independently of the
-   plugin catalogue ([ADR-0004](adr/0004-official-dynamic-compat-targets.md)).
-   Paid/non-conversational exclusions need evidence; uncertain IDs receive no
-   inference and prevent complete acceptance. Missing models.dev metadata cannot
-   silently remove an official target. Never reuse a report as the next target list.
+2. Fetch the official model list (`/inference/v1/models`) afresh each round and
+   classify free conversational targets from its price, type, transport and
+   effort fields, with code independent of the plugin catalogue
+   ([ADR-0005](adr/0005-official-model-list-as-free-model-source.md)).
+   Paid/non-conversational exclusions are recorded with their reason; an entry
+   whose price cannot be read receives no inference and prevents complete
+   acceptance. The documentation page is only a cross-check: disagreement is a
+   warning in the report and never changes the targets. Never reuse a report as
+   the next target list.
 3. Pack the working tree and install it with the requested DSH in a fresh
    temporary `DSH_HOME` and workspace. Do not read or change user profiles,
    credentials, or running DSH processes.
 4. Apply a headless overlay supplying the required loopback `webServer`, model
    selection and reasoning effort, with title inference disabled. Anonymous
    runs do not inherit `OPENCODE_API_KEY`.
-5. Record the fixed target snapshot and actual probe targets. Do not drop failed
+5. Record the official list snapshot (time, entry count, free IDs, a digest that
+   ignores volatile fields) and the actual probe targets. Do not drop failed
    models or combine different rounds to manufacture complete coverage.
+6. Check that the plugin's picker offers exactly the official free set. A model
+   it offers that the official list does not call free is a `plugin-fault`; a
+   missing one is reported per model as before.
 
 ## Required evidence
 
@@ -88,7 +96,7 @@ There is no overall run time limit.
 
 ## Quota and keyed comparison
 
-Warmup probes enabled targets; L1 adds one request per tested model, L2 adds two,
+Warmup probes enabled targets (`--l0-only` stops there); L1 adds one request per tested model, L2 adds two,
 and channel fallback or finite retries can add more. Do not promise a fixed
 quota cost or anonymous success.
 
@@ -105,7 +113,5 @@ bodies, conversations, reasoning, or tool inputs/results. Record source revision
 packed tarball hash, resolved runtime versions, OS/Node, target sources/times,
 requested layers, selection gaps, and runner/strict outcomes.
 
-Headless results do not establish Web/Desktop UI or compaction behavior. Read
-[dated reports](compat-reports/) only for the recorded environment. The original
-alpha.3 inspection and false-pass analysis are [archived](archive/compat-acceptance-alpha3.md),
-not an additional current procedure to execute.
+Headless results do not establish Web/Desktop UI or compaction behavior. Run output is
+not committed: it holds only for the environment, versions and time it recorded.

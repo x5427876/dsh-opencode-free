@@ -1,52 +1,51 @@
 /**
- * Model catalogue owner: the models.dev `opencode.models` dictionary is the
- * source of truth for WHICH free models exist, while Zen's `/models` stays the
- * availability gate (a model models.dev calls free can still be unserved).
+ * Model catalogue owner: Zen's own model list (`/inference/v1/models`) is the
+ * single source of truth for WHICH free models exist and for what each one can
+ * do — limits, input modalities, reasoning levels and the channel it speaks. A
+ * model is free when the list says every cost it declares is zero; nothing else
+ * decides membership.
  *
  * Three layers, deliberately separable so each failure mode is attributable:
- *   1. derivation (pure): free test, activity test, channel inference, metadata
+ *   1. derivation (pure): free test, list validation, channel and metadata
  *      mapping — no I/O, fully fixture-testable;
- *   2. fetch + cache: one conditional GET of the 5.2MB `api.json` (models.dev
- *      publishes no per-provider endpoint), storing ONLY the models dictionary
- *      so a warm start never re-downloads it;
- *   3. the state container: TTL, single-flight, degradation, and the Zen gate.
+ *   2. fetch + cache: one GET of the list (~95KB, no ETag), persisting only the
+ *      free entries so a warm start never has to wait for the network;
+ *   3. the state container: one lazy refresh axis, single-flight, degradation.
  *
- * DSH never calls `provider.refreshModels` (no host caller exists), so this
- * module owns its own trigger. It is host-side only: no DSH `ctx` concepts live
- * here, lifecycle wiring stays in `index.ts`.
+ * Being listed is necessary, not sufficient: whether a listed model actually
+ * answers is the probe's question (see `runProbeRound`).
+ *
+ * DSH never calls `provider.refreshModels` for this list (no host caller
+ * exists), so this module owns its own trigger. It is host-side only: no DSH
+ * `ctx` concepts live here, lifecycle wiring stays in `index.ts`.
  *
  * Identity (`provider` / `baseUrl` / `headers`) is NOT defined here — it is
  * inherited from `template`, an already identity-mapped pi-ai record, so the
- * Zen identity constants keep exactly one owner in `zen-provider.ts` and no
- * import cycle is introduced.
+ * Zen identity constants keep exactly one owner in `zen-provider.ts`.
  */
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { PLUGIN_VERSION } from "./zen-provider.js";
+import { zenListRequest } from "./zen-provider.js";
 
-/** Whole-file endpoint: models.dev serves no per-provider JSON (verified). */
-export const MODELS_DEV_URL = "https://models.dev/api.json";
-/** Cache schema version; anything else is treated as no cache at all. */
-export const CACHE_VERSION = 1;
-/** D4: lazy revalidation window. */
-export const DEFAULT_TTL_MS = 86_400_000;
 /**
- * Active-catalogue TTL, reached only when the previous fetch answered `304`.
- *
- * 24h is the conservative default; 6h is earned. Measured 2026-09-30: models.dev
- * answers `If-None-Match` with `304` and 0 bytes, so a revalidation that HITS costs
- * a few hundred bytes rather than 5.2MB, and the worst-case lag on a newly free
- * model drops from a day to six hours. A provider that stopped honouring the header
- * would instead see 5.2MB four times a day per user, so a MISS resets the interval
- * and the cost falls back to one download a day. The shortened window is taken from
- * observed behaviour and withdrawn the moment that behaviour stops — the full
- * argument, including why a competitor's shorter window really is a re-download, is
- * in `docs/adr/0002-catalogue-source-of-truth.md`.
+ * Cache schema version. Version 1 held a third-party models dictionary; its
+ * verdicts and round report are still read (see {@link readCache}), its models
+ * are not. Anything else is treated as no cache at all.
  */
+export const CACHE_VERSION = 2;
+/**
+ * Lazy revalidation window for the whole list. The GET spends no inference
+ * quota, so thirty minutes keeps a withdrawn or newly free model's lag small;
+ * the answer has no ETag and is re-downloaded in full (~95KB), which is why the
+ * window is not shorter. Not driven by a timer: a read past the window starts
+ * the refresh.
+ */
+export const CATALOG_TTL_MS = 30 * 60_000;
 /**
  * Floor between two MANUAL probe rounds. The automatic round is bounded by
  * `probedToday(lastProbeAt, now)` (one per local calendar day), but `forceProbes()` is reachable
@@ -56,38 +55,20 @@ export const DEFAULT_TTL_MS = 86_400_000;
  *.
  */
 export const FORCED_PROBE_MIN_INTERVAL_MS = 5 * 60_000;
-
-export const CATALOG_TTL_ACTIVE_MS = 6 * 60 * 60_000;
-/**
- * How long a Zen availability answer is trusted before it is re-asked.
- *
- * This is a second, independent expiry axis, and it is not a guess about the
- * catalogue's cost. `GET /zen/v1/models` spends no inference quota at all, so it
- * can be asked far more often than a completion can be spent — which is the
- * whole reason the round asks it before probing anything
- * (see {@link refreshGate}). Thirty minutes keeps a withdrawn model out of the
- * picker at minutes' notice instead of the 24h a catalogue-only refresh costs.
- *
- * Not persisted: a boot treats the gate as unasked. One tiny GET per start is
- * cheaper than a schema change, and it self-heals after downtime for free.
- */
-export const GATE_TTL_MS = 30 * 60_000;
 /** D1: bounded so a hung endpoint cannot pin a plugin fiber. */
 export const DEFAULT_TIMEOUT_MS = 10_000;
-/** R1: the real file is ~5.2MB; 20MB leaves headroom and rejects a runaway. */
-export const DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
+/** R1: the real answer is ~95KB; 2MB leaves headroom and rejects a runaway. */
+export const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 /** Re-exported so `catalog.ts` consumers do not need a second import. */
 export { PLUGIN_VERSION } from "./zen-provider.js";
+
 /**
- * models.dev is NOT Zen: it gets an honest agent string. Reusing the OpenCode
- * CLI identity here would be both pointless and misleading.
+ * Where the catalogue came from, as reported to the panel: `official` once a
+ * list has been adopted (from the cache or the network), `none` before that.
  */
-export const DEFAULT_USER_AGENT = `dsh-opencode-free/${PLUGIN_VERSION}`;
+export type CatalogSource = "official" | "none";
 
-/** Where the catalogue came from, as reported to the panel. */
-export type CatalogSource = "models.dev" | "builtin-fallback";
-
-/** A models.dev model record, before mapping. Deliberately loose. */
+/** One entry of Zen's model list, before mapping. Deliberately loose. */
 export type CatalogRecord = Record<string, unknown>;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -98,38 +79,79 @@ function finitePositive(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-/** D2: zero cost across every declared dimension. */
-export function isFree(record: CatalogRecord): boolean {
-  const cost = record.cost;
-  if (!isPlainObject(cost)) return false;
-  const values = Object.values(cost);
-  return values.length > 0 && values.every((value) => value === 0);
+function nonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-/** D2: models.dev omits `status` for active models; only `deprecated` retires one. */
-export function isActive(record: CatalogRecord): boolean {
-  return record.status !== "deprecated";
+type CostClass = "free" | "paid" | "unparseable";
+
+/**
+ * What one entry's declared text cost says. The input and output prices must be
+ * readable numbers; a cache price is optional but, when declared, must be one
+ * too. Anything unreadable is `unparseable` — never guessed free.
+ */
+export function costClassOf(record: CatalogRecord): CostClass {
+  const cost = record.cost;
+  const text = isPlainObject(cost) ? cost.text : undefined;
+  if (!isPlainObject(text)) return "unparseable";
+  const { input, output } = text;
+  if (!isPlainObject(input) || !isPlainObject(output)) return "unparseable";
+  if (!nonNegative(input.price) || !nonNegative(output.price)) return "unparseable";
+  const declared: number[] = [input.price, output.price];
+  for (const side of [input, output]) {
+    if (side.cache === undefined) continue;
+    if (!isPlainObject(side.cache)) return "unparseable";
+    for (const price of [side.cache.read, side.cache.write]) {
+      if (price === undefined) continue;
+      if (!nonNegative(price)) return "unparseable";
+      declared.push(price);
+    }
+  }
+  return declared.every((price) => price === 0) ? "free" : "paid";
+}
+
+/** D2: a conversational entry whose every declared cost is zero. */
+export function isFree(record: CatalogRecord): boolean {
+  return record.type === "chat" && costClassOf(record) === "free";
+}
+
+/** What one successful answer contained, after validation. */
+export interface OfficialList {
+  /** The free conversational entries, as published, in published order. */
+  readonly free: CatalogRecord[];
+  /**
+   * Conversational entries whose cost could not be read. They are excluded from
+   * {@link free}, never treated as free, and counted so a changed shape shows up
+   * as a number instead of as a silently shorter list.
+   */
+  readonly unclassified: number;
 }
 
 /**
- * D1: what the catalogue keeps — `status` absent (how models.dev says active),
- * `active`, or `deprecated`. A `deprecated` model STAYS in the catalogue:
- * only a probe can tell a finished free tier from a stale upstream record, and
- * a model dropped here could never be probed or brought back (D6a). Any other
- * status value is discarded outright.
+ * Validate one answer. `null` means "could not tell" and must leave the current
+ * list alone: the body is not `{data: [...]}`, the list is empty, or not one
+ * entry has a readable cost (a renamed field, not a withdrawal of everything).
+ * A well-formed answer naming zero free models is NOT `null` — it is the answer.
  */
-export function isCatalogueStatus(record: CatalogRecord): boolean {
-  const status = record.status;
-  if (status === undefined) return true;
-  return status === "active" || status === "deprecated";
-}
-
-function reasoningOptionTypes(record: CatalogRecord): string[] {
-  const options = record.reasoning_options;
-  if (!Array.isArray(options)) return [];
-  return options
-    .map((option) => (isPlainObject(option) && typeof option.type === "string" ? option.type : undefined))
-    .filter((type): type is string => type !== undefined);
+export function parseOfficialList(body: unknown): OfficialList | null {
+  if (!isPlainObject(body) || !Array.isArray(body.data)) return null;
+  const seen = new Set<string>();
+  const free: CatalogRecord[] = [];
+  let readable = 0;
+  let unclassified = 0;
+  let entries = 0;
+  for (const entry of body.data) {
+    if (!isPlainObject(entry) || typeof entry.id !== "string" || entry.id === "" || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    entries += 1;
+    const cost = costClassOf(entry);
+    if (cost !== "unparseable") readable += 1;
+    if (entry.type !== "chat") continue;
+    if (cost === "unparseable") unclassified += 1;
+    else if (cost === "free") free.push(entry);
+  }
+  if (entries === 0 || readable === 0) return null;
+  return { free, unclassified };
 }
 
 /** pi-ai's level vocabulary, in the order it filters them. */
@@ -139,18 +161,19 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "ma
  * `getSupportedThinkingLevels` treats `xhigh` and `max` as opt-in — absent from
  * the map means NOT offered — but includes `off`/`minimal`/`low`/`medium`/`high`
  * unless they are explicitly mapped to `null`. A faithful map therefore has to
- * null out the ones models.dev does not publish; leaving them absent would
+ * null out the ones the list does not publish; leaving them absent would
  * offer a level the model rejects.
  */
 const OPT_IN_THINKING_LEVELS = new Set<string>(["xhigh", "max"]);
 
 /**
- * D6: the thinking levels models.dev publishes for this model, as pi-ai's
- * `thinkingLevelMap`.
+ * D6: the reasoning levels the list publishes for this model
+ * (`capabilities.reasoning.effort`), as pi-ai's `thinkingLevelMap`.
  *
  * The values are identity because OpenCode is OpenAI-compatible and the level
  * name is what goes on the wire (`reasoning_effort` on completions, `effort` on
- * responses); the map's job here is to say which levels EXIST.
+ * responses); the map's job here is to say which levels EXIST. A published
+ * `none` is not a level pi-ai has a name for and is ignored.
  *
  * `off` is deliberately left absent (offered) rather than nulled: it means
  * "send no reasoning parameter", which is a real choice the user asked to keep
@@ -160,26 +183,19 @@ const OPT_IN_THINKING_LEVELS = new Set<string>(["xhigh", "max"]);
  * to "no reasoning object" by the plugin's onPayload guard in zen-provider.ts,
  * so offering it is safe.
  *
- * `undefined` means "models.dev published no level list, so make no claim" —
- * pi-ai then falls back to its own default set. That is the honest answer for
- * a `toggle` model (reasoning is on or off, and pi-ai has no name for bare
- * "on") and for a record with `reasoning_options: []`. Guessing there would
- * offer levels upstream rejects, which surfaces as an
- * `UNSUPPORTED_REASONING_EFFORT` failure rather than as a clamp.
+ * `undefined` means "no level list was published, so make no claim" — pi-ai
+ * then falls back to its own default set. Guessing there would offer levels
+ * upstream rejects, which surfaces as an `UNSUPPORTED_REASONING_EFFORT` failure
+ * rather than as a clamp.
  */
 export function thinkingLevelMapFor(record: CatalogRecord): Record<string, string | null> | undefined {
-  const options = record.reasoning_options;
-  if (!Array.isArray(options)) return undefined;
+  const capabilities = record.capabilities;
+  const reasoning = isPlainObject(capabilities) ? capabilities.reasoning : undefined;
+  const effort = isPlainObject(reasoning) ? reasoning.effort : undefined;
+  if (!Array.isArray(effort)) return undefined;
   const published = new Set<string>();
-  for (const option of options) {
-    if (!isPlainObject(option) || option.type !== "effort") continue;
-    const values = option.values;
-    if (!Array.isArray(values)) continue;
-    for (const value of values) {
-      if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) {
-        published.add(value);
-      }
-    }
+  for (const value of effort) {
+    if (typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value)) published.add(value);
   }
   if (published.size === 0) return undefined;
   const map: Record<string, string | null> = {};
@@ -196,47 +212,49 @@ export function thinkingLevelMapFor(record: CatalogRecord): Record<string, strin
 }
 
 /**
- * D6, three tiers: the pi-ai builtin table when it knows the model, then
- * models.dev signals, then the provider's own default. Validated 7/7 against
- * the known opencode models (interleaved/toggle ⇒ completions, effort ⇒
- * responses).
+ * D6, three tiers: the channel the entry itself declares (`api` keys), then the
+ * pi-ai builtin table when it knows the model, then the provider's own default.
+ * The entry wins because it is the upstream's own statement of where the model
+ * is served; the rest are inference.
  */
 export function channelFor(record: CatalogRecord, knownApis?: ReadonlyMap<string, Api>): Api {
+  const api = record.api;
+  if (isPlainObject(api)) {
+    if ("chat-completions" in api) return "openai-completions";
+    if ("responses" in api) return "openai-responses";
+  }
   const id = typeof record.id === "string" ? record.id : undefined;
   if (id !== undefined && knownApis !== undefined) {
     const known = knownApis.get(id);
     if (known !== undefined) return known;
   }
-  if (interleavedOf(record) !== undefined) return "openai-completions";
-  const types = reasoningOptionTypes(record);
-  if (types.includes("toggle")) return "openai-completions";
-  if (types.includes("effort")) return "openai-responses";
   return "openai-completions";
 }
 
 export interface DeriveOptions {
-  /** pi-ai builtin `id -> api`, tier 1 of D6. */
+  /** pi-ai builtin `id -> api`, tier 2 of D6. */
   readonly knownApis?: ReadonlyMap<string, Api>;
   /** An already identity-mapped record supplying the fallback field values. */
   readonly template: Model<Api>;
 }
 
 export interface DerivedCatalog {
-  /** Free AND `status ∈ {active, deprecated}` — the pre-Zen-gate catalogue. */
+  /** Every free conversational model the list names, in id order. */
   readonly candidates: Model<Api>[];
 }
 
 /**
- * One models.dev record → one pi-ai model. Everything the plugin can learn
- * about a model's CAPABILITIES is taken from the record rather than inherited:
+ * One list entry → one pi-ai model. Everything the plugin can learn about a
+ * model's CAPABILITIES is taken from the entry rather than inherited:
  *
- *   - image input      ← `modalities.input` (pi-ai knows only text/image, so
- *                        audio/video/pdf are dropped, not silently kept)
+ *   - image input      ← `modalities.input` (pi-ai knows only text/image, so any
+ *                        `image/*` type counts as image; audio/video/pdf are
+ *                        dropped, not silently kept)
  *   - context window   ← `limit.context`
  *   - max output       ← `limit.output`
- *   - thinking levels  ← `reasoning_options[].values`
+ *   - thinking levels  ← `capabilities.reasoning.effort`
  *
- * A field models.dev does not publish falls back to the template, and the
+ * A field the list does not publish falls back to the template, and the
  * template is one fixed record — so `thinkingLevelMap` is set EXPLICITLY in
  * both branches. Inheriting another model's level list would offer levels this
  * model rejects, which the host reports as `UNSUPPORTED_REASONING_EFFORT`
@@ -250,17 +268,22 @@ function buildModel(
   const id = typeof record.id === "string" && record.id !== "" ? record.id : "";
   const api = channelFor(record, knownApis);
   const limit = isPlainObject(record.limit) ? record.limit : {};
+  const capabilities = isPlainObject(record.capabilities) ? record.capabilities : {};
+  const reasoning = isPlainObject(capabilities.reasoning) ? capabilities.reasoning : {};
   const modalities = isPlainObject(record.modalities) ? record.modalities : {};
-  const declaredInput = Array.isArray(modalities.input)
-    ? modalities.input.filter((entry): entry is "text" | "image" => entry === "text" || entry === "image")
-    : [];
+  const declaredInput: ("text" | "image")[] = [];
+  if (Array.isArray(modalities.input)) {
+    const types = modalities.input.filter((entry): entry is string => typeof entry === "string");
+    if (types.includes("text")) declaredInput.push("text");
+    if (types.some((type) => type === "image" || type.startsWith("image/"))) declaredInput.push("image");
+  }
   const levels = thinkingLevelMapFor(record);
   return {
     ...template,
     id,
     name: typeof record.name === "string" && record.name !== "" ? record.name : id,
     api,
-    reasoning: typeof record.reasoning === "boolean" ? record.reasoning : template.reasoning,
+    reasoning: typeof reasoning.supported === "boolean" ? reasoning.supported : template.reasoning,
     input: declaredInput.length > 0 ? declaredInput : template.input,
     // Free by construction here (isFree already proved it); stated explicitly
     // so a stray inherited tier cannot reintroduce a non-zero rate.
@@ -271,34 +294,22 @@ function buildModel(
     // `compat` is transport-specific. Carrying the template's completions
     // overrides onto a responses model would misconfigure it, so a channel
     // change drops them and lets pi-ai auto-detect from baseUrl.
-    // `interleaved` (reasoning_content) additionally requires passback on every
+    // A `reasoning_content` field additionally requires passback on every
     // assistant message in thinking mode with tools.
     compat: compatFor(record, template, api) as Model<Api>["compat"],
   };
 }
 
 /**
- * The raw `interleaved` value of a models.dev record, if any. The one place
- * that key is read: `channelFor` treats any defined value as a completions
- * signal, while `requiresReasoningContentPassback` narrows it to a
- * `reasoning_content` passback.
- */
-function interleavedOf(record: CatalogRecord): unknown {
-  return record.interleaved;
-}
-
-/**
- * Whether a models.dev record's reasoning is carried in a `reasoning_content`
- * field that the endpoint requires on every assistant message in thinking mode
- * when tools are present. Rule: `interleaved.field` is `reasoning_content`
- * (or absent) ⇒ passback is required. Boolean `true` is intentionally not
- * handled: no free model in the opencode section uses it.
+ * Whether the entry says its reasoning travels in a `reasoning_content` field
+ * (`api["chat-completions"].compatibility.reasoning_field`) that the endpoint
+ * requires on every assistant message in thinking mode when tools are present.
  */
 function requiresReasoningContentPassback(record: CatalogRecord): boolean {
-  const interleaved = interleavedOf(record);
-  if (!isPlainObject(interleaved)) return false;
-  const field = interleaved.field;
-  return field === undefined || field === "reasoning_content";
+  const api = record.api;
+  const completions = isPlainObject(api) ? api["chat-completions"] : undefined;
+  const compatibility = isPlainObject(completions) ? completions.compatibility : undefined;
+  return isPlainObject(compatibility) && compatibility.reasoning_field === "reasoning_content";
 }
 
 /**
@@ -325,24 +336,20 @@ export function byId<T extends { readonly id: string }>(a: T, b: T): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Pure: models.dev models dictionary → pre-gate catalogue. */
-export function derive(section: CatalogRecord, options: DeriveOptions): DerivedCatalog {
+/** Pure: list entries → catalogue. Anything that is not a free chat entry is skipped. */
+export function derive(entries: readonly CatalogRecord[], options: DeriveOptions): DerivedCatalog {
   const candidates: Model<Api>[] = [];
-  for (const [key, value] of Object.entries(section)) {
-    if (!isPlainObject(value)) continue;
-    const id = typeof value.id === "string" && value.id !== "" ? value.id : key;
-    if (id === "") continue;
-    const record: CatalogRecord = { ...value, id };
-    if (!isFree(record)) continue;
-    // D1: `deprecated` is kept (a probe judges it); anything else is discarded.
-    if (!isCatalogueStatus(record)) continue;
-    candidates.push(buildModel(record, options.template, options.knownApis));
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    if (!isPlainObject(entry) || typeof entry.id !== "string" || entry.id === "" || seen.has(entry.id)) continue;
+    if (!isFree(entry)) continue;
+    seen.add(entry.id);
+    candidates.push(buildModel(entry, options.template, options.knownApis));
   }
   // Sorted HERE, at the one place the list is born, so the snapshot, the
   // visible set and the picker all inherit the same order instead of each
-  // deciding for itself. models.dev's own order is grouped by vendor and
-  // family, which reads as arbitrary to anyone scanning for one model.
-  return { candidates: candidates.slice().sort(byId) };
+  // deciding for itself.
+  return { candidates: candidates.sort(byId) };
 }
 
 export interface FetchLikeResponse {
@@ -357,36 +364,31 @@ export type FetchLike = (
   init: { headers: Record<string, string>; signal?: AbortSignal },
 ) => Promise<FetchLikeResponse>;
 
-export interface FetchSectionOptions {
+export interface FetchListOptions {
   readonly fetchImpl: FetchLike;
-  /** Sent as `if-none-match`; callers MUST omit it when no cache exists (R5). */
-  readonly etag?: string | undefined;
-  readonly url?: string;
-  readonly userAgent?: string;
+  /** Defaults to Zen's list request (URL and the headers its free tier requires). */
+  readonly request?: { readonly url: string; readonly headers: Record<string, string> };
   readonly timeoutMs?: number;
   readonly maxBytes?: number;
 }
 
-export type FetchSectionResult =
-  | { readonly kind: "not-modified" }
-  | { readonly kind: "ok"; readonly etag: string | undefined; readonly section: CatalogRecord }
+export type FetchListResult =
+  | { readonly kind: "ok"; readonly list: OfficialList }
   | { readonly kind: "failed"; readonly reason: string };
 
-/** D1: one conditional GET. Every failure mode is reported, never thrown. */
-export async function fetchSection(options: FetchSectionOptions): Promise<FetchSectionResult> {
+/** D1: one GET. Every failure mode is reported, never thrown. */
+export async function fetchOfficialList(options: FetchListOptions): Promise<FetchListResult> {
   const {
     fetchImpl,
-    etag,
-    url = MODELS_DEV_URL,
-    userAgent = DEFAULT_USER_AGENT,
+    request = zenListRequest(),
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxBytes = DEFAULT_MAX_BYTES,
   } = options;
-  const headers: Record<string, string> = { accept: "application/json", "user-agent": userAgent };
-  if (typeof etag === "string" && etag !== "") headers["if-none-match"] = etag;
   try {
-    const response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(timeoutMs) });
-    if (response.status === 304) return { kind: "not-modified" };
+    const response = await fetchImpl(request.url, {
+      headers: { ...request.headers },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (!response.ok) return { kind: "failed", reason: `http ${response.status}` };
     const text = await readBounded(response, maxBytes);
     if (text === null) return { kind: "failed", reason: "response too large" };
@@ -398,18 +400,9 @@ export async function fetchSection(options: FetchSectionOptions): Promise<FetchS
       // compare on this vocabulary.
       return { kind: "failed", reason: "malformed response body" };
     }
-    if (!isPlainObject(body)) return { kind: "failed", reason: "malformed response body" };
-    // api.json is keyed by provider: `body.opencode` is the PROVIDER record
-    // ({id,env,npm,api,name,doc,models}) and the model dictionary sits one
-    // level deeper. Handing the provider record to `derive` yields an EMPTY
-    // catalogue — none of those keys carries a zero cost — which is worse than
-    // the offline floor. The unwrap therefore happens here, once, and `derive`
-    // only ever sees a models dictionary.
-    const provider = body.opencode;
-    if (!isPlainObject(provider)) return { kind: "failed", reason: "missing opencode section" };
-    const models = provider.models;
-    if (!isPlainObject(models)) return { kind: "failed", reason: "missing opencode models section" };
-    return { kind: "ok", etag: response.headers.get("etag") ?? undefined, section: models };
+    const list = parseOfficialList(body);
+    if (list === null) return { kind: "failed", reason: "unrecognised model list" };
+    return { kind: "ok", list };
   } catch (error) {
     const name = isPlainObject(error) && typeof error.name === "string" ? error.name : "Error";
     const message = error instanceof Error ? error.message : String(error);
@@ -464,10 +457,13 @@ async function readBounded(response: FetchLikeResponse, maxBytes: number): Promi
 
 export interface CatalogCacheRecord {
   readonly version: number;
-  readonly etag: string | undefined;
+  /**
+   * When the list in {@link models} was fetched; 0 means no list was ever
+   * fetched (a cache that only carries verdicts), so there is nothing to adopt.
+   */
   readonly fetchedAt: number;
-  /** The `opencode.models` dictionary — named for what it holds, not the slice it came from. */
-  readonly models: CatalogRecord;
+  /** The free entries of the last successful answer, as published. Public data only. */
+  readonly models: readonly CatalogRecord[];
   /** Conclusive verdicts only; empty means "no history", i.e. all unprobed. */
   readonly probes: ProbeMap;
   /** When the last probe ROUND ran, whether or not it concluded anything. */
@@ -512,7 +508,7 @@ export interface ProbeRecord {
    * The channel this model actually ANSWERED on, when a probe found one.
    *
    * Everything else about a model's channel is inference: a pi-ai builtin table
-   * entry, a models.dev signal, or a provider default. Inference is what sends a
+   * entry, the list's own declaration, or a provider default. Inference is what sends a
    * request down the wrong channel and gets "model not supported" back — which
    * is indistinguishable from a dead model without asking the other channel. So
    * when the sweep DID get an answer, that answer outranks every inference above:
@@ -604,21 +600,57 @@ export function cachePath(env: Record<string, string | undefined> = process.env)
   return join(home, "dsh-opencode-free", "catalog.json");
 }
 
-/** Any unreadable/foreign cache is simply "no cache" — never an error. */
+/**
+ * Any unreadable/foreign cache is simply "no cache" — never an error.
+ *
+ * Version 1 files (written before the list became the source) still carry the
+ * verdicts and the last round's report, which are worth keeping across the
+ * upgrade; their models dictionary and ETag belong to a source that no longer
+ * exists and are dropped, so `fetchedAt` is 0 and the first read fetches.
+ */
 export async function readCache(path: string): Promise<CatalogCacheRecord | null> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    return parseCache(await readFile(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Same answer as {@link readCache}, without yielding. The file holds only the
+ * free entries, so a local read is cheap, and the catalogue needs it before the
+ * host asks for its first model list: with an asynchronous read that first
+ * answer could be empty even though a perfectly good cache is on disk.
+ */
+export function readCacheSync(path: string): CatalogCacheRecord | null {
+  try {
+    return parseCache(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function parseCache(text: string): CatalogCacheRecord | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
     if (!isPlainObject(parsed)) return null;
-    if (parsed.version !== CACHE_VERSION) return null;
-    // The `models` guard is what makes the field rename safe: a file still
-    // carrying the old `opencode` provider record is rejected outright rather
-    // than adopted as a catalogue.
-    if (!isPlainObject(parsed.models)) return null;
+    let models: readonly CatalogRecord[];
+    let fetchedAt: number;
+    if (parsed.version === CACHE_VERSION) {
+      if (!Array.isArray(parsed.models)) return null;
+      models = parsed.models.filter(isPlainObject);
+      fetchedAt = typeof parsed.fetchedAt === "number" && Number.isFinite(parsed.fetchedAt) ? parsed.fetchedAt : 0;
+    } else if (parsed.version === 1) {
+      if (!isPlainObject(parsed.models)) return null;
+      models = [];
+      fetchedAt = 0;
+    } else {
+      return null;
+    }
     return {
       version: CACHE_VERSION,
-      etag: typeof parsed.etag === "string" ? parsed.etag : undefined,
-      fetchedAt: typeof parsed.fetchedAt === "number" ? parsed.fetchedAt : 0,
-      models: parsed.models,
+      fetchedAt,
+      models,
       probes: readProbes(parsed.probes),
       lastProbeAt:
         typeof parsed.lastProbeAt === "number" && Number.isFinite(parsed.lastProbeAt)
@@ -678,9 +710,8 @@ function readLastRound(value: unknown): CatalogCacheRecord["lastRound"] {
 export async function writeCacheAtomic(
   path: string,
   record: {
-    etag: string | undefined;
     fetchedAt: number;
-    models: CatalogRecord;
+    models: readonly CatalogRecord[];
     probes?: ProbeMap;
     lastProbeAt?: number;
     lastRound?: CatalogCacheRecord["lastRound"];
@@ -697,7 +728,6 @@ export async function writeCacheAtomic(
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
     const payload: Record<string, unknown> = {
       version: CACHE_VERSION,
-      etag: record.etag,
       fetchedAt: record.fetchedAt,
       models: record.models,
     };
@@ -726,11 +756,11 @@ export async function writeCacheAtomic(
 }
 
 export interface CatalogSnapshot {
-  /** Pre-Zen-gate catalogue (what `refreshModels` intersects and probes). */
+  /** Every free model the list names, dead ones included (what a round probes). */
   readonly models: Model<Api>[];
   /**
-   * Post-gate, post-probe ids: exactly what the picker offers. A model a probe
-   * judged `dead` is simply absent — there is no companion list naming it.
+   * Post-probe ids: exactly what the picker offers. A model a probe judged
+   * `dead` is simply absent — there is no companion list naming it.
    */
   readonly visible: readonly string[];
   /**
@@ -742,18 +772,11 @@ export interface CatalogSnapshot {
   readonly source: CatalogSource;
   readonly updatedAt: number;
   /**
-   * When Zen last answered "which ids do you serve", or 0 if never this boot.
-   *
-   * Separate from {@link updatedAt} on purpose: the two expire on different
-   * clocks, and conflating them is how a withdrawn model stays in a picker for
-   * a whole catalogue TTL. Not persisted — a boot re-asks.
+   * Conversational entries in the last answer whose cost could not be read.
+   * Excluded from the list, never assumed free; a non-zero count means the
+   * list's shape may have changed.
    */
-  readonly gateCheckedAt: number;
-  /**
-   * Ids Zen serves that look free but the catalogue has no record of. A
-   * diagnostic, never a membership input — see {@link unknownFree}.
-   */
-  readonly unknownFree: readonly string[];
+  readonly unclassified: number;
   readonly refreshing: boolean;
   /** When the last probe round ran; 0 means never. */
   readonly probedAt?: number;
@@ -778,23 +801,11 @@ export interface ModelCapability {
 const THINKING_LEVEL_RANK = ["max", "xhigh", "high", "medium", "low", "minimal"] as const;
 
 /**
- * The only signal available for a model the catalogue has never heard of.
- *
- * A known model is free because its `cost` is all zero. An unknown one has no
- * `cost` at all, so the id is the only thing left to read — and a "-free" in
- * the name is a weaker claim than a price of zero, not an equal one. It is
- * therefore used for a diagnostic line and for nothing else: never for
- * membership, never for a capability badge. The panel says so in as many words,
- * because a list that looks authoritative and is not is worse than no list.
- */
-const FREE_ID_PATTERN = /(?:^|[-_])free(?:$|[-_.])/;
-
-/**
  * The badge level for one derived record: the strongest level whose map value
  * is a real (string) entry. A string-valued map entry IS a published level —
  * `thinkingLevelMapFor` only writes identity entries for published names and
  * `null` for unpublished ones — so this reads the same fact back without
- * re-parsing models.dev. No map, or no string entry, means no badge.
+ * re-parsing the list. No map, or no string entry, means no badge.
  */
 export function topThinkingLevel(model: Model<Api>): string | null {
   const map = model.thinkingLevelMap;
@@ -817,8 +828,6 @@ export function modelCapability(model: Model<Api>): ModelCapability {
 export interface CreateCatalogOptions {
   /** Identity + fallback field source; an already identity-mapped record. */
   readonly template: Model<Api>;
-  /** D8 offline floor: the pi-ai builtin free set, used until a sync lands. */
-  readonly builtinBaseline: Model<Api>[];
   readonly knownApis?: ReadonlyMap<string, Api>;
   readonly cachePath: string;
   readonly fetchImpl: FetchLike;
@@ -829,17 +838,6 @@ export interface CreateCatalogOptions {
    */
   readonly probe?: ((model: Model<Api>) => Promise<ProbeResult>) | undefined;
   /**
-   * The ids Zen currently serves, from one `GET /zen/v1/models` — the same cheap
-   * availability check 9router performs for its free provider, and the reason
-   * that check is worth doing before anything expensive.
-   *
-   * A model missing from this list is not available, full stop, and saying so
-   * costs one GET instead of one inference request per model. Resolves null when
-   * the fetch failed, which must never narrow anything: the round then falls
-   * back to probing everything it would otherwise have probed.
-   */
-  readonly listZenIds?: (() => Promise<readonly string[] | null>) | undefined;
-  /**
    * Is this model switched OFF in the picker? A round asks only about the
    * models the user has on: a probe costs a request from a bucket shared by
    * everything behind this egress, so spending one on a model that is hidden
@@ -849,7 +847,8 @@ export interface CreateCatalogOptions {
   readonly hidden?: ((id: string) => boolean) | undefined;
   readonly now?: () => number;
   readonly ttlMs?: number;
-  readonly userAgent?: string;
+  /** Overrides Zen's list request (URL and headers); tests and tools only. */
+  readonly request?: FetchListOptions["request"];
 }
 
 /**
@@ -869,13 +868,9 @@ export interface CatalogState {
   models: Model<Api>[];
   source: CatalogSource;
   updatedAt: number;
-  zenIds: ReadonlySet<string> | null;
+  /** Unreadable-cost chat entries in the last adopted answer; see {@link CatalogSnapshot}. */
+  unclassified: number;
   inflight: Promise<void> | null;
-  gateInflight: Promise<ReadonlySet<string> | null> | null;
-  /** Set when the last catalogue fetch was a 304 rather than a body download. */
-  lastFetchWasNotModified: boolean;
-  /** When Zen last answered the availability question; 0 = never this boot. */
-  gateCheckedAt: number;
   probes: ProbeMap;
   lastProbeAt: number;
   probeUntrusted: boolean;
@@ -896,10 +891,9 @@ export interface CatalogDeps {
   readonly path: string;
   readonly fetchImpl: FetchLike;
   readonly now: () => number;
-  readonly userAgent: string | undefined;
+  readonly request: CreateCatalogOptions["request"];
   readonly ttlMs: number;
   readonly probe: CreateCatalogOptions["probe"];
-  readonly listZenIds: CreateCatalogOptions["listZenIds"];
   readonly hidden: CreateCatalogOptions["hidden"];
   readonly template: Model<Api>;
   readonly knownApis: ReadonlyMap<string, Api> | undefined;
@@ -909,17 +903,15 @@ export interface CatalogDeps {
   readonly warm: Promise<void>;
 }
 
-export function initialState(builtinBaseline: readonly Model<Api>[]): CatalogState {
+/** Empty until a list is adopted: there is no offline floor to show instead. */
+export function initialState(): CatalogState {
   return {
     cache: null,
-    models: builtinBaseline.slice().sort(byId),
-    source: "builtin-fallback",
+    models: [],
+    source: "none",
     updatedAt: 0,
-    zenIds: null,
+    unclassified: 0,
     inflight: null,
-    gateInflight: null,
-    lastFetchWasNotModified: false,
-    gateCheckedAt: 0,
     probes: {},
     lastProbeAt: 0,
     probeUntrusted: false,
@@ -929,7 +921,7 @@ export function initialState(builtinBaseline: readonly Model<Api>[]): CatalogSta
 }
 export interface Catalog {
   current(): CatalogSnapshot;
-  /** Post-Zen-gate models — the single list the picker and the panel share. */
+  /** Listed, not-dead models — the single list the picker and the panel share. */
   effectiveModels(): Model<Api>[];
   /** Fire-and-forget revalidation; shared by concurrent callers. */
   ensureFresh(): Promise<void>;
@@ -939,8 +931,6 @@ export interface Catalog {
   runProbes(): Promise<void>;
   /** Ignores the daily gate; used by the panel button (D8). */
   forceProbes(): Promise<void>;
-  /** `null` means Zen failed: keep the current gate rather than narrowing. */
-  applyZenGate(ids: readonly string[] | null): void;
   /**
    * The live progress of the current (or last) probe round, for the panel's
    * progress pill and per-row badges. In-memory only — it is a transient fuel
@@ -1023,91 +1013,31 @@ export function probedToday(lastProbeAt: number, now: () => number): boolean {
 }
 
 /**
- * The one list the picker and the panel share: the catalogue, narrowed by
- * Zen's gate, minus everything a probe judged dead. A dead model is dropped
- * from here and named nowhere — the user asked for it to simply not be in the
- * list, so there is deliberately no companion "unavailable" list to restore
- * or to go stale.
+ * The one list the picker and the panel share: the catalogue minus everything
+ * a probe judged dead. A dead model is dropped from here and named nowhere —
+ * the user asked for it to simply not be in the list, so there is deliberately
+ * no companion "unavailable" list to restore or to go stale.
  *
  * `models` itself still carries dead entries, and that is load-bearing rather
- * than untidy: `adopt` prunes verdicts for models the catalogue no longer
- * has, so a dead model physically removed from `models` would lose its
- * verdict on the next sync, come back as a fresh candidate, and be re-probed
- * to the same answer. Keeping the record is what makes the verdict final.
+ * than untidy: the verdict lives in `probes`, keyed by id, and a model the list
+ * drops and later names again must come back with its verdict instead of as a
+ * fresh candidate to be re-probed to the same answer.
  */
-export function effectiveList(
-  models: readonly Model<Api>[],
-  zenIds: ReadonlySet<string> | null,
-  probes: ProbeMap,
-): Model<Api>[] {
-  const gated = zenIds === null ? [...models] : models.filter((model) => zenIds.has(model.id));
-  // Order comes from where the catalogue is born (derive / the offline
-  // floor); this only filters, so it cannot drift from it.
-  return gated.filter((model) => probes[model.id]?.verdict !== "dead");
+export function effectiveList(models: readonly Model<Api>[], probes: ProbeMap): Model<Api>[] {
+  // Order comes from where the catalogue is born (derive); this only filters,
+  // so it cannot drift from it.
+  return models.filter((model) => probes[model.id]?.verdict !== "dead");
 }
 
 function effectiveVisible(list: readonly Model<Api>[]): string[] {
   return list.map((model) => model.id);
 }
 
-/**
- * Models Zen serves, that the catalogue has never heard of, and whose id
- * claims to be on the free tier.
- *
- * This is the one blind spot the two-source design cannot see past: membership
- * comes from models.dev, so an id Zen has started serving before models.dev
- * publishes it is invisible here — not "judged dead", not "gated out", simply
- * never a candidate. On 2026-09-30 that was one live model
- * (`jev-1.13-free`), while 24 ids models.dev still called free were correctly
- * gated out, so the gate is demonstrably working and this is not a symptom of
- * a broken intersection.
- *
- * It is reported rather than fixed, deliberately. Making these models usable
- * needs an `api` channel and a `limit.context`/`limit.output`, and NEITHER is
- * obtainable from any source available here: Zen's listing carries only
- * `id`/`object`/`created`/`owned_by`, and matching a "-free"-suffixed id
- * against other providers' records is a guess. A wrong number is worse than a
- * conservative one, because a claimed context length is acted on. So the
- * honest move is to say the model exists and that we will not guess for it.
- */
-export function unknownFree(models: readonly Model<Api>[], zenIds: ReadonlySet<string> | null): string[] {
-  if (zenIds === null) return [];
-  const known = new Set(models.map((model) => model.id));
-  const out: string[] = [];
-  for (const id of zenIds) {
-    if (known.has(id) || !FREE_ID_PATTERN.test(id)) continue;
-    out.push(id);
-  }
-  // Same order as everything else the panel shows, and the same comparison
-  // that produces it: a locale-sensitive sort would make this list differ
-  // from the catalogue's own on a machine with a different ICU default.
-  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-}
-
-/**
- * Which freshness window applies: a caller-pinned `ttlMs` is honoured verbatim
- * (tests pin it), so only the default path shortens, and only after a 304 has
- * proved the upstream honours the conditional header.
- */
-export function effectiveTtl(
-  pinnedTtl: number | undefined,
-  fallbackTtl: number,
-  lastFetchWasNotModified: boolean,
-): number {
-  return pinnedTtl ?? (lastFetchWasNotModified ? CATALOG_TTL_ACTIVE_MS : fallbackTtl);
-}
-
 export function catalogueIsStale(updatedAt: number, now: () => number, ttl: number): boolean {
-  return now() - updatedAt > ttl;
-}
-
-/**
- * "Never asked this boot" is stale by definition, not by arithmetic. Testing
- * it as an inequality would let a small or injected clock read 0 as fresh,
- * which is exactly the case where a real question is still outstanding.
- */
-export function gateIsStale(gateCheckedAt: number, now: () => number): boolean {
-  return gateCheckedAt === 0 || now() - gateCheckedAt > GATE_TTL_MS;
+  // "Never fetched" is stale by definition, not by arithmetic. Testing it as an
+  // inequality would let a small or injected clock read 0 as fresh, which is
+  // exactly the case where a real question is still outstanding.
+  return updatedAt === 0 || now() - updatedAt > ttl;
 }
 
 /**
@@ -1173,33 +1103,41 @@ function isSettled(id: string, probes: ProbeMap): boolean {
 }
 
 /**
- * What one round will ask, split into the two buckets the panel needs to tell
- * "queued" from "skipped".
- *
- * `targets` are the models the user has switched ON that no earned verdict has
- * settled — a probe costs a request from a bucket shared by everything behind
- * this egress, so asking about a hidden model is an answer nobody will read.
- *
- * `notListed` are models Zen has dropped: out of the picker without ever being
- * asked, zero requests spent. They still count toward the round's total,
- * because the panel's tally has to add up and a silent hole in the list is
- * exactly what a reader cannot explain.
+ * What one round will ask: the models the user has switched ON that no earned
+ * verdict has settled — a probe costs a request from a bucket shared by
+ * everything behind this egress, so asking about a hidden model is an answer
+ * nobody will read. A model the list no longer names is not in `models` at all,
+ * so it is out of scope without being asked.
  */
 export function planRound(
   models: readonly Model<Api>[],
-  live: readonly Model<Api>[],
-  servedSet: ReadonlySet<string> | null,
   probes: ProbeMap,
   hidden: ((id: string) => boolean) | undefined,
-): { targets: Model<Api>[]; notListed: Model<Api>[] } {
+): Model<Api>[] {
   const isShown = (id: string): boolean => hidden?.(id) !== true;
-  return {
-    targets: live.filter((model) => isShown(model.id) && !isSettled(model.id, probes)),
-    notListed:
-      servedSet === null
-        ? []
-        : models.filter((model) => !servedSet.has(model.id) && probes[model.id]?.verdict !== "dead"),
-  };
+  return models.filter((model) => isShown(model.id) && !isSettled(model.id, probes));
+}
+
+/**
+ * Install a list as the catalogue. The one place `state.models` is written, so
+ * the warm start and a fetch cannot disagree about what adopting means.
+ *
+ * A channel a previous process MEASURED is re-applied: without it a refresh
+ * would silently revert every model to its declared channel and the very
+ * failure the probe ruled out would come back.
+ */
+function install(
+  state: CatalogState,
+  deps: CatalogDeps,
+  entries: readonly CatalogRecord[],
+  stamp: number,
+  unclassified: number,
+): void {
+  state.models = derive(entries, { knownApis: deps.knownApis, template: deps.template }).candidates;
+  state.source = "official";
+  state.updatedAt = stamp;
+  state.unclassified = unclassified;
+  applyMeasuredChannel(state.models, state.probes);
 }
 
 // Warm start: a valid state.cache restores the catalogue without any network.
@@ -1217,25 +1155,13 @@ function adopt(
   // catalogue and the verdicts; it has nothing to say about a round in flight.
   restoreRound = false,
 ): void {
-  const derived = derive(record.models, { knownApis: deps.knownApis, template: deps.template });
-  // An empty state.models dictionary is NOT a catalogue — it is a fetch that failed
-  // and got persisted anyway (a round writes one when the catalogue fetch
-  // never succeeded, see runProbeRound). Adopting it empties the picker on
-  // the next start, which is strictly worse than the missing verdicts that
-  // write was meant to preserve. Keep the offline floor and take only the
-  // probe state; this is the same fail-safe direction every other "we could
-  // not tell" path in this file already takes.
-  if (derived.candidates.length > 0) {
-    state.models = derived.candidates;
-    state.source = "models.dev";
-    state.updatedAt = record.fetchedAt;
-  }
   if (Object.keys(record.probes).length > 0) state.probes = { ...record.probes };
-  // A channel a previous process MEASURED, re-applied. Without this the
-  // measurement is on disk and ignored, so a restart silently reverted every
-  // model to its inferred channel and the very failure the probe ruled out
-  // came back.
-  applyMeasuredChannel(state.models, state.probes);
+  // A record that never held a fetched list (`fetchedAt` 0: verdicts only, or a
+  // version 1 file) is NOT a catalogue. Adopting it would empty the picker for
+  // the sake of verdicts; keep "no list yet" and take only the probe state. A
+  // fetched list that really is empty is a catalogue and is adopted.
+  if (record.fetchedAt > 0) install(state, deps, record.models, record.fetchedAt, 0);
+  else applyMeasuredChannel(state.models, state.probes);
   if (record.lastProbeAt > state.lastProbeAt) state.lastProbeAt = record.lastProbeAt;
   // The report of a round that already finished, so a restart shows the
   // outcome instead of an empty progress area. `running` stays false: this is
@@ -1252,133 +1178,38 @@ function adopt(
       startedAt: record.lastProbeAt,
     };
   }
-  // Verdicts for state.models the catalogue no longer carries are dropped: a
-  // vanished model is not in any round's target list, so keeping its verdict
-  // would only grow the state.cache file across upstream removals. This is also
-  // why a DEAD model is not removed from `state.models` above — see effectiveList.
-  const present = new Set(state.models.map((model) => model.id));
-  for (const id of Object.keys(state.probes)) if (!present.has(id)) delete state.probes[id];
-}
-
-function refreshGate(state: CatalogState, deps: CatalogDeps): Promise<ReadonlySet<string> | null> {
-  if (state.gateInflight !== null) return state.gateInflight;
-  state.gateInflight = (async () => {
-    const { listZenIds } = deps;
-    if (listZenIds === undefined) return null;
-    const raw: unknown = await listZenIds().catch(() => null);
-    const served = admissibleGate(state, raw);
-    if (served === null) return null;
-    state.zenIds = served;
-    state.gateCheckedAt = deps.now();
-    return served;
-  })().finally(() => {
-    state.gateInflight = null;
-  });
-  return state.gateInflight;
-}
-
-/**
- * The ONE rule for "may this answer narrow the gate?".
- *
- * Three shapes are "could not tell", and all three must leave the gate alone:
- * a failure (null), a non-array (this seam is also filled by a host refresh and
- * by tests — iterating a bare string turns it into a set of single characters,
- * i.e. a well-typed, well-formed, entirely wrong gate), and an empty list
- * (`fetchZenModelIds` already collapses one to null, but the invariant belongs
- * here, not at the state.source).
- *
- * DISJOINT is the fourth, and the one a list-emptiness check misses. A response
- * that is perfectly well-formed and names NONE of the state.models we hold is far more
- * likely to be a changed shape, a wrong egress, or a different tenant than it is
- * to be a simultaneous withdrawal of every free model — and acting on it empties
- * the picker outright, which is the one outcome this decision exists to prevent.
- *after the `[]` guard shipped believing it was
- * sufficient.
- *
- * This was previously written TWICE — once in `refreshGate`, once in
- * `applyZenGate` — and only the first was ever executed, so "change one, forget
- * the other" would have accumulated silently until some future host actually
- * called `refreshModels`. One owner, both callers.
- */
-function admissibleGate(state: CatalogState, raw: unknown): ReadonlySet<string> | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  if (state.models.length > 0) {
-    const held = new Set(state.models.map((model) => model.id));
-    let overlap = 0;
-    for (const id of raw) if (typeof id === "string" && held.has(id)) overlap += 1;
-    if (overlap === 0) return null;
-  }
-  const served = new Set<string>(raw.filter((id): id is string => typeof id === "string" && id !== ""));
-  return served.size > 0 ? served : null;
+  // Verdicts for models the list no longer names are KEPT: a model Zen drops
+  // and later names again comes back with its verdict (see effectiveList).
 }
 
 async function sync(state: CatalogState, deps: CatalogDeps): Promise<void> {
-  const { path, fetchImpl, userAgent, warmReadTimeoutMs } = deps;
-  // Never fetch before the warm read settles: the response below is built
-  // from `state.cache` (for the conditional etag) and adopted over whatever the
-  // warm start installed, so letting the two interleave either resurrects a
-  // removed model or drops the persisted probe history.
+  const { path, fetchImpl, request, warmReadTimeoutMs } = deps;
+  // Never fetch before the warm read settles: the answer below is adopted over
+  // whatever the warm start installed, so letting the two interleave either
+  // resurrects a removed model or drops the persisted probe history.
   await Promise.race([
     deps.warm,
     new Promise<void>((resolve) => setTimeout(resolve, warmReadTimeoutMs).unref?.()),
   ]);
-  // R5: without a state.cache there is nothing a 304 could rebuild, so the
-  // conditional header must not be sent at all.
-  const result = await fetchSection({ fetchImpl, etag: state.cache?.etag, userAgent });
+  const result = await fetchOfficialList({ fetchImpl, request });
   if (result.kind === "failed") return; // failure preserves the current catalogue
   const stamp = deps.now();
-  if (result.kind === "not-modified") {
-    state.updatedAt = stamp;
-    // The endpoint honoured the header, so the short window is now earned.
-    state.lastFetchWasNotModified = true;
-    // Carry the new freshness into the state.cache file too, otherwise every boot
-    // would revalidate again despite the catalogue being current.
-    if (state.cache !== null) {
-      state.cache = { ...state.cache, fetchedAt: stamp };
-      await writeCacheAtomic(path, {
-        etag: state.cache.etag,
-        fetchedAt: stamp,
-        models: state.cache.models,
-        probes: state.probes,
-        lastProbeAt: state.lastProbeAt,
-        // Carried, not re-derived: a catalogue revalidation is not a probe
-        // round and has nothing new to report, but DROPPING it would delete
-        // the last round's report from disk.—
-        // the field predates the 6h window, which is what made the loss
-        // frequent enough to notice (up to four syncs a day instead of one).
-        lastRound: state.cache.lastRound,
-      });
-    }
-    return;
-  }
-  // Retain the etag: without this every revalidation would be a full
-  // 5.2MB download instead of a conditional request.
-  // A real body means the short window is withdrawn until a 304 earns it back.
-  state.lastFetchWasNotModified = false;
-  // Carry `lastRound` across the rebuild, exactly as the 304 branch above does.
-  // The 304 branch spreads the old record and so kept it; this branch built a
-  // fresh object and silently dropped the field, so the very next write
-  // deleted the last round's report from disk. The comment here used to claim
-  // the opposite of what the code did. Reproduced 2026-09-30: a second full
-  // sync after a round left `lastRound` absent.
+  // Carry `lastRound` across the rebuild: a sync is not a probe round and has
+  // nothing new to report, but its write replaces the whole record — so
+  // omitting the field deletes the last round's report from disk.
   const previousRound = state.cache?.lastRound;
   state.cache = {
     version: CACHE_VERSION,
-    etag: result.etag,
     fetchedAt: stamp,
-    models: result.section,
+    models: result.list.free,
     probes: state.probes,
     lastProbeAt: state.lastProbeAt,
     lastRound: previousRound,
   };
-  adopt(state, deps, state.cache);
-  // A sync is not a round and has nothing new to report, but its write replaces
-  // the whole record — so omitting the field deletes the report. Carried, not
-  // re-derived.
+  install(state, deps, result.list.free, stamp, result.list.unclassified);
   await writeCacheAtomic(path, {
-    etag: result.etag,
     fetchedAt: stamp,
-    models: result.section,
+    models: result.list.free,
     probes: state.probes,
     lastProbeAt: state.lastProbeAt,
     lastRound: previousRound,
@@ -1422,26 +1253,22 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
     new Promise<void>((resolve) => setTimeout(resolve, deps.warmReadTimeoutMs).unref?.()),
   ]);
   const stamp = deps.now();
-  // Cheap authoritative availability first. One `GET /zen/v1/state.models` answers
-  // "does Zen serve this id at all" without spending inference quota, so a
-  // withdrawn model costs one GET instead of one completion — and the answer
-  // is Zen's own, not a reading of error prose. This is the same check 9router
-  // makes for its free provider, and it is the reason its availability test
-  // is fast.
+  // Ask the list again first. One GET spends no inference quota, so a model the
+  // list has withdrawn since the last sync costs nothing: it leaves the
+  // catalogue here and is never asked. A failed GET leaves the held list in
+  // place, and the round probes that.
   //
   // It is deliberately NOT recorded as a `dead` verdict. `dead` is permanent
-  // and learned by asking the model; membership is recomputed from the
-  // authority on every round, so a model Zen puts back simply reappears.
-  // Conflating the two is how a model that came back stays suppressed forever.
-  const servedSet = await refreshGate(state, deps);
-  const live = servedSet === null ? state.models : state.models.filter((model) => servedSet.has(model.id));
+  // and learned by asking the model; membership is recomputed from the list on
+  // every sync, so a model Zen puts back simply reappears.
+  await runSingle(state, deps);
   // A `dead` verdict is final ONLY once it has been earned by asking every
   // channel. A verdict without that marker predates the sweep, so it gets one
   // re-check: those are precisely the verdicts that may have been a wrong
   // channel refused rather than a model that is gone — and a permanent verdict
   // on a wrong channel is how a working model goes missing for good.
-  // The round's scope, decided by one pure function below.
-  const { targets, notListed } = planRound(state.models, live, servedSet, state.probes, hidden);
+  // The round's scope, decided by one pure function.
+  const targets = planRound(state.models, state.probes, hidden);
   // The panel polls this while the round runs: a progress pill ("4/10") and
   // one badge per row (ok with latency / failed / probing / waiting). It is
   // replaced wholesale at the start of every round and frozen when the round
@@ -1449,26 +1276,14 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
   state.probeRun = {
     running: true,
     // The round's whole scope, so the panel can tell "queued" from "skipped".
-    targets: [...targets, ...notListed].map((model) => model.id),
-    total: targets.length + notListed.length,
+    targets: targets.map((model) => model.id),
+    total: targets.length,
     done: 0,
     current: null,
     results: {},
     startedAt: stamp,
   };
   let untrusted = false;
-  for (const model of notListed) {
-    // At zero cost, with the reason that is actually known: Zen does not list
-    // it. This is what lets the panel say so rather than leave a gap.
-    state.probeRun.results[model.id] = {
-      status: "failed",
-      ms: 0,
-      code: "not-listed",
-      http: 0,
-      removed: true,
-    };
-    state.probeRun.done += 1;
-  }
   try {
     for (const model of targets) {
       state.probeRun.current = model.id;
@@ -1532,13 +1347,10 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
   // One atomic write per round, never per model: a half-finished round must
   // not be read back as a complete set of verdicts.
   //
-  // Written even when `state.cache` is null — i.e. a first boot whose catalogue
-  // fetch failed, where the round is running against the pi-ai offline floor.
-  // That round may spend up to 34 real requests from the shared anonymous
-  // bucket, and the guard used to throw all of it away, so the next DSH restart
-  // bought the same 34 again. `state.models` degrades to an empty dictionary, which
-  // `readCache` accepts and `adopt` treats as "nothing to derive", leaving the
-  // offline floor in place while the verdicts survive.
+  // Written even when `state.cache` is null — i.e. a first boot whose list
+  // fetch failed. With no list there is nothing to probe, so this records only
+  // the round marker; `fetchedAt` stays 0, which `adopt` reads as "no list
+  // yet", leaving the picker empty while any verdicts survive.
   const report: NonNullable<CatalogCacheRecord["lastRound"]> = {
     total: state.probeRun.total,
     done: state.probeRun.done,
@@ -1546,9 +1358,8 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
     targets: state.probeRun.targets,
   };
   await writeCacheAtomic(path, {
-    etag: state.cache?.etag,
     fetchedAt: state.cache?.fetchedAt ?? 0,
-    models: state.cache?.models ?? {},
+    models: state.cache?.models ?? [],
     probes: state.probes,
     lastProbeAt: state.lastProbeAt,
     // The report, so the panel's progress area survives a restart.
@@ -1566,19 +1377,16 @@ export async function runProbeRound(state: CatalogState, deps: CatalogDeps): Pro
 export function createCatalog(options: CreateCatalogOptions): Catalog {
   const {
     template,
-    builtinBaseline,
     knownApis,
     cachePath: path,
     fetchImpl,
-    ttlMs = DEFAULT_TTL_MS,
+    ttlMs = CATALOG_TTL_MS,
   } = options;
   const now = options.now ?? Date.now;
-  const userAgent = options.userAgent;
   const probe = options.probe;
-  const listZenIds = options.listZenIds;
   const hidden = options.hidden;
 
-  const state = initialState(builtinBaseline);
+  const state = initialState();
 
   /**
    * Resolves once the warm state.cache read has settled.
@@ -1597,64 +1405,37 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
     settleWarm = resolve;
   });
 
-  // Three one-liners over the pure rules above. They exist so the call sites
-  // read as questions ("is the catalogue stale?") rather than as expressions,
-  // and so the rules themselves can be exercised without a container.
-  const currentTtl = (): number => effectiveTtl(options.ttlMs, ttlMs, state.lastFetchWasNotModified);
-  const stale = (): boolean => catalogueIsStale(state.updatedAt, now, currentTtl());
-  const gateStale = (): boolean => gateIsStale(state.gateCheckedAt, now);
+  // A one-liner over the pure rule above, so the call site reads as a question
+  // ("is the catalogue stale?") rather than as an expression.
+  const stale = (): boolean => catalogueIsStale(state.updatedAt, now, ttlMs);
 
-  const warmStart = (): void => {
-    void readCache(path)
-      .then((found) => {
-        if (found === null) return;
-        state.cache = found;
-        // Adopted whatever its age: a stale state.cache is still a far better answer
-        // than the offline floor, and `ensureFresh` revalidates on the first read
-        // in the background rather than making the user wait for 5.2MB.
-        adopt(state, deps, found, true);
-      })
-      .catch(() => undefined)
-      .finally(settleWarm);
-  };
-  warmStart();
 
-  // An explicit `ttlMs` is a caller asking for exactly that window (tests pin
-  // it), so it is honoured verbatim and the adaptive step is skipped. Only the
-  // default path shortens, and only after a 304 proved the header works.
-
-  /**
-   * Ask Zen, right now, which ids it serves — and remember the answer.
-   *
-   * The ONE writer of `state.zenIds` and `state.gateCheckedAt`. Three call sites used to
-   * write the gate independently (`runProbeRound`, `applyZenGate`, and the host
-   * refresh); with two independent cadences now running, two writers would mean
-   * whichever finished last silently overwrote the other's answer, and a stale
-   * one winning that race would look exactly like an upstream change.
-   *
-   * Single-flight, because a poll and a probe round can reach it together and
-   * one GET answers both.
-   *
-   * `null` means "could not tell" and is the only reading that leaves the gate in
-   * force. A narrowed gate is the one update here that can empty a picker, and a
-   * timeout, a region refusal or a malformed body must never be read as "these
-   * state.models are gone".
-   */
   // The outside world, named once so the lifted functions can take it.
   const deps: CatalogDeps = {
     path,
     fetchImpl,
     now,
-    userAgent,
+    request: options.request,
     ttlMs,
     probe,
-    listZenIds,
     hidden,
     template,
     knownApis,
     warmReadTimeoutMs: WARM_READ_TIMEOUT_MS,
     warm,
   };
+
+  // Read synchronously, once: see `readCacheSync`. `settleWarm` still runs so
+  // the waits in `sync` and the probe round resolve at once.
+  const found = readCacheSync(path);
+  if (found !== null) {
+    state.cache = found;
+    // Adopted whatever its age: a stale state.cache is still a far better answer
+    // than an empty picker, and `ensureFresh` revalidates on the first read
+    // in the background rather than making the user wait for the network.
+    adopt(state, deps, found, true);
+  }
+  settleWarm();
 
   /**
    * D2/D6b: one ordered round over the state.models that are still unjudged.
@@ -1682,34 +1463,27 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
     current(): CatalogSnapshot {
       // One pass over the single effective list feeds both `visible` and
       // `capabilities`, so the ids and the cards can never disagree.
-      const effective = effectiveList(state.models, state.zenIds, state.probes);
+      const effective = effectiveList(state.models, state.probes);
       return {
         models: state.models.slice(),
         visible: effective.map((model) => model.id),
         capabilities: effective.map(modelCapability),
         source: state.source,
         updatedAt: state.updatedAt,
-        gateCheckedAt: state.gateCheckedAt,
-        unknownFree: unknownFree(state.models, state.zenIds),
+        unclassified: state.unclassified,
         refreshing: state.inflight !== null,
         probedAt: state.lastProbeAt,
         probeInconclusive: state.probeUntrusted,
       };
     },
     effectiveModels(): Model<Api>[] {
-      return effectiveList(state.models, state.zenIds, state.probes);
+      return effectiveList(state.models, state.probes);
     },
     async ensureFresh(): Promise<void> {
-      // Two independent expiry axes. Both are STARTED before the first await,
-      // so they overlap rather than interleave; neither waits on the other,
-      // because the failure modes are unrelated — a Zen outage must not delay
-      // the catalogue, and a 5.2MB download must not delay a one-request gate.
-      const catalogue = state.inflight ?? (stale() ? runSingle(state, deps) : null);
-      const gate = gateStale() ? refreshGate(state, deps) : null;
-      // The gate is awaited first because it cannot reject: letting a catalogue
-      // failure skip it would silently drop the cheap, quota-free check.
-      if (gate !== null) await gate;
-      if (catalogue !== null) await catalogue;
+      // Single-flight: a read that lands mid-refresh joins it instead of
+      // starting a second GET.
+      const refresh = state.inflight ?? (stale() ? runSingle(state, deps) : null);
+      if (refresh !== null) await refresh;
     },
     async forceRefresh(): Promise<void> {
       return runSingle(state, deps);
@@ -1741,26 +1515,6 @@ export function createCatalog(options: CreateCatalogOptions): Catalog {
         targets: state.probeRun.targets.slice(),
         startedAt: state.probeRun.startedAt,
       };
-    },
-    applyZenGate(ids: readonly string[] | null): void {
-      // The host's own refresh is a SECOND writer of `state.zenIds`, and the review
-      // that shipped the 30-minute gate is what made that worth saying out
-      // loud. Today only `refreshGate` runs — the host never calls
-      // `provider.refreshModels`, verified 2026-09-30 — so nothing can race. If
-      // a future host does call it, these two paths can interleave and the
-      // slower one can overwrite the newer answer, which is indistinguishable
-      // from an upstream change. Fold this into `refreshGate` before relying on
-      // it.
-      //
-      // Same admissibility rules meanwhile: a null, empty, non-array or wholly
-      // disjoint answer is not a membership decision, it is an absent one.
-      const served = admissibleGate(state, ids);
-      if (served === null) return;
-      state.zenIds = served;
-      // A host refresh answered the same question this poll would, so the
-      // freshness stamp moves too — otherwise the next read would spend a
-      // second GET on an answer already in hand.
-      state.gateCheckedAt = now();
     },
   };
 }

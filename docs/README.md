@@ -20,6 +20,7 @@ Installation and quick start live in the [project README](../README.md).
 | Understand request adaptation | [Protocol notes](protocol-notes.md) |
 | Change catalogue, identity, or acceptance policy | The relevant [ADR](#decisions) |
 | Verify real DSH compatibility | [Compat run](compat-run.md); live requests require authorization |
+| Evaluate a new DSH release | [Upgrade evaluation](upgrade-evaluation.md) |
 | Upgrade DSH or release | [Release checklist](release.md) |
 | Work on an issue | [GitHub workflow](agents/issue-tracker.md) |
 
@@ -29,13 +30,12 @@ Installation and quick start live in the [project README](../README.md).
 - [0002: Runtime catalogue and visibility](adr/0002-catalogue-source-of-truth.md)
 - [0003: Live compatibility stays outside CI](adr/0003-compat-run-not-in-ci.md)
 - [0004: Official dynamic acceptance targets](adr/0004-official-dynamic-compat-targets.md)
+- [0005: Official model list as the free-model source](adr/0005-official-model-list-as-free-model-source.md)
 
-## Evidence and history
+## Scope
 
-[Compatibility reports](compat-reports/) record dated results, not current
-availability guarantees. [Archived material](archive/README.md) contains old
-designs, investigations, and migration records. Read either only to investigate
-a specific result or decision; archived instructions do not override current guides.
+The docs describe the current release only. Compat run output is not kept in the
+repository: it varies with environment, version and time.
 
 Issues and specs are maintained in [GitHub Issues](https://github.com/x5427876/dsh-opencode-free/issues),
 not local ticket files. Agent installation safety remains in [AGENTS.md](../AGENTS.md),

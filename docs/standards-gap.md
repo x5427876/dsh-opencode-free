@@ -1,6 +1,6 @@
 # Engineering Standards Gap Baseline
 
-Compare against the [engineering standards](standards.md). Reviewed baseline: commit `013c2deb3ec3ddf03408ebd698e4b562c3011130`. This document records static inspection evidence, not a comprehensive audit, repair history, or proof that tests pass. Recheck changes after the baseline.
+Compare against the [engineering standards](standards.md). This document lists the gaps open in the current source, with static inspection evidence; it is not a comprehensive audit or proof that tests pass. Recheck an item before relying on it.
 
 ## Classification and Handling
 
@@ -10,7 +10,7 @@ Compare against the [engineering standards](standards.md). Reviewed baseline: co
 - **Confirmed gap**: code or configuration directly demonstrates a rule violation.
 - **Unverified**: available evidence is insufficient; this neither proves broken behavior nor establishes compliance.
 
-Items remain open unless a resolution is recorded below. The baseline itself did not change implementation, CI, dependency declarations, or user DSH settings, and did not include live checks.
+A gap is deleted from this file when it is resolved; gap IDs are not renumbered. The inspection included no live checks.
 
 ## G1: Debug Logs Include Authorization Fragments
 
@@ -18,14 +18,6 @@ Items remain open unless a resolution is recorded below. The baseline itself did
 - Evidence: [identitySummary](../src/zen-provider.ts) reads `authorization` and includes `auth.slice(0, 14)` in its message; fetch and compat paths call it. The Debug logs section of the [README](../README.md) discloses this behavior. Probe refusals also log upstream errors using `body.slice(0, 300)` without redaction at that location.
 - Impact: enabling debug with a configured key exposes part of the credential. Error truncation cannot guarantee removal of sensitive upstream content. Historical logs have not been checked for real keys.
 - Acceptance: replace credential content with allowlisted fields. Capture each logging path using fake keys and error fixtures containing sensitive strings; verify that neither credential fragments nor conversation text appear. Update both language versions of the documentation.
-
-## G2: Fetch Interception Matches Zen Paths by String Prefix
-
-- **Resolved locally (2026-10-14) / A3**: URL parsing now restricts guards to the HTTPS inference origin and exact `/inference/v1` base or descendants. `tests/inference-admission.test.mjs` verifies similar prefixes, other origins/protocols/ports, Request headers, and non-target argument identity. This is offline guard evidence, not a release or live-host claim.
-- Original baseline: **P1 / Confirmed gap / A3**.
-- Evidence: [isZenRequest](../src/zen-provider.ts) uses `startsWith(BASE_URL)` for strings, URLs, and Request URLs. `BASE_URL` is `https://opencode.ai/zen/v1`.
-- Impact: `https://opencode.ai/zen/v10/models` and `/zen/v1-other` also match the prefix, exceeding the required path scope. This is not evidence of credential leakage to an external host; no requests were sent for this inspection.
-- Acceptance: parse URLs and check the exact origin and path separators. Test valid descendant paths, similar paths, other hosts, ports, protocols, and Request inputs; verify that non-target requests are not rewritten.
 
 ## G3: Global Compat Provider Registration Has No Cleanup Entry Point
 

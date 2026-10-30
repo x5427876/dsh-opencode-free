@@ -12,4 +12,3 @@ This is a single-context repository.
 
 CONTEXT is a glossary, not a spec or implementation log. ADRs hold lasting
 trade-offs; current requirements and work state live in GitHub Issues.
-Read archived investigations only when tracing a specific historical claim.

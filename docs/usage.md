@@ -7,19 +7,22 @@ This guide covers catalogue refresh, probes, cache recovery, and optional keys.
 
 ## Model catalogue and refresh
 
-- [models.dev](https://models.dev) supplies free-model metadata, including context
-  limits and published capabilities. Zen's `/inference/v1/models` determines
-  which entries are currently listed upstream.
-- Refreshes are lazy: expiry makes the next catalogue read eligible to refresh;
-  it is not a promise of a background update at an exact time.
-- models.dev's default window is 24 hours. After an unchanged response (`304`),
-  it shortens to 6 hours; a changed response returns it to 24 hours.
-- Zen's listing has an independent 30-minute window and is rechecked on startup.
+- Zen's official model list (`/inference/v1/models`) is the only source of which
+  models are free and of their context limits, output limits, input modalities,
+  reasoning levels and endpoint channel ([ADR-0005](adr/0005-official-model-list-as-free-model-source.md)).
+  A model is free when it is a chat model and every declared price is zero.
   Listing requests do not consume inference quota.
-- Failed refreshes preserve the last usable list. Without network or cache,
-  pi-ai's bundled catalogue is the fallback.
-- Free entries served by Zen but missing from models.dev are shown as unknown
-  on the detail page, not offered with guessed capabilities in the picker.
+- Refreshes are lazy: after 30 minutes the next catalogue read refreshes the
+  list. It is not a promise of a background update at an exact time. The
+  response has no ETag, so each refresh downloads the whole list (about 94 KB).
+- A failed request, a non-2xx reply, an empty list, or a list where no entry has
+  a readable price keeps the last good list. One chat model with a missing or
+  non-numeric price is excluded, never assumed free, and counted on the detail page.
+- The cache holds the last free entries and the probe results. Without a cache
+  and without network the picker is empty until a refresh succeeds; the plugin
+  has no built-in fallback list.
+- A model the list stops offering as free is hidden, and its probe result is kept
+  for when it returns.
 
 ## Model switches and probes
 
@@ -37,7 +40,7 @@ is shared by callers behind the same egress IP.
 | Measured | The model answered in that round; latency is not a future availability guarantee. |
 | Not measured | Admission refusal, quota, authentication, network, or another inconclusive condition. Read the banner; the model is not removed on this evidence. |
 | Unavailable | An explicit model-level refusal after the implemented channels have been checked. The persisted `dead` verdict is not automatically probed again. |
-| Absent from Zen's listing | Hidden while absent; it can reappear if Zen lists it again. This is distinct from a persisted `dead` verdict. |
+| Absent from Zen's free list | Hidden while absent; it can reappear if Zen lists it as free again. This is distinct from a persisted `dead` verdict. |
 
 Results survive restarts. A Zen key does not clear a persisted verdict or bring
 back a model absent from the listing. See [ADR-0002](adr/0002-catalogue-source-of-truth.md)
@@ -57,7 +60,7 @@ exhaustion or an admission refusal.
    must obtain explicit permission before stopping or restarting it.
 3. Back up and remove **only `catalog.json`**. Keep profiles, credentials,
    unrelated plugin files, and the rest of `DSH_HOME` intact.
-4. Start DSH again. The catalogue is rederived; the next probe round treats
+4. Start DSH again. The list is fetched again; the next probe round treats
    models as unprobed and consumes inference quota. Hidden-model preferences
    remain in plugin configuration.
 
@@ -88,6 +91,17 @@ key sources. No credential-store edits or login flow are needed.
 
 Keep the key, configuration, and raw debug output private. Current debug logs
 can expose an Authorization prefix and upstream error content; see [gap G1](standards-gap.md#g1-debug-logs-include-authorization-fragments).
+
+### Anonymous request shape
+
+The free tier checks the request content beyond the headers (see [protocol notes](protocol-notes.md)),
+so anonymous requests match the official CLI in three places: under Node the plugin offers the CLI's
+TLS cipher list; it adds a generic `<env>` block to the system prompt, which carries no host path;
+and it declares the host's `subagent_fork` and `working_directory` tools as `agent_fork` and
+`cwd_tool`, restoring the original names on returned calls. Bun already offers the CLI's cipher list.
+If Zen ever rejects the cipher list, set `DSH_OPENCODE_FREE_TLS_CIPHERS=default`
+in the environment that launches DSH to keep the runtime's own list. Keyed requests
+are not rewritten.
 
 ### Verify the configured path
 

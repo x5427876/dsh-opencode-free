@@ -1,7 +1,7 @@
 # 執行期模型目錄以 models.dev 為資料來源
 
-**Status**: accepted. 本摘要取代冗長敘述，不改變目錄政策；舊量測與設計過程保留於
-[封存紀錄](../archive/catalogue-design-notes.md)。
+**Status**: accepted. 「資料與能力」與「快取與新鮮度」兩節已被 [ADR-0005](0005-official-model-list-as-free-model-source.md)
+取代（資料改取官方清單、不再使用 models.dev）；「可見性與探測」與「面板語意」仍有效。
 
 ## Context
 

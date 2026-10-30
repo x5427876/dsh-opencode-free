@@ -4,25 +4,26 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
-import { PROVIDER_ID, builtinFreeModels } from '../src/zen-provider.ts'
+import { cachePath, writeCacheAtomic } from '../src/catalog.ts'
+import { PROVIDER_ID } from '../src/zen-provider.ts'
 
 const plugin = await import('../src/index.ts')
 
 // ── hermetic environment ─────────────────────────────────────────────────────
-// The plugin resolves its catalogue cache from $DSH_HOME and reads models.dev
-// through the ambient global fetch. Both are neutralised here, or this file's
-// baseline silently becomes "whatever this machine has cached / whatever the
-// network answered" — and a real cache DOES exist on the dev host, so that is
-// not hypothetical.
+// The plugin resolves its catalogue cache from $DSH_HOME and reads Zen's model
+// list through the ambient global fetch. Both are neutralised here, or this
+// file's baseline silently becomes "whatever this machine has cached / whatever
+// the network answered" — and a real cache DOES exist on the dev host, so that
+// is not hypothetical.
 const home = await mkdtemp(join(tmpdir(), 'dsh-opencode-free-visibility-'))
 const previousHome = process.env.DSH_HOME
 process.env.DSH_HOME = home
 
 const realFetch = globalThis.fetch
-// Default: every models.dev read fails fast and deterministically, so the
-// catalogue stays on the D8 offline floor instead of a background sync landing
-// in the middle of an assertion. `ensureFresh` is fire-and-forget from
-// getModels(), so without this the first `listModels` would race the network.
+// Default: every list read fails fast and deterministically, so the catalogue
+// stays on the seeded cache below instead of a background sync landing in the
+// middle of an assertion. `ensureFresh` is fire-and-forget from getModels(), so
+// without this the first `listModels` would race the network.
 const offlineFetch = async () => new Response('offline', { status: 503 })
 globalThis.fetch = offlineFetch
 
@@ -47,63 +48,62 @@ after(async () => {
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 /**
- * A REAL `api.json` slice. The provider record wraps the models dictionary one
- * level deeper (`body.opencode.models`); a fixture that spreads model records
- * straight onto the provider object still "works" as a JS object but derives an
- * EMPTY catalogue, because none of the provider's own keys carries a zero cost.
- * That substitution shipped a picker-empty defect once, so the nesting is
- * reproduced here exactly as models.dev serves it.
+ * A slice of Zen's official model list, in the shape it is served:
+ * `{ data: [...] }` whose entries carry `type`, `cost.text.*.price`, `limit`,
+ * `modalities`, `capabilities.reasoning` and an `api` object keyed by endpoint.
  */
-const API_FIXTURE = {
-  opencode: {
-    id: 'opencode',
-    npm: '@ai-sdk/openai-compatible',
-    api: 'https://opencode.ai/zen/v1',
-    models: {
-      // Free + active, and known to pi-ai: exercises D6 tier 1.
-      'big-pickle': {
-        id: 'big-pickle',
-        name: 'Big Pickle',
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 200000, output: 32000 },
-        modalities: { input: ['text'], output: ['text'] },
-      },
-      // Free + active, UNKNOWN to pi-ai (asserted below): exercises D6 tiers 2-3
-      // (effort ⇒ responses) and the limit/modalities mapping. The id is invented
-      // so a pi-ai upgrade cannot add it to the builtin table.
-      'orbit-otter-free': {
-        id: 'orbit-otter-free',
-        name: 'Orbit Otter Free',
-        attachment: true,
-        reasoning: true,
-        reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'xhigh', 'max'] }],
-        tool_call: true,
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 1048576, output: 524288 },
-        modalities: { input: ['text', 'image', 'video'], output: ['text'] },
-      },
-      // Free but retired upstream: it stays in the catalogue until a probe
-      // judges it, then simply is not in the list.
-      'deepseek-v4-flash-free': {
-        id: 'deepseek-v4-flash-free',
-        name: 'DeepSeek V4 Flash Free',
-        status: 'deprecated',
-        reasoning: true,
-        reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }],
-        cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-        limit: { context: 200000, output: 128000 },
-      },
-      // Not free: must never reach the catalogue at all.
-      'gpt-6-astra': {
-        id: 'gpt-6-astra',
-        name: 'GPT 6 Astra',
-        cost: { input: 3, output: 15, cache_read: 0, cache_write: 0 },
-        limit: { context: 400000, output: 128000 },
-      },
+const price = (input = 0, output = 0) => ({ text: { input: { price: input }, output: { price: output } } })
+
+const LIST_FIXTURE = {
+  object: 'list',
+  data: [
+    // Free, and known to pi-ai: exercises the channel the entry declares.
+    {
+      id: 'big-pickle',
+      name: 'Big Pickle',
+      type: 'chat',
+      cost: price(),
+      limit: { context: 200000, output: 32000 },
+      modalities: { input: ['text'], output: ['text'] },
+      api: { 'chat-completions': {} },
     },
-  },
+    // Free, UNKNOWN to pi-ai (asserted below): exercises the limit, modality and
+    // effort mapping. The id is invented so a pi-ai upgrade cannot add it to the
+    // builtin table.
+    {
+      id: 'orbit-otter-free',
+      name: 'Orbit Otter Free',
+      type: 'chat',
+      cost: price(),
+      limit: { context: 1048576, output: 524288 },
+      modalities: { input: ['text', 'image/png', 'video/mp4'], output: ['text'] },
+      capabilities: { reasoning: { supported: true, effort: ['low', 'medium', 'high', 'xhigh', 'max'] } },
+      api: { responses: {} },
+    },
+    {
+      id: 'deepseek-v4-flash-free',
+      name: 'DeepSeek V4 Flash Free',
+      type: 'chat',
+      cost: price(),
+      limit: { context: 200000, output: 128000 },
+      capabilities: { reasoning: { supported: true, effort: ['low', 'high', 'max'] } },
+      api: { 'chat-completions': {} },
+    },
+    // Not free: must never reach the catalogue at all.
+    { id: 'gpt-6-astra', name: 'GPT 6 Astra', type: 'chat', cost: price(3, 15), limit: { context: 400000, output: 128000 } },
+    // Not conversational: free, and still not a model the picker can offer.
+    { id: 'embed-free', name: 'Embed Free', type: 'embedding', cost: price() },
+    // Conversational with no readable cost: excluded, and counted.
+    { id: 'unpriced-chat', name: 'Unpriced Chat', type: 'chat' },
+  ],
 }
 
+/** What the cache held before this run: the list as of a moment ago, minus the model the refresh will add. */
+const SEEDED = LIST_FIXTURE.data.filter((entry) => entry.id === 'big-pickle' || entry.id === 'deepseek-v4-flash-free')
+await writeCacheAtomic(cachePath({ DSH_HOME: home }), { fetchedAt: Date.now(), models: SEEDED })
+
+// The mounted plugin would otherwise carry Zen requests past the mocked global fetch.
+process.env.DSH_OPENCODE_FREE_TLS_CIPHERS = 'default'
 const CATALOG_ROUTE = '/dsh-opencode-free/api/catalog'
 const REFRESH_ROUTE = '/dsh-opencode-free/api/refresh'
 const PROBE_ROUTE = '/dsh-opencode-free/api/probe'
@@ -175,7 +175,21 @@ function mount(config) {
   return host
 }
 
+/**
+ * The warm cache is read in the background (a container must answer
+ * synchronously), so the first read after a mount can legitimately be empty.
+ * Wait for the catalogue to hold a list instead of betting on a tick count.
+ */
+async function catalogueReady() {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (plugin.freeModels().length > 0) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  assert.fail('the seeded cache was never adopted')
+}
+
 async function listedIds(host) {
+  await catalogueReady()
   return (await host.registered[0][1].listModels(PROVIDER_ID)).map((m) => m.id)
 }
 
@@ -256,6 +270,7 @@ test('hidden model resolveModel fails, visible model resolves (no message assert
   const all = await catalogueIds()
   const victim = all[0]
   const adapter = mount({ hiddenModels: [victim] }).registered[0][1]
+  await catalogueReady()
   await assert.rejects(adapter.resolveModel(PROVIDER_ID, victim))
   const visible = all.find((id) => id !== victim)
   const resolved = await adapter.resolveModel(PROVIDER_ID, visible)
@@ -280,21 +295,47 @@ test('schema marks hiddenModels volatile so DSH serves the config row', async ()
 
 // ── catalogue owner ─────────────────────────────────────────────────────────
 
-test('a failed fetch leaves the pi-ai builtin floor in place (D8 offline floor)', async () => {
-  // The failure mode this pins is the one that emptied the picker once: any
-  // fetch trouble must degrade to the builtin set, never to an empty list.
-  const ids = await catalogueIds()
-  assert.ok(ids.length > 0, 'offline catalogue must never be empty')
-  assert.deepEqual(
-    ids,
-    builtinFreeModels()
-      .map((m) => m.id)
-      .slice()
-      .sort(),
-  )
+test('a failed refresh leaves the cached list in place', async () => {
+  // The failure mode this pins is the one that empties the picker: any fetch
+  // trouble must keep the list the cache already holds, never replace it with
+  // nothing. The ambient fetch answers 503 here.
+  const host = mount({})
+  try {
+    await catalogueReady()
+    const before = (await listedIds(host)).slice().sort()
+    assert.deepEqual(before, ['big-pickle', 'deepseek-v4-flash-free'], 'the seeded list')
+    const refreshed = await callRoute(host, REFRESH_ROUTE, 'POST')
+    assert.equal(refreshed.status, 200)
+    assert.equal(refreshed.body.source, 'official', 'the held list is still the answer')
+    assert.deepEqual(refreshed.body.visible.slice().sort(), before)
+    assert.deepEqual((await listedIds(host)).slice().sort(), before)
+  } finally {
+    host.dispose()
+  }
 })
 
-test('derived catalogue: deprecated stays until a probe judges it, paid drops out', async () => {
+test('a cold start with no cache and no network offers nothing, and says so', async () => {
+  // There is no offline floor: with no list ever fetched the catalogue is empty
+  // and reports `none`, rather than offering models nobody has confirmed.
+  const empty = await mkdtemp(join(tmpdir(), 'dsh-opencode-free-cold-'))
+  process.env.DSH_HOME = empty
+  const host = mount({})
+  try {
+    const refreshed = await callRoute(host, REFRESH_ROUTE, 'POST')
+    assert.equal(refreshed.status, 200)
+    assert.equal(refreshed.body.source, 'none')
+    assert.deepEqual(refreshed.body.visible, [])
+    assert.equal(refreshed.body.updatedAt, 0)
+    assert.deepEqual(await host.registered[0][1].listModels(PROVIDER_ID), [])
+    assert.deepEqual(plugin.freeModels(), [])
+  } finally {
+    host.dispose()
+    process.env.DSH_HOME = home
+    await rm(empty, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  }
+})
+
+test('derived catalogue: new free entries appear, paid and unreadable ones drop out', async () => {
   assert.ok(
     !getBuiltinModels('opencode').some((m) => m.id === 'orbit-otter-free'),
     'the derived-model fixture id must stay unknown to pi-ai',
@@ -304,13 +345,15 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
   // every later call, re-wrapping on each apply(). Swapping `globalThis.fetch`
   // after the first mount therefore cannot redirect the catalogue sync — the
   // guard still holds the original. Moving the captured original is the only
-  // honest way to drive this path, and the reset restores the floor for the
-  // tests that follow.
+  // honest way to drive this path, and the reset restores the offline answer
+  // for the tests that follow.
+  const requested = []
   const servingFetch = async (url) => {
-    if (String(url).includes('models.dev')) {
-      return new Response(JSON.stringify(API_FIXTURE), {
+    requested.push(String(url))
+    if (String(url).endsWith('/inference/v1/models')) {
+      return new Response(JSON.stringify(LIST_FIXTURE), {
         status: 200,
-        headers: { 'content-type': 'application/json', etag: '"fixture"' },
+        headers: { 'content-type': 'application/json' },
       })
     }
     return new Response('{}', { status: 404 })
@@ -321,38 +364,38 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
   const host = mount({})
   try {
     // The refresh route is the documented sync point: it awaits the sync (new
-    // or shared) and answers from the settled snapshot, so the catalogue is
-    // adopted by the time it replies. Nothing here depends on the
-    // fire-and-forget lazy revalidation having landed first.
+    // or shared) and answers from the settled snapshot, so the list is adopted
+    // by the time it replies. Nothing here depends on the fire-and-forget lazy
+    // revalidation having landed first.
     const refreshed = await callRoute(host, REFRESH_ROUTE, 'POST')
     assert.equal(refreshed.status, 200)
-    assert.equal(refreshed.body.source, 'models.dev')
+    assert.equal(refreshed.body.source, 'official')
+    assert.ok(requested.some((url) => url.endsWith('/inference/v1/models')), 'it read the official list')
+    assert.ok(!requested.some((url) => url.includes('models.dev')), 'and no other source')
 
     const ids = await listedIds(host)
     assert.ok(ids.includes('orbit-otter-free'), 'a newly published free model must appear')
-    assert.ok(
-      ids.includes('deepseek-v4-flash-free'),
-      'D1: a deprecated free model stays until a probe judges it',
-    )
+    assert.ok(ids.includes('deepseek-v4-flash-free'))
     assert.ok(!ids.includes('gpt-6-astra'), 'a paid model must never enter the catalogue')
+    assert.ok(!ids.includes('embed-free'), 'a free embedding model is not a chat model')
+    assert.ok(!ids.includes('unpriced-chat'), 'an unreadable cost is never assumed free')
     // The payload names the offered models and nothing else. There is no list
     // of unavailable models, so a model that is not offered is simply absent —
     // and the panel has no second source that could disagree with the picker.
     // `models` carries one capability card per visible id, same order.
-    // `unknownFree` is not a second list of offered models: it is a diagnostic
-    // about ids the catalogue has never heard of, and it is empty here.
+    // `unclassified` is a count, not a second list: how many chat entries the
+    // list published with a cost this plugin could not read.
     assert.deepEqual(Object.keys(refreshed.body).sort(), [
-      'gateCheckedAt',
       'models',
       'probeInconclusive',
       'probedAt',
       'refreshing',
       'source',
-      'unknownFree',
+      'unclassified',
       'updatedAt',
       'visible',
     ])
-    assert.deepEqual(refreshed.body.unknownFree, [])
+    assert.equal(refreshed.body.unclassified, 1)
     assert.deepEqual(
       refreshed.body.models.map((m) => m.id),
       refreshed.body.visible,
@@ -366,15 +409,13 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
     const adapter = host.registered[0][1]
     const derived = await adapter.resolveModel(PROVIDER_ID, 'orbit-otter-free')
     assert.equal(derived.id, 'orbit-otter-free')
-    const deprecated = await adapter.resolveModel(PROVIDER_ID, 'deepseek-v4-flash-free')
-    assert.equal(deprecated.id, 'deepseek-v4-flash-free', 'it resolves until a probe says otherwise')
 
     // Field-level mapping (channel + limits) is asserted on the seam that
     // actually owns it — the catalogue's own model records — not on the
     // adapter's resolved-model info, which never carried `api`.
     const record = plugin.freeModels().find((m) => m.id === 'orbit-otter-free')
     assert.ok(record, 'the derived record must be in the catalogue')
-    assert.equal(record.api, 'openai-responses', 'D6: reasoning effort ⇒ responses')
+    assert.equal(record.api, 'openai-responses', 'the entry declares the responses endpoint')
     assert.equal(record.name, 'Orbit Otter Free')
     assert.equal(record.contextWindow, 1048576, 'limit.context is mapped')
     assert.equal(record.maxTokens, 524288, 'limit.output is mapped')
@@ -388,14 +429,16 @@ test('derived catalogue: deprecated stays until a probe judges it, paid drops ou
 test('the panel endpoint reports exactly what the picker offers', async () => {
   const host = mount({})
   try {
+    await catalogueReady()
     const read = await callRoute(host, CATALOG_ROUTE, 'GET')
     assert.equal(read.status, 200)
     assert.deepEqual(read.body.visible.slice().sort(), (await listedIds(host)).slice().sort())
     assert.equal(typeof read.body.source, 'string')
     // Provenance and freshness are part of the contract the panel renders.
-    assert.equal(read.body.source, 'builtin-fallback')
+    assert.equal(read.body.source, 'official')
     assert.equal(typeof read.body.updatedAt, 'number')
     assert.equal(read.body.refreshing, false)
+    assert.equal(read.body.unclassified, 0, 'a cached list carries only free entries; nothing to count')
   } finally {
     host.dispose()
   }
@@ -437,6 +480,10 @@ test('the progress reading reaches the wire with each failure reason intact', as
 })
 
 test('GET on the probe route reports live progress without starting a round', async () => {
+  // A cache written by an earlier round restores that round's summary at start,
+  // so the idle shape is only observable against a cache that never saw one.
+  const empty = await mkdtemp(join(tmpdir(), 'dsh-opencode-free-idle-'))
+  process.env.DSH_HOME = empty
   const host = mount({})
   try {
     // No prober is wired in this mount, so forceProbes is a no-op — but the
@@ -457,6 +504,8 @@ test('GET on the probe route reports live progress without starting a round', as
     assert.equal(idle.body.running, false)
   } finally {
     host.dispose()
+    process.env.DSH_HOME = home
+    await rm(empty, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   }
 })
 

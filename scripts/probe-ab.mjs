@@ -36,7 +36,6 @@ import {
   builtinFreeModels,
   builtinKnownApis,
   catalogTemplate,
-  fetchZenModelIds,
   probeModel,
   zenProvider,
 } from '../lib/zen-provider.js'
@@ -54,17 +53,15 @@ const template = catalogTemplate() ?? builtinFreeModels()[0]
 if (template === undefined) throw new Error('no builtin free record to use as a template')
 const catalog = createCatalog({
   template,
-  builtinBaseline: builtinFreeModels(),
   knownApis: builtinKnownApis(),
   cachePath: join(dir, 'catalog.json'),
   fetchImpl: (url, init) => fetch(url, init),
-  listZenIds: async () => await fetchZenModelIds(fetch),
 })
 
-console.error('fetching the live catalogue (5.2MB, once)...')
+console.error('fetching the live model list (once)...')
 await catalog.forceRefresh()
 const all = catalog.effectiveModels()
-console.error(`catalogue: ${all.length} models after the Zen gate`)
+console.error(`catalogue: ${all.length} models in Zen's list`)
 if (!all.length) throw new Error('empty catalogue; the tier answered nothing')
 
 /* Optional third argument: a comma-separated subset of model ids.

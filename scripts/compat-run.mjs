@@ -1,6 +1,6 @@
 // Compat run CLI (CONTEXT.md: compat run, not the plugin's probe).
 //
-//   pnpm compat --dsh <version> [--model <id>] [--tools] [--keep] [--out <dir>]
+//   pnpm compat --dsh <version> [--model <id>] [--tools] [--l0-only] [--keep] [--out <dir>]
 //
 // Installs the given DSH and this repo's packed plugin into a temp
 // DSH_HOME, verifies every Zen free model through a real headless DSH, prints
@@ -21,7 +21,7 @@ import { fetchCompatCatalogue } from './compat-catalogue.mjs'
 import { CompatPreconditionError, runCompat } from './compat-core.mjs'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const USAGE = 'usage: pnpm compat --dsh <version> [--model <id>] [--tools] [--keep] [--out <dir>]'
+const USAGE = 'usage: pnpm compat --dsh <version> [--model <id>] [--tools] [--l0-only] [--keep] [--out <dir>]'
 /** Exit code for a refused precondition: nothing was installed or sent. */
 const EXIT_PRECONDITION = 3
 
@@ -37,6 +37,7 @@ async function main() {
         dsh: { type: 'string' },
         model: { type: 'string' },
         tools: { type: 'boolean', default: false },
+        'l0-only': { type: 'boolean', default: false },
         keep: { type: 'boolean', default: false },
         out: { type: 'string' },
         help: { type: 'boolean', short: 'h', default: false },
@@ -59,7 +60,7 @@ async function main() {
   })
   try {
     const { text, files, exitCode } = await runCompat(
-      { dsh: args.dsh, model: args.model, tools: args.tools, out: args.out === undefined ? undefined : resolve(args.out) },
+      { dsh: args.dsh, model: args.model, tools: args.tools, l0Only: args['l0-only'], out: args.out === undefined ? undefined : resolve(args.out) },
       {
         pkg,
         env: process.env,
@@ -259,7 +260,7 @@ function createDriver({ dsh, keep }) {
         const asked = Object.values(progress.results ?? {}).filter((row) => row.code !== 'not-listed').length
         console.error(`compat: warmup: the probe round asked ${asked} model(s)`)
         const snapshot = await call('/catalog')
-        if (snapshot.source !== 'models.dev') throw new Error(`the plugin's catalogue is ${snapshot.source}, not models.dev`)
+        if (snapshot.source !== 'official') throw new Error(`the plugin's catalogue is ${snapshot.source}, not the official list`)
         return { visible: snapshot.visible, probe: progress, targets: Object.entries(progress.results ?? {}).filter(([, row]) => row.code !== 'not-listed').map(([id]) => id) }
       } finally {
         run.child.kill()

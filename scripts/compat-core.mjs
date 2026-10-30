@@ -5,7 +5,6 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
-import { thinkingLevelMapFor } from '../lib/catalog.js'
 import { parseHeadlessOutput, verifyToolEvidence } from './compat-evidence.mjs'
 
 /** A precondition failed: nothing was installed and no request was sent. */
@@ -29,6 +28,10 @@ export async function runCompat(options, deps) {
   }
 
   const only = typeof options.model === 'string' && options.model.trim() !== '' ? options.model.trim() : undefined
+  const l0Only = options.l0Only === true
+  if (l0Only && (only !== undefined || options.tools === true)) {
+    throw new CompatPreconditionError('--l0-only checks every free model at L0 alone; it cannot be combined with --model or --tools')
+  }
   // Detected, never an option: a key on the command line ends up in shell history.
   const key = deps.env.OPENCODE_API_KEY?.trim() || undefined
   const ask = redactingDriver(deps.driver, key)
@@ -40,6 +43,7 @@ export async function runCompat(options, deps) {
     keyed: key !== undefined,
     tools: options.tools === true,
     ...(only === undefined ? {} : { model: only }),
+    ...(l0Only ? { l0Only: true } : {}),
     path: VERIFICATION_PATH,
   }
   let live
@@ -50,27 +54,21 @@ export async function runCompat(options, deps) {
     // models and call it today's answer. Nothing ran, so the run is unfinished.
     const report = {
       header,
-      catalogue: { error: describe(error), onlyLive: [], onlyBuiltin: [] },
+      catalogue: { error: describe(error) },
       warmup: null,
       models: [],
       unverified: [],
     }
     return await finish(report, 2, options, deps)
   }
-  const models = live.targets.map(({ id, api }) => ({ id, api, effort: lowestEffort(live.modelsDev[id] ?? {}) }))
+  const models = live.targets.map(({ id, api, efforts }) => ({ id, api, effort: lowestEffort(efforts) }))
   const liveIds = new Set(models.map((model) => model.id))
   if (only !== undefined && !liveIds.has(only)) {
     throw new CompatPreconditionError(
       `--model ${only} is not a free model Zen serves now; choose one of: ${[...liveIds].join(', ')}`,
     )
   }
-  const builtinIds = new Set(live.builtinIds)
-  const catalogue = {
-    error: null,
-    onlyLive: models.map((model) => model.id).filter((id) => !builtinIds.has(id)),
-    onlyBuiltin: live.builtinIds.filter((id) => !liveIds.has(id)),
-    ...live.selection,
-  }
+  const catalogue = { error: null, ...live.selection }
 
   const selected = only === undefined ? models : models.filter((model) => model.id === only)
   const unresolved = (live.selection.unresolved ?? []).filter(row => only === undefined || row.id === only)
@@ -79,8 +77,7 @@ export async function runCompat(options, deps) {
   }
   // The plugin's probe round asks every model that is switched on, so a
   // single-model run switches the others off for the warmup.
-  const hidden =
-    [...new Set([...live.zenIds, ...live.builtinIds, ...Object.keys(live.modelsDev)])].filter(id => !selected.some(model => model.id === id && model.api !== null))
+  const hidden = live.zenIds.filter(id => !selected.some(model => model.id === id && model.api !== null))
   const results = []
   let warmup
   try {
@@ -91,7 +88,7 @@ export async function runCompat(options, deps) {
     // first, which spends what quota is left where an answer is likely. The
     // streak rule still applies to the rest.
     const answered = (model) => warmup.probe[model.id]?.status === 'ok'
-    const ordered = [...selected.filter(answered), ...selected.filter((model) => !answered(model))]
+    const ordered = l0Only ? selected : [...selected.filter(answered), ...selected.filter((model) => !answered(model))]
     let streak = 0
     let asked = false
     for (const { id, effort, api } of ordered) {
@@ -121,6 +118,13 @@ export async function runCompat(options, deps) {
         })
         continue
       }
+      if (l0Only) {
+        // The warmup round is the only request: no model is asked again.
+        results.push(l0.pass
+          ? { ...base, l0, verdict: 'ok', layer: 'L0', reason: '' }
+          : { ...base, l0, verdict: l0Failure(l0), layer: null, reason: `L0 ${l0.probe}` })
+        continue
+      }
       if (streak >= RATE_LIMIT_STREAK) {
         results.push({ ...base, l0, verdict: 'unverified', layer: 'L0', reason: `not run: ${RATE_LIMIT_STREAK} models in a row were rate-limited` })
         continue
@@ -138,22 +142,24 @@ export async function runCompat(options, deps) {
       }
       streak = result.verdict === 'rate-limited' ? streak + 1 : 0
       if (!l0.pass && result.verdict !== 'plugin-fault') {
-        const failure = l0.code === 'quota-exhausted' ? 'rate-limited' : ['anon-gated', 'bad-key'].includes(l0.code) ? 'gate-refused' : l0.code === 'dead' || l0.http >= 500 ? 'upstream-down' : 'unverified'
-        result = { ...result, verdict: result.verdict === 'ok' ? failure : result.verdict, reason: `L0 ${l0.probe}${result.reason ? `; ${result.reason}` : ''}` }
+        result = { ...result, verdict: result.verdict === 'ok' ? l0Failure(l0) : result.verdict, reason: `L0 ${l0.probe}${result.reason ? `; ${result.reason}` : ''}` }
       }
       results.push(result)
     }
   } finally {
     await deps.driver.dispose()
   }
+  const extraVisible = warmup.ok ? warmup.visible.filter(id => !liveIds.has(id)) : []
   const report = {
     header,
     catalogue,
-    warmup: { ok: warmup.ok, error: warmup.error, visible: warmup.visible, runtime: warmup.runtime ?? null, unexpectedTargets: warmup.targets.filter(id => !selected.some(model => model.id === id && model.api !== null)) },
+    warmup: { ok: warmup.ok, error: warmup.error, visible: warmup.visible, runtime: warmup.runtime ?? null, extraVisible, unexpectedTargets: warmup.targets.filter(id => !selected.some(model => model.id === id && model.api !== null)) },
     models: results,
     unverified: results.filter((result) => result.verdict === 'unverified').map((result) => result.id),
   }
-  const code = warmup.ok ? exitCodeFor(results) : 1
+  // The picker must offer exactly the official free set: a model it shows that the
+  // official list does not call free is a plugin fault, whatever any probe said.
+  const code = warmup.ok ? (extraVisible.length > 0 ? 1 : exitCodeFor(results)) : 1
   return await finish(report, code === 0 && (unresolved.length > 0 || report.warmup.unexpectedTargets.length > 0) ? 2 : code, options, deps)
 }
 
@@ -163,7 +169,7 @@ export async function runCompat(options, deps) {
  * working tree.
  */
 async function finish(report, exitCode, options, deps) {
-  const full = { ...report, exitCode, acceptance: { scope: report.header.model === undefined ? 'all-official-free-conversational' : 'selected-model', requiredLayers: ['L0', 'L1', ...(report.header.tools ? ['L2-read', 'L2-shell'] : [])], complete: exitCode === 0, fullModelAcceptance: exitCode === 0 && report.header.tools && report.header.model === undefined } }
+  const full = { ...report, exitCode, acceptance: { scope: report.header.l0Only ? 'all-official-free-conversational-l0' : report.header.model === undefined ? 'all-official-free-conversational' : 'selected-model', requiredLayers: report.header.l0Only ? ['L0'] : ['L0', 'L1', ...(report.header.tools ? ['L2-read', 'L2-shell'] : [])], complete: exitCode === 0, fullModelAcceptance: exitCode === 0 && report.header.tools && report.header.model === undefined } }
   const text = renderMatrix(full)
   const json = `${JSON.stringify(full, null, 2)}\n`
   const stem = `compat-${full.header.dshVersion}-${full.header.date.slice(0, 10)}`
@@ -191,7 +197,8 @@ const EXIT_MEANING = {
  * model verified": success applies only to the requested scope and layers.
  */
 function resultMeaning(report) {
-  const { model } = report.header
+  const { model, l0Only } = report.header
+  if (l0Only && report.exitCode === 0) return 'every free model answered the L0 probe; L1 and L2 were not run, so this is not full acceptance'
   if (model === undefined || report.exitCode !== 0) return EXIT_MEANING[report.exitCode]
   const verdict = report.models[0]?.verdict
   return verdict === 'ok'
@@ -212,6 +219,7 @@ function renderMatrix(report) {
     ...(header.model === undefined
       ? []
       : [`- Model: ${header.model} (single-model run: the other free models were not asked)`]),
+    ...(header.l0Only ? ['- Scope: L0 only, every free model (the warmup probe round; no L1 or L2 request)'] : []),
     `- Path: ${header.path}`,
     `- Result: exit code ${report.exitCode} — ${resultMeaning(report)}`,
     '',
@@ -219,13 +227,18 @@ function renderMatrix(report) {
   if (report.catalogue.error !== null) {
     lines.push(`Live catalogue unavailable, nothing was verified: ${report.catalogue.error}`, '')
   } else {
-    lines.push(
-      `- Live only (not in the builtin list): ${report.catalogue.onlyLive.join(', ') || '(none)'}`,
-      `- Builtin only (not in the live list): ${report.catalogue.onlyBuiltin.join(', ') || '(none)'}`,
-    )
+    const snapshot = report.catalogue.snapshot
+    if (snapshot !== undefined) {
+      lines.push(
+        `- Official list: ${snapshot.total} entries, ${snapshot.free.length} free (${snapshot.at}, sha256 ${snapshot.digest})`,
+        `- Official free models: ${snapshot.free.join(', ') || '(none)'}`,
+      )
+    }
+    for (const warning of report.catalogue.warnings ?? []) lines.push(`- Warning: ${cell(warning)}`)
   }
   if (report.warmup !== null) {
     lines.push(`- Warmup: ${report.warmup.ok ? 'ok' : `FAILED — ${report.warmup.error}`}`)
+    if (report.warmup.extraVisible?.length) lines.push(`- Plugin offers models the official list does not call free: ${report.warmup.extraVisible.map(cell).join(', ')}`)
     if (report.warmup.unexpectedTargets?.length) lines.push(`- Unexpected probe targets: ${report.warmup.unexpectedTargets.map(cell).join(', ')}`)
   }
   lines.push(`- Required layers: ${report.acceptance.requiredLayers.join(', ')}`, `- Full-model L0/L1/L2 acceptance: ${report.acceptance.fullModelAcceptance ? 'passed' : 'not passed'}`)
@@ -275,6 +288,13 @@ async function warmUp(deps, hidden) {
   }
 }
 
+/** The verdict an L0 probe failure stands for. */
+function l0Failure(l0) {
+  if (l0.code === 'quota-exhausted') return 'rate-limited'
+  if (['anon-gated', 'bad-key'].includes(l0.code)) return 'gate-refused'
+  return l0.code === 'dead' || l0.http >= 500 ? 'upstream-down' : 'unverified'
+}
+
 /** One probe-round row (the plugin's panel shape) as report text. */
 function probeRow(row) {
   if (row === undefined) return 'not probed'
@@ -288,14 +308,11 @@ const NO_LEVELS = 'no published levels (無等級可選)'
 const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 
 /**
- * The lowest effort models.dev publishes for this model, read through the
- * plugin's own mapping so the run asks for exactly what the picker offers.
- * `undefined` for a toggle model or one with no list: the default is used.
+ * The lowest effort the official list publishes for this model. `undefined` for
+ * a model with no list, or one that only names `none`: the default is used.
  */
-function lowestEffort(record) {
-  const map = thinkingLevelMapFor(record)
-  if (map === undefined) return undefined
-  return EFFORT_ORDER.find((level) => typeof map[level] === 'string')
+function lowestEffort(efforts) {
+  return EFFORT_ORDER.find((level) => efforts?.includes(level))
 }
 
 function describe(error) {

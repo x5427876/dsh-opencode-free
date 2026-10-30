@@ -65,7 +65,7 @@ const { getApiProvider } = await import('@earendil-works/pi-ai/compat')
 // and otherwise falls back to `homedir()/.dsh`; its `fetchImpl` reaches the live
 // `globalThis.fetch`. Without this block these 26 cases read AND WRITE the
 // developer's real ~/.dsh/dsh-opencode-free/catalog.json, and really request
-// models.dev — while README promises "The unit tests … do not use the network".
+// the official model list — while README promises "The unit tests … do not use the network".
 // model-visibility.test.mjs already did exactly this
 // correctly, so the omission was an oversight rather than a design choice.
 //
@@ -118,11 +118,14 @@ test('targets the pinned DSH contracts', async () => {
     providerSrc.includes('dsh-opencode-free/${PLUGIN_VERSION}'),
     'the provider User-Agent derives its version rather than repeating it',
   )
+  // The list request carries the provider's own identity headers. A second
+  // definition in catalog.ts would be a second string to drift.
   const catalogSrc = await readFile(new URL('../src/catalog.ts', import.meta.url), 'utf8')
   assert.ok(
-    catalogSrc.includes('dsh-opencode-free/${PLUGIN_VERSION}'),
-    'and so does the models.dev User-Agent — one definition, both strings',
+    catalogSrc.includes('zenListRequest()'),
+    'the catalogue asks for the list with the provider\'s request — one definition, one set of headers',
   )
+  assert.ok(!/User-Agent|user-agent/.test(catalogSrc), 'catalog.ts defines no identity string of its own')
   // Every scripts/ path referenced from committed prose must be a real tracked
   // file: probe-ab.mjs was cited from four committed places (source comment,
   // test-live.mjs, ADR 0002, old release notes) while being untracked, so the only
@@ -226,10 +229,21 @@ test('registers opencode-zen-free through the PiAiAdapter seam', async () => {
     },
     effect: (fn) => fn(),
   }
+  // The catalogue has no offline floor: it offers what the official list named,
+  // read from the warm cache here (the network is closed). Seed one entry per
+  // model the bare provider reports, so the two sets can be compared.
+  const { cachePath, writeCacheAtomic } = await import('../src/catalog.ts')
+  const free = (id) => ({ id, type: 'chat', cost: { text: { input: { price: 0 }, output: { price: 0 } } } })
+  await writeCacheAtomic(cachePath(), { fetchedAt: Date.now(), models: models.map((m) => free(m.id)) })
   plugin.apply(fakeCtx, {})
   assert.deepEqual(registered[0][0], [PROVIDER_ID])
   assert.ok(registered[0][1] instanceof PiAiAdapter)
-  const advertised = await registered[0][1].listModels(PROVIDER_ID)
+  // The warm read is fire-and-forget, so wait for it rather than for a tick count.
+  let advertised = []
+  for (let attempt = 0; attempt < 200 && advertised.length === 0; attempt++) {
+    advertised = await registered[0][1].listModels(PROVIDER_ID)
+    if (advertised.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
+  }
   // The same SET: the adapter offers exactly the models the provider does.
   // Order is asserted separately below, because this test builds a bare
   // provider with no catalogue behind it — in the real wiring both lists come
@@ -759,8 +773,8 @@ test('GUARD: the probe re-asserts its admission tools on the final payload', asy
   // The failure this exists for. Measured 2026-09-30 inside the DSH host: the
   // probe's outgoing body carried NO `tools`, and upstream answered
   // `403 FreeTierError: "OpenCode's free tier can only be used from within
-  // OpenCode"` — the documented consequence of a tool-less request at this tier
-  // (docs/archive/protocol-history.md §8). The same code outside the host sent the
+  // OpenCode"` — the documented consequence of a tool-less request at this tier.
+  // The same code outside the host sent the
   // tools and was admitted, so the loss happens between the context gate and
   // the wire, somewhere this plugin does not own.
   //
@@ -921,8 +935,8 @@ test("GUARD: the availability check is one cheap catalogue GET, in 9router's sha
 
 test('GUARD: a model that only answers on another channel is alive, not dead', async () => {
   // The bug this whole change exists for. Our channel comes from the
-  // models.dev record, and Zen publishes no way to look up which endpoint a
-  // model is served on — 9router hard-codes it, we infer it. A wrong inference
+  // official list entry, which can name a channel the model is not actually
+  // served on — we infer it. A wrong inference
   // is answered with "model not supported", the same sentence a dead model
   // produces, so one wrong guess did not report a routing mistake: it removed a
   // working model from the picker PERMANENTLY. A liveness check that can be
@@ -1194,7 +1208,7 @@ test('probe verdicts: a text reply is ok, only a positive signal is dead', async
     '{"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: Model is unavailable."}}'
   const ENDPOINT_400 =
     '{"error":{"type":"server_error","message":"Error from provider (Console): Upstream request failed: Endpoint is unavailable."}}'
-  // The free route declining to serve a model models.dev still lists free.
+  // The free route declining to serve a model the official list still shows as free.
   const UNSUPPORTED_401 =
     '{"type":"error","error":{"type":"ModelError","message":"Model kimi-k2.5-free is not supported"}}'
   // The SAME sentence about the request instead of the model: a healthy model

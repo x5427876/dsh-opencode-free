@@ -41,11 +41,3 @@ whose blockers are closed; do not infer readiness from labels alone.
 
 **PRs as a request surface: no.** A bare `#<n>` may still identify a PR because
 GitHub shares the number space; distinguish it before updating.
-
-## Former local tickets
-
-GitHub state, assignees, requirements, and dependencies are canonical. `.scratch/`
-was removed after migration; only when resolving a former path or checking for a
-duplicate migration, read the [historical mapping](../archive/github-migration.md).
-Migration does not complete unfinished acceptance. Preserve findings and outcomes;
-source/evidence paths at unpushed commits are not usable GitHub blob links.

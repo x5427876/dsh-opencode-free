@@ -11,14 +11,13 @@ const PIN = pkg.peerDependencies['@deepseek-ai/dsh-llm']
 
 /**
  * Fake world for one compat run. Every dependency is in memory: no DSH, no
- * Zen, no models.dev, no real waiting. `replies` maps a model id to the queue
+ * Zen, no real waiting. `replies` maps a model id to the queue
  * of driver outputs it answers with, in order; the last entry repeats.
  */
 function world({
   replies = {},
   zenIds = ['alpha-free', 'beta-free'],
-  modelsDev,
-  builtinIds = ['alpha-free', 'beta-free'],
+  efforts = {},
   env = {},
 } = {}) {
   const calls = []
@@ -37,12 +36,7 @@ function world({
     tmpDir: '/tmp/compat-xyz',
     catalogue: async () => ({
       zenIds,
-      modelsDev: modelsDev ?? Object.fromEntries(zenIds.map((id) => [id, free()])),
-      builtinIds,
-      targets: zenIds.filter(id => {
-        const record = modelsDev?.[id]
-        return modelsDev === undefined || record?.cost && Object.values(record.cost).every(value => value === 0)
-      }).map(id => ({ id, api: 'openai-completions' })),
+      targets: zenIds.map(id => ({ id, api: 'openai-completions', efforts: efforts[id] })),
       selection: { sources: [], excluded: [], unresolved: [] },
     }),
     driver: {
@@ -73,8 +67,16 @@ function world({
   return { deps, calls, sleeps, writes, runs: () => calls.filter((call) => call.kind === 'run') }
 }
 
-function free(extra = {}) {
-  return { cost: { input: 0, output: 0 }, ...extra }
+/** One official model-list entry; free and chat-completions by default. */
+function official(id, { price = 0, type = 'chat', api, effort, cost } = {}) {
+  return {
+    id,
+    type,
+    created: 1793344437,
+    cost: cost ?? { text: { input: { price, cache: { read: 0, write: 0 } }, output: { price } } },
+    api: api ?? { 'chat-completions': { base_url: 'https://opencode.ai/inference/openai/v1' } },
+    capabilities: { reasoning: { supported: true, ...(effort === undefined ? {} : { effort }) } },
+  }
 }
 function ok(stdout = 'OK\n') {
   return { stdout, stderr: '', exitCode: 0 }
@@ -187,7 +189,7 @@ test('still 429 after backing off 30s then 60s is rate-limited, and the exit cod
 
 test('models are spaced 3s apart', async () => {
   const ids = ['a-free', 'b-free', 'c-free']
-  const { deps, sleeps } = world({ zenIds: ids, builtinIds: ids })
+  const { deps, sleeps } = world({ zenIds: ids })
   await runCompat({ dsh: PIN }, deps)
   assert.deepEqual(sleeps, [3_000, 3_000])
 })
@@ -196,7 +198,6 @@ test('three rate-limited models in a row end the run and the rest are listed as 
   const ids = ['a-free', 'b-free', 'c-free', 'd-free', 'e-free']
   const { deps, runs } = world({
     zenIds: ids,
-    builtinIds: ids,
     replies: { 'a-free': [RATE_LIMITED], 'b-free': [RATE_LIMITED], 'c-free': [RATE_LIMITED] },
   })
   const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
@@ -216,7 +217,6 @@ test('an answer between rate-limited models resets the streak', async () => {
   const ids = ['a-free', 'b-free', 'c-free', 'd-free']
   const { deps } = world({
     zenIds: ids,
-    builtinIds: ids,
     replies: { 'a-free': [RATE_LIMITED], 'b-free': [RATE_LIMITED], 'd-free': [RATE_LIMITED] },
   })
   const { report } = await runCompat({ dsh: PIN }, deps)
@@ -233,43 +233,48 @@ test('a plugin-fault outranks an unfinished run: exit 1, not 2', async () => {
   assert.equal(exitCode, 1)
 })
 
-test('the models verified are Zen\'s list intersected with what models.dev calls free', async () => {
-  const { deps, runs } = world({
-    zenIds: ['alpha-free', 'paid-model', 'zen-only-free', 'new-free'],
-    modelsDev: {
-      'alpha-free': free(),
-      'paid-model': { cost: { input: 1, output: 2 } },
-      'new-free': free(),
-      'md-only-free': free(),
-    },
-    builtinIds: ['alpha-free', 'retired-free'],
-  })
-  const { report } = await runCompat({ dsh: PIN }, deps)
+test('the models verified are the free chat entries of the official list, and the report names the snapshot', async () => {
+  const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
+  const { deps, runs } = world()
+  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: async url => {
+    if (String(url).endsWith('/models')) return Response.json({ data: [official('alpha-free'), official('paid-model', { price: 2 }), official('image-free', { type: 'image' }), official('new-free')] })
+    return new Response('', { status: 503 })
+  }, now: () => new Date('2026-10-15T00:00:00Z') })
+  deps.driver.warmup = async () => ({ visible: ['alpha-free', 'new-free'], probe: { results: { 'alpha-free': { status: 'ok' }, 'new-free': { status: 'ok' } } } })
+  const { report, text } = await runCompat({ dsh: PIN }, deps)
   assert.deepEqual(report.models.map((m) => m.id), ['alpha-free', 'new-free'])
   assert.deepEqual([...new Set(runs().map((r) => r.model))], ['alpha-free', 'new-free'])
-  assert.deepEqual(report.catalogue.onlyLive, ['new-free'])
-  assert.deepEqual(report.catalogue.onlyBuiltin, ['retired-free'])
+  assert.deepEqual(report.catalogue.excluded.map((row) => [row.id, row.reason]), [['paid-model', 'paid'], ['image-free', 'non-conversational']])
+  assert.deepEqual(report.catalogue.snapshot.free, ['alpha-free', 'new-free'])
+  assert.equal(report.catalogue.snapshot.total, 4)
+  assert.match(report.catalogue.snapshot.digest, /^[0-9a-f]{64}$/)
+  assert.match(text, /Official list: 4 entries, 2 free/)
+})
+
+test('the snapshot digest names the free set and ignores volatile fields', async () => {
+  const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
+  const fetchWith = created => fetchCompatCatalogue({ fetchImpl: async url => String(url).endsWith('/models')
+    ? Response.json({ data: [{ ...official('alpha-free'), created }, official('paid-model', { price: 1 })] })
+    : new Response('', { status: 503 }) })
+  const first = await fetchWith(1)
+  const second = await fetchWith(2)
+  assert.equal(first.selection.snapshot.digest, second.selection.snapshot.digest)
 })
 
 test('each model is asked at its lowest published effort; a model without levels uses the default and says so', async () => {
   const { deps, runs } = world({
-    zenIds: ['effort-free', 'toggle-free', 'bare-free'],
-    modelsDev: {
-      'effort-free': free({ reasoning_options: [{ type: 'effort', values: ['high', 'low', 'max'] }] }),
-      'toggle-free': free({ reasoning_options: [{ type: 'toggle' }] }),
-      'bare-free': free(),
-    },
-    builtinIds: [],
+    zenIds: ['effort-free', 'none-free', 'bare-free'],
+    efforts: { 'effort-free': ['high', 'low', 'max'], 'none-free': ['none'] },
   })
   const { report } = await runCompat({ dsh: PIN }, deps)
   assert.deepEqual(runs().map((r) => [r.model, r.effort]), [
     ['effort-free', 'low'],
-    ['toggle-free', undefined],
+    ['none-free', undefined],
     ['bare-free', undefined],
   ])
   assert.deepEqual(report.models.map((m) => [m.id, m.effort, m.effortNote]), [
     ['effort-free', 'low', ''],
-    ['toggle-free', null, 'no published levels (無等級可選)'],
+    ['none-free', null, 'no published levels (無等級可選)'],
     ['bare-free', null, 'no published levels (無等級可選)'],
   ])
 })
@@ -277,10 +282,10 @@ test('each model is asked at its lowest published effort; a model without levels
 test('a live catalogue that cannot be fetched stops the run and says so instead of falling back to the builtin list', async () => {
   const { deps, calls } = world()
   deps.catalogue = async () => {
-    throw new Error('models.dev: HTTP 503')
+    throw new Error('official model list unavailable')
   }
   const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
-  assert.match(report.catalogue.error, /models\.dev: HTTP 503/)
+  assert.match(report.catalogue.error, /official model list unavailable/)
   assert.deepEqual(report.models, [])
   assert.deepEqual(calls, [])
   assert.equal(exitCode, 2)
@@ -288,7 +293,7 @@ test('a live catalogue that cannot be fetched stops the run and says so instead 
 
 test('the warmup runs once, before any model, and no model run repeats it', async () => {
   const ids = ['a-free', 'b-free', 'c-free']
-  const { deps, calls } = world({ zenIds: ids, builtinIds: ids })
+  const { deps, calls } = world({ zenIds: ids })
   await runCompat({ dsh: PIN }, deps)
   assert.deepEqual(calls.map((c) => (c.kind === 'run' ? `run:${c.model}` : c.kind)), [
     'setup',
@@ -316,7 +321,7 @@ test('the warmup round becomes each model\'s L0', async () => {
 
 test('a live model missing from the picker fails L0 and is not asked; a probe-dead one is upstream-down', async () => {
   const ids = ['shown-free', 'dead-free', 'lost-free']
-  const { deps, runs } = world({ zenIds: ids, builtinIds: ids })
+  const { deps, runs } = world({ zenIds: ids })
   deps.driver.warmup = async () => ({
     visible: ['shown-free'],
     probe: { results: { 'shown-free': { status: 'ok' }, 'dead-free': { status: 'failed', code: 'dead', http: 404, ms: 300 } } },
@@ -379,8 +384,7 @@ test('the JSON parses back to the report and the matrix carries the same header 
   const ids = ['ok-free', 'down-free', 'a-free', 'b-free', 'c-free', 'late-free']
   const { deps, writes } = world({
     zenIds: ids,
-    builtinIds: ids,
-    modelsDev: Object.fromEntries(ids.map((id) => [id, id === 'ok-free' ? free({ reasoning_options: [{ type: 'effort', values: ['low'] }] }) : free()])),
+    efforts: { 'ok-free': ['low'] },
     replies: {
       'down-free': [failed('dsh: PROVIDER_ERROR: Endpoint is unavailable')],
       'a-free': [RATE_LIMITED],
@@ -418,7 +422,7 @@ const KEY_REPLIES = {
 }
 
 test('without a key nothing is re-run with one', async () => {
-  const { deps, runs } = world({ zenIds: KEY_IDS, builtinIds: KEY_IDS, replies: KEY_REPLIES })
+  const { deps, runs } = world({ zenIds: KEY_IDS, replies: KEY_REPLIES })
   const { report } = await runCompat({ dsh: PIN }, deps)
   assert.equal(report.header.keyed, false)
   assert.equal(runs().some((r) => r.apiKey !== undefined), false)
@@ -429,7 +433,6 @@ test('with a key only rate-limited and gate-refused models are re-run once, besi
   const keyedReply = (request) => (request.apiKey === FAKE_KEY ? ok() : request.model === 'gated-free' ? GATED : RATE_LIMITED)
   const { deps, runs } = world({
     zenIds: KEY_IDS,
-    builtinIds: KEY_IDS,
     env: { OPENCODE_API_KEY: FAKE_KEY },
     replies: { ...KEY_REPLIES, 'limited-free': [keyedReply], 'gated-free': [keyedReply] },
   })
@@ -465,7 +468,6 @@ test('the key never reaches the report, the JSON or the matrix, even when upstre
   const echo = failed(`dsh: AUTH_FAILED: Zen key 無效 Bearer ${FAKE_KEY} rejected（上游 HTTP 401）`)
   const { deps, writes } = world({
     zenIds: KEY_IDS,
-    builtinIds: KEY_IDS,
     env: { OPENCODE_API_KEY: FAKE_KEY },
     replies: {
       ...KEY_REPLIES,
@@ -586,7 +588,6 @@ test('models the warmup round saw answer are asked first, so a run of 429s canno
   const limited = failed('dsh: RATE_LIMIT: 免費額度用完。（上游 HTTP 429）')
   const { deps, runs } = world({
     zenIds: ids,
-    builtinIds: ids,
     replies: { 'a-free': [limited], 'b-free': [limited], 'c-free': [limited] },
   })
   const quota = { status: 'failed', code: 'quota-exhausted', http: 429, ms: 200 }
@@ -631,16 +632,69 @@ test('a --model id Zen does not serve as free is refused before installing or sp
 
 test('--model asks only that model, hides the others during warmup, and the report says it was a single-model run', async () => {
   const ids = ['alpha-free', 'beta-free', 'gamma-free']
-  const { deps, calls, runs } = world({ zenIds: ids, builtinIds: ids })
+  const { deps, calls, runs } = world({ zenIds: ids })
   const { report, text, exitCode } = await runCompat({ dsh: PIN, model: 'beta-free' }, deps)
   assert.equal(exitCode, 0)
   assert.deepEqual(runs().map((run) => run.model), ['beta-free'])
   assert.deepEqual(calls.find((call) => call.kind === 'warmup').hidden, ['alpha-free', 'gamma-free'])
   assert.deepEqual(report.models.map((model) => model.id), ['beta-free'])
   assert.equal(report.header.model, 'beta-free')
-  assert.deepEqual(report.catalogue, { error: null, onlyLive: [], onlyBuiltin: [], sources: [], excluded: [], unresolved: [] })
+  assert.deepEqual(report.catalogue, { error: null, sources: [], excluded: [], unresolved: [] })
   assert.match(text, /single-model/)
   assert.doesNotMatch(text, /every model verified/)
+})
+
+test('--l0-only reads the warmup round for every model and sends no L1 or L2 request', async () => {
+  const ids = ['alpha-free', 'beta-free', 'gamma-free']
+  const { deps, calls, runs } = world({ zenIds: ids })
+  const { report, text, exitCode } = await runCompat({ dsh: PIN, l0Only: true }, deps)
+  assert.equal(exitCode, 0)
+  assert.equal(runs().length, 0)
+  assert.equal(calls.find((call) => call.kind === 'warmup').hidden.length, 0)
+  assert.deepEqual(report.models.map((model) => [model.id, model.verdict, model.layer]), ids.map((id) => [id, 'ok', 'L0']))
+  assert.equal(report.header.l0Only, true)
+  assert.deepEqual(report.acceptance, { scope: 'all-official-free-conversational-l0', requiredLayers: ['L0'], complete: true, fullModelAcceptance: false })
+  assert.match(text, /L0 only/)
+  assert.match(text, /not full acceptance/)
+  assert.match(text, /Full-model L0\/L1\/L2 acceptance: not passed/)
+})
+
+test('--l0-only maps each failed probe to its verdict and never passes a refused model', async () => {
+  const { deps, sleeps } = world({ zenIds: ['a-free', 'b-free', 'c-free', 'd-free'] })
+  deps.driver.warmup = async () => ({
+    visible: ['a-free', 'b-free', 'c-free', 'd-free'],
+    probe: { results: {
+      'a-free': { status: 'failed', code: 'quota-exhausted', http: 429 },
+      'b-free': { status: 'failed', code: 'anon-gated', http: 403 },
+      'c-free': { status: 'failed', code: 'dead', http: 404 },
+      'd-free': { status: 'ok' },
+    } },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN, l0Only: true }, deps)
+  assert.equal(exitCode, 2)
+  assert.deepEqual(report.models.map((model) => [model.id, model.verdict]), [
+    ['a-free', 'rate-limited'],
+    ['b-free', 'gate-refused'],
+    ['c-free', 'upstream-down'],
+    ['d-free', 'ok'],
+  ])
+  assert.deepEqual(sleeps, [], 'no request follows the warmup, so nothing is spaced')
+})
+
+test('--l0-only still faults a free model missing from the picker', async () => {
+  const { deps } = world({ zenIds: ['a-free', 'b-free'] })
+  deps.driver.warmup = async () => ({ visible: ['a-free'], probe: { results: { 'a-free': { status: 'ok' } } } })
+  const { report, exitCode } = await runCompat({ dsh: PIN, l0Only: true }, deps)
+  assert.equal(exitCode, 1)
+  assert.equal(report.models.find((model) => model.id === 'b-free').verdict, 'plugin-fault')
+})
+
+test('--l0-only cannot be combined with --model or --tools, and nothing runs', async () => {
+  for (const extra of [{ model: 'alpha-free' }, { tools: true }]) {
+    const { deps, calls } = world()
+    await assert.rejects(runCompat({ dsh: PIN, l0Only: true, ...extra }, deps), /--l0-only/)
+    assert.deepEqual(calls, [])
+  }
 })
 
 test('a single-model run whose model was refused never says the model verified', async () => {
@@ -652,54 +706,74 @@ test('a single-model run whose model was refused never says the model verified',
   assert.match(text, /Result: exit code 2 .*incomplete/)
 })
 
-test('official free dialogue targets are retained when supplementary metadata is missing', async () => {
-  const { deps, runs } = world()
-  const prior = deps.catalogue
-  deps.catalogue = async () => ({ ...(await prior()), targets: [{ id: 'new-official', api: 'openai-completions' }], selection: { sources: [], excluded: [], unresolved: [] } })
-  deps.driver.warmup = async () => ({ visible: ['new-official'], probe: { results: { 'new-official': { status: 'ok' } } } })
-  const { report } = await runCompat({ dsh: PIN }, deps)
-  assert.deepEqual(report.models.map(row => row.id), ['new-official'])
-  assert.deepEqual(runs().map(row => row.model), ['new-official'])
-})
-
 const officialDocsFixture = `<h2 id="endpoints">Endpoints</h2><table><tr><th>Model</th><th>Model ID</th><th>Endpoint</th><th>AI SDK Package</th></tr>
-    <tr><td>New Chat</td><td>new-chat</td><td>https://opencode.ai/inference/v1/responses</td><td>sdk</td></tr>
-    <tr><td>Paid</td><td>paid</td><td>https://opencode.ai/inference/v1/responses</td><td>sdk</td></tr>
-    <tr><td>Decision</td><td>decision-free</td><td>https://opencode.ai/inference/v1/systemone</td><td>-</td></tr></table>
+    <tr><td>New Chat</td><td>new-chat</td><td>https://opencode.ai/inference/openai/v1/chat/completions</td><td>sdk</td></tr>
+    <tr><td>Paid</td><td>paid</td><td>https://opencode.ai/inference/openai/v1/responses</td><td>sdk</td></tr>
+    <tr><td>Decision</td><td>decision-free</td><td>https://opencode.ai/inference/systemone/v1/systemone</td><td>-</td></tr></table>
     <h2 id="pricing">Pricing</h2><table><tr><th>Model</th><th>Input</th><th>Output</th><th>Cached Read</th><th>Cached Write</th></tr>
     <tr><td>New Chat</td><td>Free</td><td>Free</td><td>Free</td><td>-</td></tr>
     <tr><td>Paid</td><td>$1</td><td>$2</td><td>-</td><td>-</td></tr>
     <tr><td>Decision</td><td>Free</td><td>Free</td><td>-</td><td>-</td></tr></table>`
 
-test('official source metadata drives runner targets, exclusions and reports', async () => {
+/** The official list plus the documentation page, as fetch doubles. */
+const officialFetch = (data, docs = officialDocsFixture) => async url => {
+  if (String(url).endsWith('/models')) return Response.json({ data })
+  if (String(url).includes('/console/models/')) return typeof docs === 'string' ? new Response(docs) : new Response('', { status: docs })
+  return new Response('', { status: 404 })
+}
+
+test('the official list drives targets and exclusions; the documentation page only adds cross-check warnings', async () => {
   const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
   const { deps } = world({ zenIds: ['new-chat'] })
-  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: async url => {
-    if (String(url).endsWith('/models')) return Response.json({ data: ['new-chat', 'paid', 'decision-free'].map(id => ({ id })) })
-    if (String(url).includes('/console/models/')) return new Response(officialDocsFixture)
-    return Response.json({ opencode: { models: {} } })
-  }, now: () => new Date('2026-10-15T00:00:00Z') })
+  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: officialFetch([official('new-chat'), official('paid', { price: 1 }), official('decision-free', { type: 'decision' })]), now: () => new Date('2026-10-15T00:00:00Z') })
   const { report, text } = await runCompat({ dsh: PIN }, deps)
   assert.deepEqual(report.models.map(row => row.id), ['new-chat'])
   assert.deepEqual(report.catalogue.excluded.map(row => [row.id, row.reason]), [['paid', 'paid'], ['decision-free', 'non-conversational']])
-  assert.equal(report.catalogue.sources.length, 3)
-  assert.ok(text.includes('decision-free'))
+  assert.deepEqual(report.catalogue.warnings, ['documentation lists as free, official list does not: decision-free'])
+  assert.equal(report.catalogue.sources.length, 2)
+  assert.match(text, /Warning: documentation lists as free, official list does not: decision-free/)
 })
 
-test('official endpoints under the provider-prefixed paths are classified like the unprefixed ones', async () => {
+test('a documentation page that disagrees or is unavailable only warns and never changes the targets', async () => {
   const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
-  const docs = officialDocsFixture
-    .replace('new-chat</td><td>https://opencode.ai/inference/v1/responses', 'new-chat</td><td>https://opencode.ai/inference/openai/v1/responses')
-    .replace('decision-free</td><td>https://opencode.ai/inference/v1/systemone', 'decision-free</td><td>https://opencode.ai/inference/systemone/v1/systemone')
-    .replace('<td>Paid</td><td>paid</td><td>https://opencode.ai/inference/v1/responses', '<td>Paid</td><td>paid</td><td>https://opencode.ai/inference/openai/v1/chat/completions')
-  const catalogue = await fetchCompatCatalogue({ fetchImpl: async url => {
-    if (String(url).endsWith('/models')) return Response.json({ data: ['new-chat', 'paid', 'decision-free'].map(id => ({ id })) })
-    if (String(url).includes('/console/models/')) return new Response(docs)
-    return Response.json({ opencode: { models: {} } })
-  }, now: () => new Date('2026-10-16T00:00:00Z') })
-  assert.deepEqual(catalogue.targets.map(row => [row.id, row.api]), [['new-chat', 'openai-responses']])
-  assert.deepEqual(catalogue.selection.excluded.map(row => [row.id, row.reason]), [['paid', 'paid'], ['decision-free', 'non-conversational']])
+  const entries = [official('new-chat'), official('extra-free')]
+  const disagree = await fetchCompatCatalogue({ fetchImpl: officialFetch(entries) })
+  assert.deepEqual(disagree.targets.map(row => row.id), ['new-chat', 'extra-free'])
+  assert.deepEqual(disagree.selection.warnings, [
+    'documentation lists as free, official list does not: decision-free',
+    'official list has as free, documentation does not: extra-free',
+  ])
+  const missing = await fetchCompatCatalogue({ fetchImpl: officialFetch(entries, 503) })
+  assert.deepEqual(missing.targets.map(row => row.id), ['new-chat', 'extra-free'])
+  assert.match(missing.selection.warnings[0], /documentation cross-check unavailable: HTTP 503/)
+  assert.equal(missing.selection.sources[1].status, 'unavailable')
+  const changed = await fetchCompatCatalogue({ fetchImpl: officialFetch(entries, officialDocsFixture.replace('<th>Input</th>', '<th>Unknown</th>')) })
+  assert.deepEqual(changed.targets.map(row => row.id), ['new-chat', 'extra-free'])
+  assert.match(changed.selection.warnings[0], /schema changed/)
+})
+
+test('the official api keys decide the transport and the lowest published effort', async () => {
+  const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
+  const catalogue = await fetchCompatCatalogue({ fetchImpl: officialFetch([
+    official('completions-free', { effort: ['none', 'low', 'high'] }),
+    official('responses-free', { api: { responses: { base_url: 'https://opencode.ai/inference/openai/v1' } } }),
+    official('messages-free', { api: { messages: { base_url: 'https://opencode.ai/inference/anthropic/v1' } } }),
+  ]) })
+  assert.deepEqual(catalogue.targets.map(row => [row.id, row.api, row.efforts]), [
+    ['completions-free', 'openai-completions', ['none', 'low', 'high']],
+    ['responses-free', 'openai-responses', undefined],
+    ['messages-free', null, undefined],
+  ])
   assert.deepEqual(catalogue.selection.unresolved, [])
+})
+
+test('a model the plugin offers that the official list does not call free is a plugin fault', async () => {
+  const { deps } = world()
+  deps.driver.warmup = async () => ({ visible: ['alpha-free', 'beta-free', 'paid-leak'], probe: { results: { 'alpha-free': { status: 'ok' }, 'beta-free': { status: 'ok' } } } })
+  const { report, exitCode, text } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(exitCode, 1)
+  assert.deepEqual(report.warmup.extraVisible, ['paid-leak'])
+  assert.match(text, /Plugin offers models the official list does not call free: paid-leak/)
 })
 
 test('unresolved official classifications prevent full acceptance without querying those IDs', async () => {
@@ -724,6 +798,7 @@ test('unsupported official conversational transports remain unverified targets',
   const { deps, runs } = world()
   const prior = deps.catalogue
   deps.catalogue = async () => ({ ...(await prior()), targets: [{ id: 'new-transport', api: null }] })
+  deps.driver.warmup = async () => ({ visible: ['new-transport'], probe: { results: {} } })
   const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
   assert.equal(exitCode, 2)
   assert.equal(report.models[0].id, 'new-transport')
@@ -731,21 +806,17 @@ test('unsupported official conversational transports remain unverified targets',
   assert.deepEqual(runs(), [])
 })
 
-for (const [label, document, ids, expected] of [
-  ['missing metadata', officialDocsFixture, ['new-chat', 'unknown'], 2],
-  ['unknown transport', officialDocsFixture.replace('/v1/responses', '/v1/messages'), ['new-chat'], 2],
-  ['changed columns', officialDocsFixture.replace('<th>Input</th>', '<th>Unknown</th>'), ['new-chat'], 2],
-  ['conflicting prices', officialDocsFixture.replace('<td>New Chat</td><td>Free</td>', '<td>New Chat</td><td>Unknown</td>'), ['new-chat'], 2],
-]) test(`official source ${label} cannot produce a complete pass`, async () => {
+for (const [label, data] of [
+  ['a missing price', [official('new-chat'), { id: 'uncertain', type: 'chat' }]],
+  ['a non-numeric price', [official('new-chat'), official('uncertain', { cost: { text: { input: { price: 'free' }, output: { price: 0 } } } })]],
+]) test(`official list with ${label} cannot produce a complete pass`, async () => {
   const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
-  const { deps } = world({ zenIds: ['new-chat'] })
-  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: async url => {
-    if (String(url).endsWith('/models')) return Response.json({ data: ids.map(id => ({ id })) })
-    if (String(url).includes('/console/models/')) return new Response(document)
-    return Response.json({ opencode: { models: {} } })
-  } })
-  const { exitCode } = await runCompat({ dsh: PIN }, deps)
-  assert.equal(exitCode, expected)
+  const { deps, runs } = world({ zenIds: ['new-chat'] })
+  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: officialFetch(data) })
+  const { exitCode, report } = await runCompat({ dsh: PIN }, deps)
+  assert.equal(exitCode, 2)
+  assert.deepEqual(report.catalogue.unresolved, [{ id: 'uncertain', reason: 'official price missing' }])
+  assert.ok(!runs().some(row => row.model === 'uncertain'))
 })
 
 test('plain final text cannot impersonate host tool execution in L2', async () => {
@@ -827,11 +898,7 @@ test('unexpected inferred probe scope cannot be called full acceptance', async (
 test('mixed valid and malformed official model entries cannot shrink acceptance silently', async () => {
   const { fetchCompatCatalogue } = await import('../scripts/compat-catalogue.mjs')
   const { deps, calls } = world({ zenIds: ['new-chat'] })
-  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: async url => {
-    if (String(url).endsWith('/models')) return Response.json({ data: [{ id: 'new-chat' }, { model_id: 'new-official-free' }] })
-    if (String(url).includes('/console/models/')) return new Response(officialDocsFixture)
-    return Response.json({ opencode: { models: {} } })
-  } })
+  deps.catalogue = () => fetchCompatCatalogue({ fetchImpl: officialFetch([official('new-chat'), { model_id: 'new-official-free' }]) })
   const { exitCode, report } = await runCompat({ dsh: PIN, tools: true }, deps)
   assert.equal(exitCode, 2)
   assert.equal(report.acceptance.complete, false)

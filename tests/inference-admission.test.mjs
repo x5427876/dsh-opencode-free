@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import net from 'node:net'
 import test from 'node:test'
 import { createCatalog } from '../src/catalog.ts'
 import {
@@ -13,6 +14,7 @@ import {
   sessionHeader,
   zenProvider,
 } from '../src/zen-provider.ts'
+import { OPENCODE_TLS_CIPHERS, zenHttpsFetch } from '../src/zen-tls.ts'
 
 const endpoint = 'https://opencode.ai/inference/v1'
 const context = { messages: [{ role: 'user', content: 'OK', timestamp: 1 }] }
@@ -153,11 +155,12 @@ test('warm catalogue rederives cached records with current identity and preserve
   const dir = await mkdtemp(join(tmpdir(), 'inference-cache-'))
   try {
     const path = join(dir, 'catalog.json')
-    await writeFile(path, JSON.stringify({ version: 1, fetchedAt: 100, models: {
-      available: { id: 'available', cost: { input: 0, output: 0 }, baseUrl: 'https://opencode.ai/zen/v1' },
-      retired: { id: 'retired', cost: { input: 0, output: 0 } },
-    }, probes: { retired: { verdict: 'dead', at: 100, swept: true } }, lastProbeAt: 100 }))
-    const catalog = createCatalog({ template: catalogTemplate(), builtinBaseline: [], cachePath: path, fetchImpl: async () => { throw new Error('offline') } })
+    const free = (id, extra = {}) => ({ id, type: 'chat', cost: { text: { input: { price: 0 }, output: { price: 0 } } }, ...extra })
+    await writeFile(path, JSON.stringify({ version: 2, fetchedAt: 100, models: [
+      free('available', { baseUrl: 'https://opencode.ai/zen/v1' }),
+      free('retired'),
+    ], probes: { retired: { verdict: 'dead', at: 100, swept: true } }, lastProbeAt: 100 }))
+    const catalog = createCatalog({ template: catalogTemplate(), cachePath: path, fetchImpl: async () => { throw new Error('offline') } })
     for (let i = 0; i < 100 && catalog.current().models.length === 0; i++) await new Promise(r => setTimeout(r, 5))
     assert.deepEqual(catalog.effectiveModels().map(m => m.id), ['available'])
     assert.equal(catalog.effectiveModels()[0].baseUrl, endpoint)
@@ -218,4 +221,105 @@ test('keyed probes do not inject anonymous admission tools', async () => {
     return refused()
   } })
   assert.equal(body.tools, undefined)
+})
+
+const systemText = body => (body.messages ?? [])
+  .filter(m => m.role === 'system' || m.role === 'developer')
+  .map(m => typeof m.content === 'string' ? m.content : JSON.stringify(m.content))
+  .join('\n')
+
+test('anonymous requests carry the gate\'s environment block exactly once and keyed ones do not', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const sent = async (ctx, apiKey) => {
+    let body
+    await provider.streamSimple(model, ctx, {
+      apiKey, maxRetries: 0,
+      fetch: async (_url, init) => { body = JSON.parse(init.body); return refused() },
+    }).result()
+    return systemText(body)
+  }
+  const user = { role: 'user', content: 'OK', timestamp: 1 }
+  const count = text => text.split('Working directory:').length - 1
+
+  const plain = await sent({ systemPrompt: 'Be brief.', messages: [user] }, 'public')
+  assert.match(plain, /Be brief\./)
+  assert.match(plain, /<env>\s+Working directory: [^\n]+\s+<\/env>/)
+  assert.equal(count(plain), 1)
+  assert.doesNotMatch(plain, /\/(Users|home)\//, 'the host path is not disclosed')
+
+  const own = '<env>\n  Working directory: /srv/app\n</env>'
+  const kept = await sent({ systemPrompt: `Be brief.\n${own}`, messages: [user] }, 'public')
+  assert.equal(count(kept), 1)
+  assert.match(kept, /\/srv\/app/)
+
+  assert.equal(count(await sent({ messages: [user] }, 'public')), 1)
+  assert.equal(count(await sent({ systemPrompt: 'Be brief.', messages: [user] }, 'sk-real-key')), 0)
+})
+
+test('Zen transport offers the official cipher suites, in the official order', async () => {
+  let hello
+  const server = net.createServer(socket => {
+    socket.once('data', data => { hello = data; socket.destroy() })
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    await assert.rejects(zenHttpsFetch(`https://127.0.0.1:${server.address().port}/inference/v1/models`), /fetch failed/)
+  } finally { await new Promise(resolve => server.close(resolve)) }
+  // record header 5 + handshake header 4 + version 2 + random 32, then session id and cipher list
+  let at = 5 + 4 + 2 + 32
+  at += 1 + hello[at]
+  const length = hello.readUInt16BE(at)
+  const offered = []
+  for (let i = 0; i < length; i += 2) {
+    const id = hello.readUInt16BE(at + 2 + i)
+    // GREASE values vary per connection; OpenSSL 3.0 (Node 22) appends the renegotiation SCSV, which is not a cipher suite
+    if ((id & 0x0f0f) !== 0x0a0a && id !== 0x00ff) offered.push(id)
+  }
+  assert.deepEqual(offered, [0x1301, 0x1302, 0x1303, 0xc02b, 0xc02f, 0xc02c, 0xc030, 0xcca9, 0xcca8, 0xc009, 0xc013, 0xc00a, 0xc014, 0x9c, 0x9d, 0x2f, 0x35])
+  assert.equal(OPENCODE_TLS_CIPHERS.split(':').length, 17)
+})
+
+test('fetch guard sends Zen requests through the given transport and other hosts through fetch', async () => {
+  const original = globalThis.fetch
+  const slot = '__dshOpenCodeFreeFetchOriginal' // the guard pins the first fetch it sees
+  const pinned = globalThis[slot]
+  delete globalThis[slot]
+  const viaFetch = [], viaTransport = []
+  globalThis.fetch = async (...args) => { viaFetch.push(String(args[0])); return refused() }
+  const restore = patchGlobalFetchForZen(() => 'guard', async (url, init) => {
+    viaTransport.push([String(url), new Headers(init.headers).get('x-opencode-client')])
+    return refused()
+  })
+  try {
+    await fetch(`${endpoint}/chat/completions`)
+    await fetch('https://other.example/x')
+    assert.deepEqual(viaTransport, [[`${endpoint}/chat/completions`, 'cli']])
+    assert.deepEqual(viaFetch, ['https://other.example/x'])
+  } finally { restore(); globalThis.fetch = original; globalThis[slot] = pinned }
+})
+
+test('anonymous requests alias gate-refused host tool names and restore them on returned calls', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const schema = { type: 'object', properties: { cd: { type: 'string' } } }
+  const tools = ['read', 'bash', 'subagent_fork', 'working_directory'].map(name => ({ name, description: 'A host tool.', parameters: name === 'bash' ? { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } : schema }))
+  const history = { messages: [
+    { role: 'user', content: 'go', timestamp: 1 },
+    { role: 'assistant', api: model.api, provider: model.provider, model: model.id, stopReason: 'toolUse', timestamp: 2, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, content: [{ type: 'toolCall', id: 'call_1', name: 'working_directory', arguments: {} }] },
+    { role: 'toolResult', toolCallId: 'call_1', toolName: 'working_directory', content: [{ type: 'text', text: '/work' }], isError: false, timestamp: 3 },
+  ], tools }
+  const sse = (name) => new Response([
+    { id: 't', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_2', type: 'function', function: { name, arguments: '{}' } }] }, finish_reason: null }] },
+    { id: 't', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+  ].map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+  let anonymous, keyed
+  const result = await provider.streamSimple(model, history, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { anonymous = JSON.parse(init.body); return sse('agent_fork') } }).result()
+  await provider.streamSimple(model, history, { apiKey: 'sk-real-key', maxRetries: 0, fetch: async (_, init) => { keyed = JSON.parse(init.body); return refused() } }).result()
+  const names = body => body.tools.map(t => t.function.name)
+  assert.deepEqual(names(anonymous), ['read', 'bash', 'agent_fork', 'cwd_tool'])
+  assert.doesNotMatch(JSON.stringify(anonymous), /subagent_fork|working_directory/)
+  assert.ok(JSON.stringify(anonymous.messages).includes('cwd_tool'))
+  assert.deepEqual(names(keyed), ['read', 'bash', 'subagent_fork', 'working_directory'])
+  assert.deepEqual(result.content.filter(c => c.type === 'toolCall').map(c => c.name), ['subagent_fork'])
 })

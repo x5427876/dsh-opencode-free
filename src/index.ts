@@ -4,7 +4,7 @@
  *
  * Mirrors `pi-opencode-direct` (same Zen identity, same optional-key
  * priority, same encrypted-content retry, same compaction-prompt swap) but
- * expressed as a DSH bundle for `0.2.1-rc.2`: no OpenCode install, no
+ * expressed as a DSH bundle for `0.2.1-rc.5`: no OpenCode install, no
  * separate server, native pi-ai transports, tools execute through DSH.
  */
 import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
@@ -32,7 +32,6 @@ import {
   builtinFreeModels,
   builtinKnownApis,
   catalogTemplate,
-  fetchZenModelIds,
   patchCompatDirectTransport,
   patchGlobalFetchForZen,
   patchNodeHttpForZen,
@@ -40,6 +39,7 @@ import {
   zenProvider,
 } from "./zen-provider.js";
 import type { ProbeStreamer } from "./zen-provider.js";
+import { needsOpenCodeCiphers, zenHttpsFetch } from "./zen-tls.js";
 
 export {
   BASE_URL,
@@ -196,14 +196,11 @@ function catalogPayload(catalog: Catalog): Record<string, unknown> {
     models: snapshot.capabilities.map((card) => ({ ...card })),
     source: snapshot.source,
     updatedAt: snapshot.updatedAt,
-    // Separate from updatedAt: the Zen gate has its own clock, and a panel that
-    // shows only one age would report a withdrawn model as current for a day.
-    gateCheckedAt: snapshot.gateCheckedAt,
-    // Usually empty. Non-empty means Zen serves a free-tier id that models.dev
-    // has not published yet, so the panel can say so rather than leave the user
-    // wondering why the list is short. A diagnostic; nothing downstream treats
-    // it as membership.
-    unknownFree: [...snapshot.unknownFree],
+    // Usually 0. Non-zero means some conversational entries in Zen's list had
+    // a cost this plugin could not read, so the panel can say the list may be
+    // short rather than leave the user wondering. A diagnostic; those entries
+    // are excluded, never assumed free.
+    unclassified: snapshot.unclassified,
     refreshing: snapshot.refreshing,
     // Present only once a round has run; the panel treats absence as
     // "never probed" rather than as a fault.
@@ -351,8 +348,8 @@ export function apply(ctx: HostContext, config?: Config): void {
   const getConfigKey = (): string | undefined =>
     configuredKey || process.env[ZEN_API_KEY_ENV]?.trim() || undefined;
 
-  // models.dev owns WHICH free models exist; Zen `/models` gates availability.
-  // Built eagerly so the provider, the picker and the panel share one instance:
+  // Zen's own model list owns WHICH free models exist; the probe says which of
+  // them actually answer. Built eagerly so the provider, the picker and the panel share one instance:
   // nobody here keeps a second copy of the list.
   const template = catalogTemplate();
   // The probe is the one thing that needs the provider, and the provider needs
@@ -382,7 +379,6 @@ export function apply(ctx: HostContext, config?: Config): void {
   let provider: Provider = undefined as unknown as Provider;
   const catalog = createCatalog({
     template: template ?? builtinFreeModels()[0]!,
-    builtinBaseline: builtinFreeModels(),
     knownApis: builtinKnownApis(),
     cachePath: cachePath(),
     // A round spends the shared anonymous bucket, so it only asks about the
@@ -399,10 +395,6 @@ export function apply(ctx: HostContext, config?: Config): void {
         provider: provider as unknown as ProbeStreamer,
         apiKey: getConfigKey() ?? "public",
       }),
-    // A probe round asks the catalogue before it asks any model: one free GET
-    // settles "does Zen still serve this id", so a withdrawn model costs no
-    // inference at all. Same request, same headers, as the host's own refresh.
-    listZenIds: async () => await fetchZenModelIds(fetch as unknown as typeof globalThis.fetch),
   });
   registerCatalogRoutes(ctx, catalog);
 
@@ -411,16 +403,16 @@ export function apply(ctx: HostContext, config?: Config): void {
     ...provider,
     getModels: () => {
       // D4: lazy revalidation on read, fire-and-forget so a cold catalogue
-      // never delays the read that triggered it. A first boot legitimately
-      // reports the builtin floor until a sync lands.
+      // never delays the read that triggered it. A first boot with no cache
+      // legitimately reports no models until the first sync lands.
       void catalog.ensureFresh().catch(() => undefined);
       // D2: one availability round per local day, triggered the same way.
-      // Gated on a real catalogue first: probing the offline builtin floor
-      // would spend the shared anonymous bucket to re-confirm models the
-      // picker is already offering. `runProbes` no-ops when today's round
-      // already ran, so this stays a single cheap check per read.
+      // Gated on a real list first: with none adopted there is nothing to
+      // probe, and a round would only stamp the day as done. `runProbes`
+      // no-ops when today's round already ran, so this stays a single cheap
+      // check per read.
       const snapshot = catalog.current();
-      if (snapshot.source !== "builtin-fallback") void catalog.runProbes().catch(() => undefined);
+      if (snapshot.source !== "none") void catalog.runProbes().catch(() => undefined);
       return provider.getModels().filter((m) => !isHidden(m.id));
     },
     // Required by the pi-ai Provider interface, so it stays even though this
@@ -483,7 +475,9 @@ export function apply(ctx: HostContext, config?: Config): void {
     // Main-path streaming still works without the compat patch.
   }
   try {
-    restoreTransport.push(patchGlobalFetchForZen(() => undefined));
+    restoreTransport.push(
+      patchGlobalFetchForZen(() => undefined, needsOpenCodeCiphers() ? zenHttpsFetch : undefined),
+    );
   } catch {
     // Wrappers above already cover the known paths.
   }

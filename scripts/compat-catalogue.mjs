@@ -1,20 +1,48 @@
-// Acceptance targets are independent of the plugin's current catalogue (ADR 0004).
-import { fetchSection } from '../lib/catalog.js'
-import { builtinFreeModels, OPENCODE_USER_AGENT } from '../lib/zen-provider.js'
+// Acceptance targets come from the official model list alone, read by code that is
+// independent of the plugin's catalogue (ADR 0004, ADR 0005). The documentation
+// page is only a cross-check: disagreement is a warning, never a target.
+import { createHash } from 'node:crypto'
+import { OPENCODE_USER_AGENT } from '../lib/zen-provider.js'
 
 export const OFFICIAL_MODELS = 'https://opencode.ai/inference/v1/models'
 export const OFFICIAL_DOCS = 'https://opencode.ai/v2/docs/console/models/'
-const SUPPLEMENT = 'https://models.dev/api.json'
 
-async function fetchOfficialIds(fetchImpl) {
+/** Official `api` keys the plugin can drive, mapped to its transport names. */
+const TRANSPORTS = { 'chat-completions': 'openai-completions', responses: 'openai-responses' }
+
+async function fetchOfficialEntries(fetchImpl) {
   const response = await fetchImpl(OFFICIAL_MODELS, {
     signal: AbortSignal.timeout(15000),
     headers: { Authorization: 'Bearer public', 'User-Agent': OPENCODE_USER_AGENT, 'x-opencode-client': 'cli' },
   })
   if (!response.ok) throw new Error('official model list unavailable')
   const body = await response.json()
-  if (!Array.isArray(body?.data) || body.data.some(model => typeof model?.id !== 'string' || !model.id.trim() || model.id !== model.id.trim())) throw new Error('official model list schema changed')
-  return body.data.map(model => model.id)
+  const entries = body?.data
+  if (!Array.isArray(entries) || entries.some(entry => typeof entry?.id !== 'string' || !entry.id.trim() || entry.id !== entry.id.trim())) throw new Error('official model list schema changed')
+  return entries
+}
+
+const rate = value => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null)
+
+/** One official entry → free target, paid/non-conversational exclusion, or an unresolved answer. */
+function classifyEntry(entry) {
+  if (entry.type !== 'chat') return { excluded: { id: entry.id, reason: 'non-conversational', source: OFFICIAL_MODELS } }
+  const text = entry.cost?.text
+  const required = [rate(text?.input?.price), rate(text?.output?.price)]
+  const cache = [text?.input?.cache?.read, text?.input?.cache?.write].filter(value => value !== undefined).map(rate)
+  if (required.includes(null) || cache.includes(null)) return { unresolved: { id: entry.id, reason: 'official price missing' } }
+  if ([...required, ...cache].some(value => value > 0)) return { excluded: { id: entry.id, reason: 'paid', source: OFFICIAL_MODELS } }
+  const api = entry.api ?? {}
+  const key = Object.keys(TRANSPORTS).find(name => api[name] !== undefined)
+  const levels = entry.capabilities?.reasoning?.effort
+  return {
+    target: {
+      id: entry.id,
+      api: key === undefined ? null : TRANSPORTS[key],
+      endpoint: key === undefined ? null : api[key]?.base_url ?? null,
+      efforts: Array.isArray(levels) ? levels.filter(level => typeof level === 'string') : undefined,
+    },
+  }
 }
 
 const textOf = html => html.replace(/<[^>]*>/g, '').replace(/&(?:nbsp|amp|lt|gt|quot);/g, entity => ({ '&nbsp;': ' ', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"' })[entity]).replace(/\s+/g, ' ').trim()
@@ -30,56 +58,61 @@ function table(html, section, expected) {
   return rows.slice(1)
 }
 
-function classify(zenIds, html) {
+/** Ids the documentation page prices at zero for input and output. */
+function docsFreeIds(html) {
   const endpoints = table(html, 'endpoints', ['Model', 'Model ID', 'Endpoint', 'AI SDK Package'])
   const pricing = table(html, 'pricing', ['Model', 'Input', 'Output', 'Cached Read', 'Cached Write'])
-  const targets = [], excluded = [], unresolved = []
-  for (const id of zenIds) {
-    const matches = endpoints.filter(row => row[1] === id)
-    if (matches.length !== 1) { unresolved.push({ id, reason: 'official endpoint missing or ambiguous' }); continue }
-    const [name, , endpoint] = matches[0]
-    const rates = pricing.filter(row => labelOf(row[0]) === labelOf(name))
-    if (rates.length === 0) { unresolved.push({ id, reason: 'official price missing' }); continue }
-    const free = rates.map(row => row.slice(1).every(value => value === 'Free' || value === '-') && row[1] === 'Free' && row[2] === 'Free')
-    const paid = rates.every(row => row.slice(1).some(value => /^\$\d/.test(value)))
-    if (paid && !free.some(Boolean)) { excluded.push({ id, reason: 'paid', source: OFFICIAL_DOCS }); continue }
-    if (!free.every(Boolean)) { unresolved.push({ id, reason: 'official price ambiguous' }); continue }
-    let url
-    try { url = new URL(endpoint) } catch { unresolved.push({ id, reason: 'official endpoint invalid' }); continue }
-    const path = url.pathname.replace(/^\/inference\/(?:openai|systemone)\/v1\//, '/inference/v1/')
-    if (url.origin !== 'https://opencode.ai' || !path.startsWith('/inference/v1/')) { unresolved.push({ id, reason: 'official endpoint invalid' }); continue }
-    if (path === '/inference/v1/systemone') { excluded.push({ id, reason: 'non-conversational', source: OFFICIAL_DOCS }); continue }
-    const api = path === '/inference/v1/responses' ? 'openai-responses' : path === '/inference/v1/chat/completions' ? 'openai-completions' : null
-    targets.push({ id, api, endpoint })
-  }
-  return { targets, excluded, unresolved }
+  const free = new Set(pricing.filter(row => row[1] === 'Free' && row[2] === 'Free').map(row => labelOf(row[0])))
+  return new Set(endpoints.filter(row => free.has(labelOf(row[0]))).map(row => row[1]))
+}
+
+/** Warnings where the documentation page and the official list disagree on what is free. */
+function crossCheck(html, freeIds) {
+  const docs = docsFreeIds(html)
+  const warnings = []
+  const inDocsOnly = [...docs].filter(id => !freeIds.has(id)).sort()
+  const inListOnly = [...freeIds].filter(id => !docs.has(id)).sort()
+  if (inDocsOnly.length > 0) warnings.push(`documentation lists as free, official list does not: ${inDocsOnly.join(', ')}`)
+  if (inListOnly.length > 0) warnings.push(`official list has as free, documentation does not: ${inListOnly.join(', ')}`)
+  return warnings
 }
 
 export async function fetchCompatCatalogue({ fetchImpl = fetch, now = () => new Date() } = {}) {
-  const results = await Promise.allSettled([
-    fetchOfficialIds(fetchImpl),
-    (async () => {
-      const response = await fetchImpl(OFFICIAL_DOCS, { signal: AbortSignal.timeout(30000) })
-      if (!response.ok) throw new Error(`official documentation HTTP ${response.status}`)
-      return await response.text()
-    })(),
-    fetchSection({ fetchImpl, timeoutMs: 30000 }),
-  ])
-  const [list, docs, supplement] = results
-  if (list.status !== 'fulfilled' || list.value === null) throw new Error('official model list unavailable')
-  if (docs.status !== 'fulfilled') throw new Error('official model documentation unavailable')
-  const zenIds = [...new Set(list.value)]
-  const { targets, excluded, unresolved } = classify(zenIds, docs.value)
-  const supplementary = supplement.status === 'fulfilled' && supplement.value.kind === 'ok'
+  const entries = await fetchOfficialEntries(fetchImpl)
   const at = now().toISOString()
+  const targets = [], excluded = [], unresolved = []
+  for (const entry of new Map(entries.map(entry => [entry.id, entry])).values()) {
+    const result = classifyEntry(entry)
+    if (result.target) targets.push(result.target)
+    else if (result.excluded) excluded.push(result.excluded)
+    else unresolved.push(result.unresolved)
+  }
+  const free = targets.map(target => target.id).sort()
+  // Volatile fields (`created`) are left out, so the digest names the free set itself.
+  const digest = createHash('sha256').update(JSON.stringify(targets.map(target => entries.find(entry => entry.id === target.id)).sort((a, b) => (a.id < b.id ? -1 : 1)).map(({ id, cost, api }) => ({ id, cost, api: Object.keys(api ?? {}).sort() })))).digest('hex')
+  const warnings = []
+  let docsStatus = 'ok'
+  try {
+    const response = await fetchImpl(OFFICIAL_DOCS, { signal: AbortSignal.timeout(30000) })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    warnings.push(...crossCheck(await response.text(), new Set(free)))
+  } catch (error) {
+    docsStatus = 'unavailable'
+    warnings.push(`documentation cross-check unavailable: ${error instanceof Error ? error.message : String(error)}`)
+  }
   return {
-    zenIds, targets,
-    modelsDev: supplementary ? supplement.value.section : {},
-    builtinIds: builtinFreeModels().map(model => model.id),
-    selection: { excluded, unresolved, targets: targets.map(model => model.id), sources: [
-      { url: OFFICIAL_MODELS, at, status: 'ok' },
-      { url: OFFICIAL_DOCS, at, status: 'ok' },
-      { url: SUPPLEMENT, at, status: supplementary ? 'ok' : 'unavailable' },
-    ] },
+    zenIds: [...new Set(entries.map(entry => entry.id))],
+    targets,
+    selection: {
+      excluded,
+      unresolved,
+      targets: free,
+      warnings,
+      snapshot: { at, total: entries.length, free, digest },
+      sources: [
+        { url: OFFICIAL_MODELS, at, status: 'ok' },
+        { url: OFFICIAL_DOCS, at, status: docsStatus },
+      ],
+    },
   }
 }

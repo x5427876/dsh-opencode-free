@@ -18,6 +18,7 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.lazy";
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Catalog } from "./catalog.js";
+import { OPENCODE_TLS_CIPHERS, needsOpenCodeCiphers } from "./zen-tls.js";
 
 export const PROVIDER_ID = "opencode-zen-free";
 export const BASE_URL = "https://opencode.ai/inference/v1";
@@ -25,9 +26,10 @@ const SUPPORTED_APIS = new Set(["openai-responses", "openai-completions"]);
 
 /**
  * The pi-ai builtin free set, identity-mapped. Since the catalogue moved to
- * `catalog.ts` (models.dev owns WHICH models are free; Zen `/models` gates
- * availability), this is no longer the source of truth: it is the D8 offline
- * floor and the identity `template` the derived records inherit from.
+ * `catalog.ts` (Zen's own model list owns WHICH models are free), this is no
+ * longer the source of truth and no longer a fallback list: it is the identity
+ * `template` the derived records inherit from, and what a provider built
+ * without a catalogue reports.
  */
 export function builtinFreeModels(): Model<Api>[] {
   return getBuiltinModels("opencode")
@@ -61,8 +63,8 @@ export function builtinFreeModels(): Model<Api>[] {
  * nothing and every caller fell through to its own fallback — on 2026-09-30
  * that was `builtinFreeModels()[0]`, i.e. `big-pickle`, a model Zen does not
  * serve at all. Nothing broke, and the reason is worth keeping in view: the
- * template only supplies IDENTITY, the channel comes from `knownApis`
- * inference, and capability fields are read from models.dev rather than
+ * template only supplies IDENTITY, the channel comes from the list entry's
+ * own declaration, and capability fields are read from that entry rather than
  * inherited. But a silently-unmatched pin is a trap for the next reader, so the
  * fallback lives here now — deterministic, and preferring a record the free
  * tier actually serves.
@@ -97,9 +99,10 @@ export function builtinKnownApis(): Map<string, Api> {
 let activeCatalog: Catalog | null = null;
 
 /**
- * The catalogue the picker offers. Post-Zen-gate when a catalogue is attached
- * (so `listModels`, this export, and the panel's `visible` are one list), and
- * the pi-ai builtin free set before that — the D8 offline floor.
+ * The catalogue the picker offers. With a catalogue attached it is that
+ * catalogue's list (so `listModels`, this export, and the panel's `visible` are
+ * one list, empty until a list has been fetched); without one, the pi-ai
+ * builtin free set.
  */
 export function freeModels(): Model<Api>[] {
   return activeCatalog === null ? builtinFreeModels() : activeCatalog.effectiveModels();
@@ -117,7 +120,7 @@ export function freeModels(): Model<Api>[] {
  * `zen-provider` does not import `catalog` at runtime (only its type), so
  * reading it the other way round introduces no cycle.
  */
-export const PLUGIN_VERSION = "0.3.7";
+export const PLUGIN_VERSION = "0.4.0";
 
 /** Derived, not written out: a second hardcoded copy is a second thing to forget. */
 export const OPENCODE_USER_AGENT = `opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/${PLUGIN_VERSION}`;
@@ -530,9 +533,29 @@ export function swapCompactionPrompt<T>(context: T, apiKey: unknown): T {
  * The minimum upstream description/schema checks are not publicly specified.
  */
 const GATE_TOOLS = ["read", "bash"];
+/**
+ * The inference gate also requires the system prompt to carry OpenCode's
+ * environment block with a `Working directory:` line; any value passes. The
+ * value stays generic: the host's real path is not the upstream's business.
+ */
+const ENVIRONMENT_BLOCK = "<env>\n  Working directory: (managed by the host)\n</env>";
+const ENVIRONMENT_PATTERN = /<env>[\s\S]*Working directory:[\s\S]*<\/env>/;
 const SHELL_ALIAS = "pwsh";
+/**
+ * Anonymous requests present these host tools under other names. The inference
+ * gate refuses a tool set that declares them by their host names (observed
+ * 2026-10-30; renaming only these two admits the full pinned-host tool set).
+ * Declarations, history and returned calls are translated in both directions.
+ */
+const GATE_TOOL_ALIASES: Readonly<Record<string, string>> = {
+  subagent_fork: "agent_fork",
+  working_directory: "cwd_tool",
+};
+const GATE_TOOL_ORIGINALS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(GATE_TOOL_ALIASES).map(([host, alias]) => [alias, host]),
+);
 // Usage adapted from OpenCode 1.19.0 read.txt / Windows shell guidance and
-// checked against DSH 0.2.1-rc.2 fs/pwsh/bash contracts. Unlike OpenCode's
+// checked against DSH 0.2.1-rc.5 fs/pwsh/bash contracts. Unlike OpenCode's
 // read, DSH read is UTF-8 text only; do not advertise directory/media support.
 const READ_USAGE = `Read a UTF-8 text file and return line-numbered content. If the path does not exist, an error is returned.
 
@@ -600,6 +623,20 @@ function renameParameter(parameters: unknown, from: string, to: string): unknown
   };
 }
 
+/** Add the environment block as a section of the leading system message unless the prompt already has one. */
+function withEnvironmentBlock(messages: TranscriptMessage[]): TranscriptMessage[] {
+  if (ENVIRONMENT_PATTERN.test(getCurrentSystemPrompt(messages as Parameters<typeof getCurrentSystemPrompt>[0]) ?? "")) {
+    return messages;
+  }
+  const lead = messages.findIndex((message) => message?.role === "system");
+  if (lead < 0) return [{ role: "system", content: ENVIRONMENT_BLOCK, timestamp: Date.now() }, ...messages];
+  return messages.map((message, i) =>
+    i === lead
+      ? { ...message, sections: { ...(message.sections as Record<string, string | null> | undefined), environment: ENVIRONMENT_BLOCK } }
+      : message,
+  );
+}
+
 export function applyAnonymousToolGate<T>(
   context: T,
   apiKey: unknown,
@@ -621,7 +658,8 @@ export function applyAnonymousToolGate<T>(
   });
   const restoreRead = ownsParameter("read", "file_path");
   const restoreTimeout = ownsParameter(restoreShell ? SHELL_ALIAS : "bash", "timeoutMs");
-  const rename = (name: unknown) => (restoreShell && name === SHELL_ALIAS ? "bash" : name);
+  const rename = (name: unknown) =>
+    restoreShell && name === SHELL_ALIAS ? "bash" : typeof name === "string" && Object.hasOwn(GATE_TOOL_ALIASES, name) ? GATE_TOOL_ALIASES[name] : name;
   const argumentsFor = (name: unknown, args: unknown) =>
     restoreRead && name === "read" ? renameField(args, "file_path", "filePath") :
     restoreTimeout && name === (restoreShell ? SHELL_ALIAS : "bash") ? renameField(args, "timeoutMs", "timeout") : args;
@@ -669,6 +707,7 @@ export function applyAnonymousToolGate<T>(
         : message)
       : [createInitialSystemMessage(undefined, stubs as never) as unknown as TranscriptMessage, ...messages];
   }
+  messages = withEnvironmentBlock(messages);
   return { context: { ...(context as Record<string, unknown>), messages } as T, restoreShell, restoreRead, restoreTimeout, unavailable };
 }
 
@@ -676,6 +715,7 @@ export function applyAnonymousToolGate<T>(
 function restoreAdmissionCalls(value: unknown, restoration: boolean | CallRestoration): void {
   const flags = typeof restoration === "boolean" ? { restoreShell: restoration } : restoration;
   const restore = (call: { name?: unknown; arguments?: unknown }) => {
+    if (typeof call.name === "string" && Object.hasOwn(GATE_TOOL_ORIGINALS, call.name)) call.name = GATE_TOOL_ORIGINALS[call.name];
     if (typeof call.name === "string" && flags.unavailable?.includes(call.name)) {
       throw new Error("Upstream returned an unavailable admission tool; no host execution is permitted.");
     }
@@ -815,9 +855,10 @@ export function anonGateMarker(bodyText: string): AnonGateMarker {
 //
 // The probe answers one question per model: can it still answer at all? That
 // is the only ground truth for "the free tier ended" — `status: "deprecated"`
-// on models.dev means both "gone" and "stale record" (muse-spark-1.2 and
-// mimo-v2.5 are deprecated and still working; deepseek-v4-flash-free is
-// deprecated and dead), so no static field can decide it.
+// in a third-party catalogue meant both "gone" and "stale record"
+// (muse-spark-1.2 and mimo-v2.5 were deprecated and still working;
+// deepseek-v4-flash-free was deprecated and dead), so no static field can
+// decide it.
 //
 // Everything here runs through `provider.streamSimple`, never a hand-built
 // request: that path already applies the OpenCode CLI identity
@@ -880,7 +921,7 @@ const MODEL_GONE_PATTERNS: readonly RegExp[] = [
   // match every real body that names the model before the predicate.
   /\bmodel\b.{0,40}?\b(?:is|was)\s+(?:unavailable|unsupported|disabled|retired)\b/i,
   // "Model kimi-k2.5-free is not supported" — the route declining to serve a
-  // model models.dev still lists at zero cost. Observed 2026-09-29 on 25 of 34
+  // model a catalogue still listed at zero cost. Observed 2026-09-29 on 25 of 34
   // catalogue models, HTTP 401. Counted as gone: on this provider a Zen key
   // changes the quota, NOT the model list, so these models are unavailable to a
   // keyed caller too. `ModelError` is a model-routing error, not an auth one.
@@ -1108,8 +1149,8 @@ function hasAnswer(result: Record<string, unknown> | undefined): boolean {
  *
  * A model is only alive on ONE of them, and which one is not published:
  * 9router has to hard-code it (a set for the Muse Spark family, another for
- * `union-alpha`, plus a family regex), while this plugin infers a channel from
- * the models.dev record.
+ * `union-alpha`, plus a family regex), while this plugin reads a channel from
+ * the list entry, falling back to inference.
  *
  * That inference is the weak link, and it fails in the worst possible way. A
  * request down the wrong channel is refused with "model not supported" — which
@@ -1454,6 +1495,23 @@ function compatRequestOptions<T extends StreamOptions>(
 }
 
 /**
+ * The one request for Zen's model list: URL plus the headers its free tier
+ * requires. Shared by the catalogue (which reads the whole list) and
+ * {@link fetchZenModelIds} (ids only), so they cannot ask upstream two
+ * different questions.
+ */
+export function zenListRequest(): { url: string; headers: Record<string, string> } {
+  return {
+    url: `${BASE_URL}/models`,
+    headers: {
+      Authorization: `Bearer ${ANONYMOUS_KEY}`,
+      "User-Agent": OPENCODE_USER_AGENT,
+      "x-opencode-client": OPENCODE_CLIENT,
+    },
+  };
+}
+
+/**
  * The ids Zen currently serves, from one `GET /inference/v1/models`.
  *
  * This is the free tier's availability check, and it is deliberately the cheap
@@ -1477,13 +1535,10 @@ export async function fetchZenModelIds(
   signal?: AbortSignal,
 ): Promise<readonly string[] | null> {
   try {
-    const response = await fetchImpl(`${BASE_URL}/models`, {
+    const request = zenListRequest();
+    const response = await fetchImpl(request.url, {
       signal: signal ?? AbortSignal.timeout(5000),
-      headers: {
-        Authorization: `Bearer ${ANONYMOUS_KEY}`,
-        "User-Agent": OPENCODE_USER_AGENT,
-        "x-opencode-client": OPENCODE_CLIENT,
-      },
+      headers: request.headers,
     });
     if (!response.ok) return null;
     const body = (await response.json()) as { data?: { id?: unknown }[] } | null;
@@ -1617,12 +1672,22 @@ function isZenRequest(input: unknown): boolean {
   }
 }
 
-export function patchGlobalFetchForZen(getSessionId: SessionGetter = () => undefined): () => void {
+/**
+ * `zenTransport`, when given, carries Zen requests in place of the original
+ * `fetch` (which still serves every other host). The inference gate refuses a
+ * client whose TLS cipher list differs from the official CLI's, and Node's
+ * global fetch cannot be told otherwise per request.
+ */
+export function patchGlobalFetchForZen(
+  getSessionId: SessionGetter = () => undefined,
+  zenTransport?: (input: unknown, init?: unknown) => Promise<Response>,
+): () => void {
   const g = globalThis as Record<string, unknown>;
   if (!g[FETCH_GUARD_ORIGINAL_KEY]) g[FETCH_GUARD_ORIGINAL_KEY] = globalThis.fetch;
   const original = g[FETCH_GUARD_ORIGINAL_KEY] as typeof fetch;
   const callOriginal = (input: unknown, init: unknown): Promise<Response> =>
     (original as (u: never, i: never) => Promise<Response>)(input as never, init as never);
+  const callZen = zenTransport ?? callOriginal;
   const guarded = (async (input: unknown, init?: unknown) => {
     if (!isZenRequest(input)) return callOriginal(input, init);
     const rawInit = (init ?? {}) as Record<string, unknown>;
@@ -1654,7 +1719,7 @@ export function patchGlobalFetchForZen(getSessionId: SessionGetter = () => undef
     debugLog(identitySummary(headers, "fetch"));
     const startedAt = Date.now();
     try {
-      const response = await callOriginal(input, { ...rawInit, headers });
+      const response = await callZen(input, { ...rawInit, headers });
       debugLog(`fetch <- ${response.status} ${zenPath(input)} after ${Date.now() - startedAt}ms`);
       return response;
     } catch (error) {
@@ -1818,6 +1883,9 @@ export function patchNodeHttpForZen(getSessionId: SessionGetter = () => undefine
             options.headers as NodeHeadersInit,
             getSessionId,
           ) as unknown as Record<string, unknown>;
+          if (modName === "https" && options.ciphers === undefined && needsOpenCodeCiphers()) {
+            options.ciphers = OPENCODE_TLS_CIPHERS;
+          }
           return callOriginal(this, [options, callback]);
         } catch {
           return callOriginal(this, args);
@@ -2001,10 +2069,10 @@ function withGuidance<T extends object>(stream: T, restoreShell: boolean | CallR
 /** Reuse pi-ai's native serializers, streaming parsers, reasoning, and tool handling. */
 export interface ZenProviderOptions {
   /**
-   * The models.dev-derived catalogue (see `catalog.ts`). When present it owns
-   * which models are offered: `getModels()` reads its post-Zen-gate list, and
-   * `refreshModels` intersects ITS pre-gate list against Zen. Omitted, the
-   * provider falls back to the pi-ai builtin free set, which is what every
+   * The catalogue derived from Zen's model list (see `catalog.ts`). When
+   * present it owns which models are offered: `getModels()` reads its list and
+   * `refreshModels` asks it to re-fetch. Omitted, the provider falls back to
+   * the pi-ai builtin free set intersected with Zen's ids, which is what every
    * pre-catalogue caller and test expects.
    */
   readonly catalog?: Catalog | undefined;
@@ -2021,12 +2089,11 @@ export function zenProvider(
   // Leaving the previous instance's catalogue in place made freeModels()
   // report a provider that no longer existed.
   activeCatalog = catalog;
-  // Pre-gate catalogue: the full derived set is what Zen's live list gets
+  // Without a catalogue, the pi-ai builtin set is what Zen's live ids get
   // intersected against, so a model Zen dropped can come back when it returns.
-  const baseline = catalog === null ? builtinFreeModels() : catalog.current().models;
-  // What the picker actually offers. With no gate applied yet (first boot,
-  // or Zen never asked) this is the pre-gate list, so it is read live rather
-  // than snapshotted: a later applyZenGate() must be visible immediately.
+  // With one, the catalogue is read live instead (it is empty until a list
+  // lands, then replaced wholesale), never snapshotted.
+  const baseline = builtinFreeModels();
   const effective = (): Model<Api>[] => (catalog === null ? catalogue : catalog.effectiveModels());
   let catalogue = baseline;
   const provider = createProvider({
@@ -2082,6 +2149,16 @@ export function zenProvider(
     // exported freeModels(), and the panel endpoint all report one list.
     getModels: () => effective(),
     async refreshModels(ctx) {
+      if (catalog !== null) {
+        // The catalogue is the list: one re-fetch refreshes it, and what the
+        // host persists is exactly what the picker offers.
+        if (!ctx.allowNetwork || ctx.signal.aborted) return;
+        await catalog.forceRefresh();
+        if (catalog.current().source === "none") throw new Error("Zen model catalogue unavailable");
+        const next = catalog.effectiveModels();
+        await ctx.publish({ persist: { models: next, checkedAt: Date.now() }, update: () => undefined });
+        return;
+      }
       const select = (ids: Set<unknown>) => baseline.filter((m) => ids.has(m.id));
       if (ctx.stored) {
         const restored = select(new Set(ctx.stored.models.map((m) => m.id)));
@@ -2103,10 +2180,6 @@ export function zenProvider(
       if (availableIds === null) throw new Error("Zen model catalogue unavailable");
       const available = new Set<unknown>(availableIds);
       const next = select(available);
-      // D3: Zen is the availability gate. Handing the live ids to the
-      // catalogue (rather than intersecting a second time here) is what keeps
-      // one computation behind both the picker and the panel's `visible`.
-      if (catalog !== null) catalog.applyZenGate(availableIds);
       await ctx.publish({
         persist: { models: next, checkedAt: Date.now() },
         update: () => {

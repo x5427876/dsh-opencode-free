@@ -7,7 +7,7 @@
  * `hiddenModels`; the host filters those ids out of the model picker.
  *
  * The model list itself is NOT baked in here: the host owns the catalogue
- * (models.dev + the Zen availability gate + the live availability probe) and
+ * (Zen's own model list + the live availability probe) and
  * serves it, so the rows always match what the picker can actually select. This
  * half reads that snapshot, writes `hiddenModels`, and offers the manual probe
  * that makes the host re-ask every model whether it still answers.
@@ -68,7 +68,7 @@ window.__ModuleLoader__.load({
 			"error": "写入失败",
 			"loading": "正在读取模型目录…",
 			"loadFailed": "读取模型目录失败，宿主暂时没有回应。",
-			"fallback": "当前显示的是内置兜底目录，尚未与 models.dev 同步。",
+			"notSynced": "尚未从 Zen 取得模型清单；首次刷新成功后会显示在这里。",
 			"refresh": "立即刷新",
 			"refreshing": "刷新中…",
 			"probe": "立即探测",
@@ -76,8 +76,7 @@ window.__ModuleLoader__.load({
 			"probeFailed": "探测请求失败，模型显示保持不变，可重试。",
 			"probeUntrusted": "本轮有模型没能测到（上游限流、匿名层被拒或网络异常），这些模型的显示保持不变。",
 			"probedAt": "上次探测",
-			"unknownFree": "另有模型 Zen 正在免费层供应、models.dev 却没有它们的资料：",
-			"unknownFreeWhy": "我们不知道它们的上下文长度与能力，也没有验证过它们能否在本插件使用的两条通道上应答，所以不列在选择器里；这不影响下方任何一行。",
+			"unclassified": "Zen 清单中有对话模型的价格无法读取，已排除、不会当作免费，清单可能偏短。数量：",
 			"probing.now": "正在探测",
 			"probing.waiting": "等待中",
 			"probing.failed": "探测失败",
@@ -124,7 +123,7 @@ window.__ModuleLoader__.load({
 			"error": "Write failed",
 			"loading": "Loading the model catalogue…",
 			"loadFailed": "Could not load the model catalogue — the host did not answer.",
-			"fallback": "Showing the built-in fallback catalogue; it is not synced with models.dev yet.",
+			"notSynced": "The model list has not been fetched from Zen yet; it appears here after the first successful refresh.",
 			"refresh": "Refresh now",
 			"refreshing": "Refreshing…",
 			"probe": "Probe now",
@@ -132,8 +131,7 @@ window.__ModuleLoader__.load({
 			"probeFailed": "The probe request failed; visibility is unchanged. You can retry.",
 			"probeUntrusted": "Some models could not be measured this round (upstream throttling, the anonymous tier refusing, or a network error); those models keep their current visibility.",
 			"probedAt": "Last probe",
-			"unknownFree": "Models Zen serves on the free tier that models.dev carries no metadata for:",
-			"unknownFreeWhy": "their context length and capabilities are not knowable, and we have not verified that they answer on either channel this plugin uses, so they are not offered; this does not affect any row below.",
+			"unclassified": "Some chat models in Zen's list have a price this plugin could not read; they are excluded, never assumed free, so the list may be short. Count:",
 			"probing.now": "Probing",
 			"probing.waiting": "Waiting",
 			"probing.failed": "Failed",
@@ -405,20 +403,6 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		/**
-		 * Ids for the blind-spot note: a few names, then a count.
-		 *
-		 * Deliberately not a full list. These are ids the catalogue has no
-		 * record of, so they are the one string here this plugin cannot vouch
-		 * for; the note's job is to say the list is short and why, not to
-		 * become a second inventory that reads like the first.
-		 */
-		function unknownIdsText(list) {
-			var head = list.slice(0, 3);
-			var rest = list.length - head.length;
-			return head.join(", ") + (rest > 0 ? " (+" + String(rest) + ")" : "");
-		}
-
 		// ── error boundary (the dsh-better-workspace QuietBoundary pattern) ───
 
 		/** A render failure degrades THIS card, never the detail page. */
@@ -496,10 +480,11 @@ window.__ModuleLoader__.load({
 				   rather than failing to render. */
 				probedAt: typeof payload.probedAt === "number" && isFinite(payload.probedAt) ? payload.probedAt : null,
 				probeInconclusive: payload.probeInconclusive === true,
-				/* Optional too, and for a stronger reason: a host that predates
-				   the blind-spot report simply omits it. Nothing here ever
-				   becomes a row — these ids are names, not models. */
-				unknownFree: names(payload.unknownFree)
+				/* Optional too: a host that predates the report simply omits it.
+				   A count only; it never becomes a row. */
+				unclassified: typeof payload.unclassified === "number" && isFinite(payload.unclassified) && payload.unclassified > 0
+					? Math.floor(payload.unclassified)
+					: 0
 				// No `probe` key, and that is deliberate: the host answered the probe
 				// POST with the SAME catalogPayload() the GET route uses, and it has
 				// never carried progress. The 202 POST exists so a click does not
@@ -1204,15 +1189,13 @@ window.__ModuleLoader__.load({
 				listArea = E("p", { className: "opf-note" }, t("loading"));
 			} else if (catalog === null) {
 				listArea = E("p", { className: "opf-error" }, t("loadFailed"));
+			} else if (catalog.source === "none") {
+				listArea = E("p", { className: "opf-note" }, t("notSynced"));
 			} else if (rows.length === 0) {
 				listArea = E("p", { className: "opf-note" }, t("empty"));
 			} else {
 				listArea = E("div", { className: "opf-list" }, rows);
 			}
-
-			var fallbackNote = catalog !== undefined && catalog !== null && catalog.source === "builtin-fallback"
-				? E("p", { className: "opf-note" }, t("fallback"))
-				: null;
 
 			/* Probe facts, each rendered only when the host actually reported
 			   one. An older host omits them, and then none of this shows. The
@@ -1222,14 +1205,14 @@ window.__ModuleLoader__.load({
 				? E("p", { className: "opf-note" }, t("probeUntrusted"))
 				: null;
 
-			/* The blind spot, when there is one. Names only, and never a row:
-			   the models involved have no metadata, which is precisely why they
-			   are not offered. Rendered after the untrusted note because both
-			   explain an absence, and the user is reading top-down. */
-			var unknownNote = null;
-			if (catalog !== undefined && catalog !== null && catalog.unknownFree.length > 0) {
-				unknownNote = E("p", { className: "opf-note" },
-					t("unknownFree") + " " + unknownIdsText(catalog.unknownFree) + " " + t("unknownFreeWhy"));
+			/* Entries whose price could not be read, when there are any. A count,
+			   never a row: they are excluded precisely because nothing about
+			   them can be vouched for. Rendered after the untrusted note because
+			   both explain an absence, and the user is reading top-down. */
+			var unclassifiedNote = null;
+			if (catalog !== undefined && catalog !== null && catalog.unclassified > 0) {
+				unclassifiedNote = E("p", { className: "opf-note" },
+					t("unclassified") + " " + String(catalog.unclassified));
 			}
 
 			var stamp = null;
@@ -1425,9 +1408,8 @@ window.__ModuleLoader__.load({
 							}, probing ? spinnerIcon(true) : searchIcon(), E("span", null, probing ? t("probing") : t("probe")))),
 						toolbarRight)),
 				E("div", { className: "opf-body" },
-					fallbackNote,
 					untrustedNote,
-					unknownNote,
+					unclassifiedNote,
 					removedNote,
 					refusedNote,
 					listArea,

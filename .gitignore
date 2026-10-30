@@ -2,3 +2,5 @@ node_modules/
 .artifacts/
 lib/
 *.tgz
+.compat/
+docs/compat-reports/

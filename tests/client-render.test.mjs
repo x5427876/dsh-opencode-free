@@ -109,7 +109,7 @@ const SNAPSHOT = {
     { id: 'big-pickle', image: false, thinking: null },
     { id: 'muse-spark-1.3-contributor-free', image: true, thinking: 'xhigh' },
   ],
-  source: 'models.dev',
+  source: 'official',
   updatedAt: 1,
   refreshing: false,
   probedAt: Date.parse('2026-09-29T23:30:17+08:00'),
@@ -1006,24 +1006,20 @@ test('zh and en dictionaries carry the same key set', async () => {
   assert.deepEqual(zh, en, 'a key in one language but not the other renders half-translated')
 })
 
-// ── the blind-spot note ─────────────────────────────────────────────────────
+// ── the list's own diagnostics ─────────────────────────────────────────────
 //
-// Zen sometimes serves a free-tier id before models.dev publishes metadata for
-// it. The panel reports that as a fact and offers nothing: listing the id would
-// mean claiming a context length this plugin cannot know, and a wrong number is
-// acted on, not merely displayed.
+// Zen's list can publish a conversational model whose price this plugin cannot
+// read. Such an entry is excluded — never assumed free — and the panel reports
+// the COUNT as a fact. A count and not a name: nothing about an unreadable entry
+// can be vouched for, so it must never become a row.
 
 const noteText = (mounted) => collect(mounted.tree).texts.join(' ')
 
-test('an empty unknownFree renders no note at all', async () => {
-  const mounted = await renderCard({ snapshot: { ...SNAPSHOT, unknownFree: [] } })
+test('a zero unclassified count renders no note at all', async () => {
+  const mounted = await renderCard({ snapshot: { ...SNAPSHOT, unclassified: 0 } })
   try {
-    const { texts } = collect(mounted.tree)
-    assert.equal(
-      texts.some((t) => t.includes('models.dev')),
-      false,
-      'nothing to report, nothing to say',
-    )
+    const text = noteText(mounted)
+    assert.equal(text.includes('无法读取'), false, 'nothing to report, nothing to say')
   } finally {
     mounted.dispose()
   }
@@ -1031,14 +1027,14 @@ test('an empty unknownFree renders no note at all', async () => {
 
 test('a host that predates the report degrades to no note', async () => {
   const legacy = { ...SNAPSHOT }
-  delete legacy.unknownFree
+  delete legacy.unclassified
   const mounted = await renderCard({ snapshot: legacy })
   try {
     const { texts } = collect(mounted.tree)
     assert.equal(
-      texts.some((t) => t.includes('models.dev')),
+      texts.some((t) => t.includes('无法读取')),
       false,
-      'an absent field is not an empty list to complain about',
+      'an absent field is not a count to complain about',
     )
     assert.equal(texts.length > 0, true, 'and the card still renders its rows')
   } finally {
@@ -1046,14 +1042,26 @@ test('a host that predates the report degrades to no note', async () => {
   }
 })
 
-test('an unknown free id is named, and never becomes a row', async () => {
-  const mounted = await renderCard({ snapshot: { ...SNAPSHOT, unknownFree: ['jev-1.13-free'] } })
+test('an unreadable value is no count: only a positive number renders', async () => {
+  for (const unclassified of ['3', -1, Number.NaN, null]) {
+    const mounted = await renderCard({ snapshot: { ...SNAPSHOT, unclassified } })
+    try {
+      assert.equal(noteText(mounted).includes('无法读取'), false, `unclassified ${String(unclassified)}`)
+    } finally {
+      mounted.dispose()
+    }
+  }
+})
+
+test('unclassified entries are counted in a note, and never become a row', async () => {
+  const mounted = await renderCard({ snapshot: { ...SNAPSHOT, unclassified: 2 } })
   try {
     const { texts } = collect(mounted.tree)
-    const note = texts.find((t) => t.includes('models.dev'))
-    assert.ok(note !== undefined, 'the note explains why the list is short')
-    assert.ok(note.includes('jev-1.13-free'), 'and names what is missing')
-    // The decisive half: an id with no metadata must not be selectable.
+    const note = texts.find((t) => t.includes('无法读取'))
+    assert.ok(note !== undefined, 'the note explains why the list may be short')
+    assert.ok(note.includes('2'), 'and says how many entries are affected')
+    assert.ok(note.includes('不会当作免费'), 'and that they are not assumed free')
+    // The decisive half: an entry with no readable price must not be selectable.
     const offered = ['space-bunny-free', 'big-pickle', 'muse-spark-1.3-contributor-free']
     assert.equal(texts.filter((t) => offered.includes(t)).length, 3, 'the offered set is unchanged')
     // Split-and-includes, matching this file's convention (see the class
@@ -1064,45 +1072,60 @@ test('an unknown free id is named, and never becomes a row', async () => {
         .split(' ')
         .includes('opf-row'),
     )
-    assert.equal(rowNodes.length, 3, 'three rows, not four')
-    assert.equal(
-      rowNodes.some((row) => [...walk(row)].some((d) => d.text === 'jev-1.13-free')),
-      false,
-      'the reported id is not inside any row',
-    )
+    assert.equal(rowNodes.length, 3, 'three rows, not five')
   } finally {
     mounted.dispose()
   }
 })
 
-test('the note caps the id list and counts the rest', async () => {
-  const mounted = await renderCard({
-    snapshot: { ...SNAPSHOT, unknownFree: ['a-free', 'b-free', 'c-free', 'd-free', 'e-free'] },
-  })
+test('the unclassified note is localised like every other string on the card', async () => {
+  const mounted = await renderCard({ locale: 'en', snapshot: { ...SNAPSHOT, unclassified: 4 } })
   try {
     const { texts } = collect(mounted.tree)
-    const note = texts.find((t) => t.includes('models.dev'))
-    assert.ok(note.includes('a-free, b-free, c-free'), 'the first three are shown')
-    assert.ok(note.includes('(+2)'), 'and the remainder is counted, not listed')
-    assert.equal(note.includes('e-free'), false, 'the tail is a count, not a second inventory')
-  } finally {
-    mounted.dispose()
-  }
-})
-
-test('the note is localised like every other string on the card', async () => {
-  const mounted = await renderCard({
-    locale: 'en',
-    snapshot: { ...SNAPSHOT, unknownFree: ['jev-1.13-free'] },
-  })
-  try {
-    const { texts } = collect(mounted.tree)
-    const note = texts.find((t) => t.includes('carries no metadata for'))
+    const note = texts.find((t) => t.includes('could not read'))
     assert.ok(note !== undefined, 'an English host gets the English note')
+    assert.ok(note.includes('4'))
     assert.equal(
-      texts.some((t) => t.includes('却没有它们的资料')),
+      texts.some((t) => t.includes('无法读取')),
       false,
     )
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test('a catalogue that has never held a list says so instead of claiming there are no models', async () => {
+  const cold = { ...SNAPSHOT, visible: [], models: [], source: 'none', updatedAt: 0, unclassified: 0 }
+  const zh = await renderCard({ snapshot: cold })
+  try {
+    const { texts } = collect(zh.tree)
+    assert.ok(texts.some((t) => t.includes('尚未从 Zen 取得模型清单')), 'the not-yet-fetched state')
+    assert.equal(
+      texts.some((t) => t.includes('当前没有可显示的模型')),
+      false,
+      'and not the "empty list" state, which is a different fact',
+    )
+  } finally {
+    zh.dispose()
+  }
+  const en = await renderCard({ locale: 'en', snapshot: cold })
+  try {
+    assert.ok(
+      collect(en.tree).texts.some((t) => t.includes('has not been fetched from Zen yet')),
+      'localised',
+    )
+  } finally {
+    en.dispose()
+  }
+})
+
+test('a fetched list that names no free model reads as empty, not as unfetched', async () => {
+  const none = { ...SNAPSHOT, visible: [], models: [], source: 'official' }
+  const mounted = await renderCard({ snapshot: none })
+  try {
+    const text = noteText(mounted)
+    assert.equal(text.includes('尚未从 Zen 取得模型清单'), false)
+    assert.equal(text.includes('当前没有可显示的模型'), true, 'it is the empty state')
   } finally {
     mounted.dispose()
   }

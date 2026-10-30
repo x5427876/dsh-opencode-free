@@ -12,8 +12,8 @@ Anonymous access is the default; a Zen API key is optional.
 
 - **Native integration:** models appear under **OpenCode Zen Free** in the DSH
   model picker, with streaming, reasoning, tool calls, usage, and cancellation.
-- **Automatic catalogue:** model metadata follows [models.dev](https://models.dev)
-  and Zen's live catalogue. Hide individual models from the plugin detail page.
+- **Automatic catalogue:** the model list and metadata follow Zen's official
+  model list, free models only. Hide individual models from the plugin detail page.
 - **Availability checks:** inspect results and latency on the detail page.
   Quota limits and gate refusals do not remove models.
 
@@ -35,7 +35,7 @@ Anonymous access is the default; a Zen API key is optional.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.1-rc.2` (exact) |
+| DeepSeek Harness | `0.2.1-rc.5` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each release supports exactly one DSH version. Do not ignore peer dependency
@@ -47,7 +47,7 @@ Check your DSH version, then install the pinned package:
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.3.7
+dsh plugin --profile web add dsh-opencode-free@0.4.0
 ```
 
 Replace `web` with your target profile. If already installed, use the update
@@ -75,6 +75,7 @@ dsh plugin --profile web remove dsh-opencode-free
 
 | Plugin | DSH |
 |---|---|
+| `0.4.0` | `0.2.1-rc.5` |
 | `0.3.7` | `0.2.1-rc.2` |
 | `0.3.6` | `0.2.1-rc.2` |
 | `0.3.5` | `0.2.1-alpha.5` |
@@ -168,10 +169,10 @@ Compaction is a separate request.
 - **Debug privacy:** `DSH_OPENCODE_FREE_DEBUG=1` enables diagnostics. Current
   logs include an Authorization prefix and truncated upstream errors; treat
   them as sensitive and do not publish raw logs. See [known gaps](docs/standards-gap.md#g1-debug-logs-include-authorization-fragments).
-- **Verification scope:** the [Windows headless report](docs/compat-reports/anonymous-tool-choice-2026-10-15-full/acceptance.md)
-  records 8 selected models passing L0/text/read/pwsh, but 4 official entries
-  remain unclassified (exit `2`). It predates the compat wrapper refactor;
-  full acceptance, Web, Desktop, and compaction remain unverified.
+- **Verification scope:** compat run results are not stored in the repository:
+  they depend on environment, versions, time and the shared anonymous quota. Run
+  the [compat guide](docs/compat-run.md) yourself for current evidence. The
+  headless run does not verify Web, Desktop, or compaction.
 
 ## Troubleshooting
 
