@@ -10,7 +10,7 @@
 
 | 證據 | 能證明什麼 | 不能證明什麼 |
 |---|---|---|
-| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求 | 未公開 inference 服務的完整准入規則 |
+| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求；仿照依據為 v1 線（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)） | 未公開 inference 服務的完整准入規則 |
 | 單項差分實測 | 指定時間、模型與客戶端下，某項變更是否改變結果 | 所有模型、平台與未來版本都會相同 |
 | 本地 fixture | 插件改寫、串流還原與錯誤處理符合測試案例 | 真實 DSH 或匿名上游一定可用 |
 | 真實 DSH 相容性驗證 | 報告所列環境與模型的實際結果 | 未列入或未完成的範圍也已通過 |
@@ -99,6 +99,25 @@
 - 差分實驗本身會耗盡該 IP 的額度：約八十次非官方請求後，官方 CLI 與 Bun 在同一個 IP 也被擋。
   重跑差分需換 IP，也不能把被擋歸因於單一訊號。
 - OpenCode CLI 預設會把全域 `~/.claude/CLAUDE.md` 與技能清單放進系統提示，轉發或重放它的請求前要先確認內容。
+
+### 官方 CLI v2 線的請求內容（漂移觀察，非仿照依據）
+
+2026-10-31、OpenCode CLI 2.2.5（GitHub 發行的 macOS arm64 二進位檔，SHA-256 已核對）、
+`opencode run --standalone`，請求導向本機擷取伺服器，沒有送到 Zen。v2 線（v2.2.0 起）在
+GitHub 發行，npm 套件為 `@opencode/cli`；`opencode-ai` 最新仍是 1.19.5（v1 線）。
+插件仍以 v1 線為仿照依據（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)），本節只記錄 v2 的差異與放行結果。
+
+| 項目 | 1.19.5 | 2.2.5 |
+|---|---|---|
+| 主請求的工具 | `bash edit glob grep read skill task todowrite webfetch write`（10 個） | `edit glob grep question read shell skill subagent webfetch websearch write execute`（12 個） |
+| TLS 密碼套件 | 17 項 | 相同 17 項、相同順序 |
+| 系統提示的 `<env>` | `Working directory:` 一行起 | 仍有 `<env>`，且有 `Working directory:` |
+| 識別標頭 | `x-opencode-*` | 仍有，另有 `x-session-id`、`x-session-affinity`、`b3`、`traceparent`；User-Agent 為 `opencode/latest/2.2.5/cli` |
+
+同一個出口 IP 上，把 2.2.5 的 12 個工具原樣以插件的傳輸層送到 `/inference/v1`，閘門放行（`200`）。
+插件自己的 User-Agent 仍是 1.18.31 的形式，也被放行，所以這個欄位不是准入訊號。
+v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todowrite`；
+閘門目前接受新舊兩種形狀。尚未查明閘門日後是否只接受 v2 的形狀；若發生，依 ADR-0006 重新檢討仿照依據。
 
 ### 經官方 CLI 中繼（原型，未採用）
 

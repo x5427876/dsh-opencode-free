@@ -8,6 +8,7 @@
 **CLI 請求格式**：
 OpenCode CLI 使用的 User-Agent、會話識別碼、專案標記與工具宣告格式。
 本插件送出這些格式的欄位，但不是官方 OpenCode CLI。
+仿照依據是 v1 線（[ADR-0006](docs/adr/0006-opencode-v1-as-payload-reference.md)）。
 
 **非官方匿名存取**：
 在沒有第三方存取保證的情況下，以匿名身份呼叫 Zen keyless 層；HTTP 200
