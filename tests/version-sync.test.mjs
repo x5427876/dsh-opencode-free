@@ -11,11 +11,10 @@ const dsh = pkg.peerDependencies['@deepseek-ai/dsh-llm']
 const v = pkg.version
 
 for (const readme of ['README.md', 'README.zh-TW.md']) {
-  test(`${readme} names the pinned DSH and lists this release first`, async () => {
+  test(`${readme} names the pinned DSH and installs this release`, async () => {
     const text = await read(readme)
     assert.ok(text.includes(`\`${dsh}\``), `${readme} names DSH ${dsh}`)
-    const firstRow = text.match(/^\| `\d[^|]*` \| `[^|]+` \|$/m)
-    assert.equal(firstRow?.[0], `| \`${v}\` | \`${dsh}\` |`, `${readme} compatibility table leads with ${v}`)
+    assert.ok(text.includes(`dsh-opencode-free@${v}`), `${readme} installs ${v}`)
   })
 }
 

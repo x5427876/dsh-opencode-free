@@ -34,7 +34,9 @@
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只支援一個 DSH 版本。四個執行期 peer 依賴都是必要的，請勿忽略
-peer dependency 警告。
+peer dependency 警告。舊版對應的 DSH 請看該版的
+[GitHub Release](https://github.com/x5427876/dsh-opencode-free/releases)，或執行
+`npm view dsh-opencode-free@<版本> peerDependencies`。
 
 ### 安裝
 
@@ -63,26 +65,6 @@ dsh --profile web --dump-config
 dsh plugin --profile web update dsh-opencode-free
 dsh plugin --profile web remove dsh-opencode-free
 ```
-
-<details>
-<summary>歷代版本相容性</summary>
-
-| 插件 | DSH |
-|---|---|
-| `0.4.0` | `0.2.1-rc.5` |
-| `0.3.7` | `0.2.1-rc.2` |
-| `0.3.6` | `0.2.1-rc.2` |
-| `0.3.5` | `0.2.1-alpha.5` |
-| `0.3.4` | `0.2.1-alpha.3` |
-| `0.3.3` | `0.2.1-alpha.2` |
-| `0.3.2` | `0.2.1-alpha.2` |
-| `0.3.1` | `0.2.1-alpha.1` |
-| `0.3.0` | `0.2.0-rc.2` |
-| `0.2.1` | `0.2.0-rc.2` |
-| `0.2.0` | `0.2.0-rc.1` |
-| `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
-
-</details>
 
 ## 使用方式
 

@@ -14,8 +14,8 @@ hand; an Agent never runs `npm publish`.
 
 - Choose the new plugin version under the project's versioning policy.
 - Update `package.json` `version`, `src/zen-provider.ts` `PLUGIN_VERSION`, both
-  README install commands and compatibility rows, and the version/package/tarball
-  pins in `AGENTS.md`. Refresh the lockfile if affected; preserve unrelated work.
+  README install commands and the pinned DSH in the requirements table, and the
+  version/package/tarball pins in `AGENTS.md`. Refresh the lockfile if affected; preserve unrelated work.
 - Prepare notes for the GitHub Release, the sole version-change record. Name the
   plugin version and exact supported DSH version; summarize changes, verification,
   and limits. Keep the notes in an ignored temporary file until publication,

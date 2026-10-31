@@ -39,7 +39,9 @@ Anonymous access is the default; a Zen API key is optional.
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each release supports exactly one DSH version. Do not ignore peer dependency
-warnings; all four runtime peers are required.
+warnings; all four runtime peers are required. For an older release, read its
+[GitHub Release](https://github.com/x5427876/dsh-opencode-free/releases) or run
+`npm view dsh-opencode-free@<version> peerDependencies`.
 
 ### Install
 
@@ -69,26 +71,6 @@ Restart DSH (or wait for HMR), then choose a model under **OpenCode Zen Free**.
 dsh plugin --profile web update dsh-opencode-free
 dsh plugin --profile web remove dsh-opencode-free
 ```
-
-<details>
-<summary>Earlier version compatibility</summary>
-
-| Plugin | DSH |
-|---|---|
-| `0.4.0` | `0.2.1-rc.5` |
-| `0.3.7` | `0.2.1-rc.2` |
-| `0.3.6` | `0.2.1-rc.2` |
-| `0.3.5` | `0.2.1-alpha.5` |
-| `0.3.4` | `0.2.1-alpha.3` |
-| `0.3.3` | `0.2.1-alpha.2` |
-| `0.3.2` | `0.2.1-alpha.2` |
-| `0.3.1` | `0.2.1-alpha.1` |
-| `0.3.0` | `0.2.0-rc.2` |
-| `0.2.1` | `0.2.0-rc.2` |
-| `0.2.0` | `0.2.0-rc.1` |
-| `0.1.3` – `0.1.4` | `0.1.7-rc.2` |
-
-</details>
 
 ## Usage
 
