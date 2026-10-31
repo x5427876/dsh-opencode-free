@@ -96,7 +96,7 @@ identifiers, so do not publish them.
 
 ### Anonymous request shape
 
-The free tier checks the request content beyond the headers (see [protocol notes](protocol-notes.md)),
+The free tier checks the request content beyond the headers (see [what the free tier checks](free-tier-gate.md) and the [protocol notes](protocol-notes.md)),
 so anonymous requests match the official CLI in three places: under Node the plugin offers the CLI's
 TLS cipher list; it adds a generic `<env>` block to the system prompt, which carries no host path;
 and it declares the host's `subagent_fork` and `working_directory` tools as `agent_fork` and

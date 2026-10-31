@@ -10,12 +10,18 @@ Use free [OpenCode Zen](https://opencode.ai/docs/providers) models in DeepSeek
 Harness (DSH), without installing OpenCode or running a separate server.
 Anonymous access is the default; a Zen API key is optional.
 
-- **Native integration:** models appear under **OpenCode Zen Free** in the DSH
-  model picker, with streaming, reasoning, tool calls, usage, and cancellation.
-- **Automatic catalogue:** the model list and metadata follow Zen's official
-  model list, free models only. Hide individual models from the plugin detail page.
-- **Availability checks:** inspect results and latency on the detail page.
-  Quota limits and gate refusals do not remove models.
+- **Works on the anonymous tier.** Zen's free tier decides by request content
+  (tool declarations, an `<env>` block, the TLS cipher list), not only by headers.
+  The plugin shapes anonymous requests to match; see
+  [what the free tier checks](docs/free-tier-gate.md), with dated measurements.
+- **No built-in model list.** The picker follows Zen's official model list: chat
+  models whose declared prices are all zero. Refreshes are lazy, and a failed
+  refresh keeps the last good list. Hide individual models from the detail page.
+- **Native in DSH.** Models appear under **OpenCode Zen Free** with streaming,
+  reasoning, tool calls, usage, and cancellation.
+- **Availability checks.** The detail page shows probe results and latency. Quota
+  limits and gate refusals do not remove models.
+- **One release, one DSH.** Each release supports exactly one DSH version.
 
 > [!WARNING]
 > This is an unofficial plugin, not affiliated with OpenCode or DeepSeek.

@@ -81,7 +81,7 @@ DSH 執行期間不要手動編輯快取欄位。
 
 ### 匿名請求的形態
 
-免費層除了標頭還會檢查請求內容（見[協定分析紀錄](protocol-notes.md)），所以匿名請求在這幾處配合官方 CLI：
+免費層除了標頭還會檢查請求內容（見[免費層檢查什麼](free-tier-gate.zh-TW.md)與[協定分析紀錄](protocol-notes.md)），所以匿名請求在這幾處配合官方 CLI：
 在 Node 下，插件送出 CLI 的 TLS 密碼套件清單；在系統提示加入通用的 `<env>` 區塊，區塊不含宿主路徑；
 並以 `agent_fork`、`cwd_tool` 之名宣告 DSH 的 `subagent_fork`、`working_directory`，回傳的呼叫會轉回原名。
 Bun 本來就送出相同的密碼套件清單。若 Zen 之後拒絕這份清單，可在啟動 DSH 的環境設定

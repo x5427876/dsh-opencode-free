@@ -17,6 +17,7 @@ Installation and quick start live in the [project README](../README.md).
 | Task | Read |
 |---|---|
 | Change or review code | [Engineering standards](standards.md), relevant [known gaps](standards-gap.md) |
+| Understand what the free tier checks (cite or reproduce) | [Free-tier gate note](free-tier-gate.md) |
 | Understand request adaptation | [Protocol notes](protocol-notes.md) |
 | Change catalogue, identity, or acceptance policy | The relevant [ADR](#decisions) |
 | Verify real DSH compatibility | [Compat run](compat-run.md); live requests require authorization |
