@@ -128,9 +128,9 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
   其他插件呼叫該端點時，也會套用身份標頭。
 - **Profile 依賴：** 詳情頁路由需要 `webServer` 服務，內建的 `headless` profile
   不提供這項服務。
-- **除錯隱私：** `DSH_OPENCODE_FREE_DEBUG=1` 可啟用診斷。目前記錄包含 Authorization
-  前綴與截斷的上游錯誤，請視為敏感資料，不要公開原始記錄。詳見
-  [已知差距](docs/standards-gap.md#g1-debug-logs-include-authorization-fragments)。
+- **除錯隱私：** `DSH_OPENCODE_FREE_DEBUG=1` 可啟用診斷。記錄只標示憑證種類
+  （`anonymous` 或 `key`），不含任何片段；上游拒絕只記錄狀態、閘門標記與錯誤代碼，
+  不記錄其文字。請求與 session 識別碼仍會出現，請不要公開原始記錄。
 - **驗證範圍：** 相容性驗證結果不存放在儲存庫：結果取決於環境、版本、時間與共用的
   匿名額度。需要目前的證據時，請依[相容性驗證指南](docs/compat-run.md)自行執行。
   headless 驗證不涵蓋 Web、Desktop 與上下文壓縮。

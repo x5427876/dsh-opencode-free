@@ -89,8 +89,10 @@ Reload after changing plugin configuration; changing a shell variable does not
 change an already-running DSH process. To return to anonymous access, remove both
 key sources. No credential-store edits or login flow are needed.
 
-Keep the key, configuration, and raw debug output private. Current debug logs
-can expose an Authorization prefix and upstream error content; see [gap G1](standards-gap.md#g1-debug-logs-include-authorization-fragments).
+Keep the key and configuration private. Debug logs (`DSH_OPENCODE_FREE_DEBUG=1`)
+name the credential kind, never its content, and report upstream refusals by
+status, marker and error code only; they still carry request and session
+identifiers, so do not publish them.
 
 ### Anonymous request shape
 

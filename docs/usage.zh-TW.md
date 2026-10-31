@@ -75,8 +75,8 @@ DSH 執行期間不要手動編輯快取欄位。
 修改 shell 變數不會改變已執行中的 DSH 行程。要回到匿名存取，請移除兩個 key 來源。
 不需要修改憑證儲存或進行登入。
 
-妥善保管 key、設定檔與原始除錯輸出。目前除錯記錄可能洩漏 Authorization 前綴及
-上游錯誤內容，詳見[差距 G1](standards-gap.md#g1-debug-logs-include-authorization-fragments)。
+妥善保管 key 與設定檔。除錯記錄（`DSH_OPENCODE_FREE_DEBUG=1`）只標示憑證種類、不含
+內容，上游拒絕只記錄狀態、標記與錯誤代碼；其中仍有請求與 session 識別碼，請不要公開。
 
 
 ### 匿名請求的形態

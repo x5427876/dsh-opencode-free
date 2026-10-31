@@ -12,20 +12,6 @@ Compare against the [engineering standards](standards.md). This document lists t
 
 A gap is deleted from this file when it is resolved; gap IDs are not renumbered. The inspection included no live checks.
 
-## G1: Debug Logs Include Authorization Fragments
-
-- **P1 / Confirmed gap / S1, S2**.
-- Evidence: [identitySummary](../src/zen-provider.ts) reads `authorization` and includes `auth.slice(0, 14)` in its message; fetch and compat paths call it. The Debug logs section of the [README](../README.md) discloses this behavior. Probe refusals also log upstream errors using `body.slice(0, 300)` without redaction at that location.
-- Impact: enabling debug with a configured key exposes part of the credential. Error truncation cannot guarantee removal of sensitive upstream content. Historical logs have not been checked for real keys.
-- Acceptance: replace credential content with allowlisted fields. Capture each logging path using fake keys and error fixtures containing sensitive strings; verify that neither credential fragments nor conversation text appear. Update both language versions of the documentation.
-
-## G3: Global Compat Provider Registration Has No Cleanup Entry Point
-
-- **P1 / Confirmed gap / A2**.
-- Evidence: [patchCompatDirectTransport](../src/zen-provider.ts) returns `void` and calls `registerApiProvider`. [apply](../src/index.ts) calls it, but `restoreTransport` collects restore functions only for fetch and Node HTTP.
-- Impact: the current code provides no unload restoration path for this global registration. Whether the actual host supplies another cleanup mechanism is unverified. Existing Node HTTP wrapper cleanup tests do not establish compat-provider cleanup.
-- Acceptance: confirm the target pi-ai/DSH registration cleanup API and ownership, then integrate with plugin unloading. Test reloads, repeated unloading, and later registrations by another plugin without removing its provider.
-
 ## G4: Required Peers Are Declared Optional
 
 - **P2 / Confirmed gap / C2**.

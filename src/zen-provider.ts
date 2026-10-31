@@ -1293,10 +1293,9 @@ async function probeOnce(model: Model<Api>, deps: ProbeDeps): Promise<ProbeOutco
   // unanswerable once the round ends. Three rounds of diagnosis failed on
   // exactly that: "which of FreeTierError / MissingSessionID / OpenCode-only
   // was it?" could not be asked of any artifact. Off unless the operator turns
-  // it on, and truncated: this is an upstream error payload, never a request.
-  if (body !== "") {
-    debugLog(`probe <- ${status} marker=${String(anonGateMarker(body))} body=${body.slice(0, 300)}`);
-  }
+  // it on, and reduced to allowlisted fields: an upstream payload can echo
+  // request content, so its text is never logged.
+  if (body !== "") debugLog(probeRefusalSummary(status, body));
   if (expired()) {
     return {
       kind: "inconclusive",
@@ -1553,8 +1552,15 @@ export async function fetchZenModelIds(
   }
 }
 
-export function patchCompatDirectTransport(getSessionId: SessionGetter = () => undefined): void {
+/**
+ * Wraps pi-ai's registry entry for each supported api. The registry holds one
+ * entry per api and re-wraps every registration, so the returned restore
+ * registers the entry the patch replaced again, and only while the registry
+ * still holds this patch's entry: a plugin that registered later keeps its own.
+ */
+export function patchCompatDirectTransport(getSessionId: SessionGetter = () => undefined): () => void {
   const stash = compatOriginals();
+  const installed = new Map<string, CompatApiEntry>();
   for (const api of SUPPORTED_APIS) {
     if (!stash.has(api)) {
       const current = getApiProvider(api);
@@ -1592,7 +1598,23 @@ export function patchCompatDirectTransport(getSessionId: SessionGetter = () => u
       },
       "dsh-opencode-free",
     );
+    installed.set(api, getApiProvider(api));
   }
+  return () => {
+    for (const [api, ours] of installed) {
+      if (getApiProvider(api) !== ours) continue;
+      const original = stash.get(api);
+      if (original) {
+        registerApiProvider({
+          api: api as Parameters<typeof registerApiProvider>[0]["api"],
+          stream: original.stream,
+          streamSimple: original.streamSimple,
+        } as Parameters<typeof registerApiProvider>[0]);
+      }
+      stash.delete(api);
+    }
+    installed.clear();
+  };
 }
 
 /**
@@ -1615,12 +1637,32 @@ function debugLog(message: string): void {
   }
 }
 
+/** Names the credential's kind only; no part of it is ever logged. */
+function credentialKind(authorization: string | null): string {
+  if (!authorization) return "(missing)";
+  return authorization === `Bearer ${ANONYMOUS_KEY}` ? "anonymous" : "key";
+}
+
 function identitySummary(headers: Headers, via: string): string {
   const ua = headers.get("User-Agent") ?? "(missing)";
   const session = headers.get("x-opencode-session") ?? "(missing)";
-  const auth = headers.get("authorization") ?? "(missing)";
   const arid = headers.get("x-client-request-id") ?? "(missing)";
-  return `${via} ua=${ua.slice(0, 28)}... session=${session.slice(0, 12)}... auth=${auth.slice(0, 14)}... arid=${arid.slice(0, 12)}...`;
+  return `${via} ua=${ua.slice(0, 28)}... session=${session.slice(0, 12)}... auth=${credentialKind(headers.get("authorization"))} arid=${arid.slice(0, 12)}...`;
+}
+
+const ERROR_CODE_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** Status, gate marker and the upstream's error code or type; never its message. */
+function probeRefusalSummary(status: number | undefined, body: string): string {
+  let code = "";
+  try {
+    const error = (JSON.parse(body) as { error?: { code?: unknown; type?: unknown } } | null)?.error;
+    const found = [error?.code, error?.type].find((value) => typeof value === "string" && ERROR_CODE_PATTERN.test(value));
+    code = typeof found === "string" ? ` code=${found}` : "";
+  } catch {
+    // Not JSON: only the size is reported.
+  }
+  return `probe <- ${status} marker=${String(anonGateMarker(body))}${code} bytes=${body.length}`;
 }
 
 /** Sizes and shape only — never content. */

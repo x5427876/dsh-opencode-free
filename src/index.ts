@@ -462,7 +462,7 @@ export function apply(ctx: HostContext, config?: Config): void {
   // no per-user config. Never let a side-channel patch failure break provider
   // registration.
   //
-  // The two process-global patches hand back a restore function, and the host's
+  // The three process-global patches hand back a restore function, and the host's
   // lifecycle convention (`ctx.effect`, the same one the catalogue routes already
   // use) is what puts them back. Without this, disabling the plugin left
   // `globalThis.fetch` and `node:http`/`node:https` wrapped for the rest of the
@@ -470,7 +470,7 @@ export function apply(ctx: HostContext, config?: Config): void {
   //.
   const restoreTransport: Array<() => void> = [];
   try {
-    patchCompatDirectTransport(() => undefined);
+    restoreTransport.push(patchCompatDirectTransport(() => undefined));
   } catch {
     // Main-path streaming still works without the compat patch.
   }

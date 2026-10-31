@@ -148,9 +148,10 @@ Compaction is a separate request.
   in the same process also receive the identity headers.
 - **Profile dependency:** a `webServer` service is required for detail-page
   routes. The built-in `headless` profile does not provide it.
-- **Debug privacy:** `DSH_OPENCODE_FREE_DEBUG=1` enables diagnostics. Current
-  logs include an Authorization prefix and truncated upstream errors; treat
-  them as sensitive and do not publish raw logs. See [known gaps](docs/standards-gap.md#g1-debug-logs-include-authorization-fragments).
+- **Debug privacy:** `DSH_OPENCODE_FREE_DEBUG=1` enables diagnostics. Logs name
+  the credential kind (`anonymous` or `key`) and never any part of it. Upstream
+  refusals contribute only the status, gate marker and error code, not their
+  text. Request and session identifiers still appear, so do not publish raw logs.
 - **Verification scope:** compat run results are not stored in the repository:
   they depend on environment, versions, time and the shared anonymous quota. Run
   the [compat guide](docs/compat-run.md) yourself for current evidence. The
