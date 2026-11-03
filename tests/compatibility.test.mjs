@@ -48,6 +48,9 @@ const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url
 const libUrl = new URL('../lib/', import.meta.url)
 const hostFiles = (await readdir(libUrl)).filter((f) => f.endsWith('.js')).sort()
 const host = (await Promise.all(hostFiles.map((f) => readFile(new URL(f, libUrl), 'utf8')))).join('\n')
+// pi-ai's built-in opencode table can lack a responses-channel model; the
+// transport follows `model.api`, so a derived record exercises the same path.
+const modelFor = (provider, api) => provider.getModels().find((m) => m.api === api) ?? { ...provider.getModels()[0], api }
 // The SOURCE, not the build artifact: `npx tsx --test tests/*.test.mjs` is the
 // highest-frequency inner loop and it does not run `pretest`, so importing lib/
 // here silently tested a stale build. `host` above still scans
@@ -528,7 +531,7 @@ for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${
     () => 's',
     () => undefined,
   )
-  const model = p.getModels().find((m) => m.api === api)
+  const model = modelFor(p, api)
   const ctx = {
     tools: [
       { name: 'read', description: 'Read a UTF-8 text file.', parameters: { type: 'object', properties: { file_path: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['file_path'] } },
@@ -1133,7 +1136,7 @@ test('GUARD: placeholder efforts never reach the wire', async () => {
     () => 's',
     () => undefined,
   )
-  const base = p.getModels().find((m) => m.api === 'openai-responses')
+  const base = modelFor(p, 'openai-responses')
   // A map with `off` absent (offered), like every derived record carries —
   // and an id outside the muse-spark xhigh default, so nothing is chosen.
   const { off: _dropped, ...rest } = base.thinkingLevelMap ?? {}

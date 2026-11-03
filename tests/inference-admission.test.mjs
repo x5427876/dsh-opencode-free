@@ -18,6 +18,9 @@ import { OPENCODE_TLS_CIPHERS, zenHttpsFetch } from '../src/zen-tls.ts'
 
 const endpoint = 'https://opencode.ai/inference/v1'
 const context = { messages: [{ role: 'user', content: 'OK', timestamp: 1 }] }
+// pi-ai's built-in opencode table can lack a responses-channel model; the
+// transport follows `model.api`, so a derived record exercises the same path.
+const modelFor = (provider, api) => provider.getModels().find(m => m.api === api) ?? { ...provider.getModels()[0], api }
 const refused = () => Response.json({ error: { type: 'diagnostic_stop' } }, { status: 403 })
 
 test('session identity uses the official descending time prefix and remains stable', t => {
@@ -38,7 +41,7 @@ test('session identity uses the official descending time prefix and remains stab
 
 test('anonymous DSH definitions use admission parameter names without losing host constraints', async () => {
   const provider = zenProvider()
-  const model = provider.getModels().find(m => m.api === 'openai-responses')
+  const model = modelFor(provider, 'openai-responses')
   const tools = [
     { name: 'read', description: 'Read a UTF-8 text file and return line-numbered content.', parameters: { type: 'object', properties: { file_path: { type: 'string', description: 'Path to read, resolved by the filesystem backend.' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['file_path'] } },
     { name: 'pwsh', description: 'Execute a PowerShell command (`pwsh -Command`) and return its stdout/stderr.', parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, timeoutMs: { type: 'number', description: 'Timeout in milliseconds.' }, workdir: { type: 'string' }, run_in_background: { type: 'boolean' } }, required: ['command', 'description'] } },
@@ -70,7 +73,7 @@ test('later tool removals cannot discard admission declarations or the system pr
   ] }
   const before = structuredClone(input)
   for (const api of ['openai-responses', 'openai-completions']) {
-    const model = provider.getModels().find(m => m.api === api)
+    const model = modelFor(provider, api)
     let body
     await provider.streamSimple(model, input, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
     assert.deepEqual(body.tools.map(t => (t.function ?? t).name).sort(), ['bash', 'read'])
@@ -83,7 +86,7 @@ test('later tool removals cannot discard admission declarations or the system pr
 test('tool-less anonymous requests keep admission declarations without an unsupported tool choice', async () => {
   const provider = zenProvider()
   for (const api of ['openai-responses', 'openai-completions']) {
-    const model = provider.getModels().find(m => m.api === api)
+    const model = modelFor(provider, api)
     let body
     await provider.streamSimple(model, context, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
     const tools = body.tools.map(t => t.function ?? t)
@@ -98,7 +101,7 @@ test('tool-less anonymous requests keep admission declarations without an unsupp
 test('provider and availability requests use the current inference endpoint', async () => {
   const provider = zenProvider()
   for (const api of ['openai-responses', 'openai-completions']) {
-    const model = provider.getModels().find(m => m.api === api)
+    const model = modelFor(provider, api)
     let target
     await provider.streamSimple(model, context, {
       apiKey: 'public', maxRetries: 0,
@@ -198,7 +201,7 @@ test('fragmented admission tool names never reach the host as tool-call events',
 test('explicit caller tool choices survive anonymous and keyed requests', async () => {
   for (const api of ['openai-responses', 'openai-completions']) {
     const provider = zenProvider()
-    const model = provider.getModels().find(m => m.api === api)
+    const model = modelFor(provider, api)
     for (const apiKey of ['public', 'fixture-key']) for (const choice of ['none', 'auto', 'required']) {
       let body
       const options = { apiKey, maxRetries: 0,
