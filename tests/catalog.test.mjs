@@ -395,19 +395,24 @@ test('channelFor agrees with the opencode models pi-ai actually lists', () => {
   const table = new Map(getBuiltinModels('opencode').map((m) => [m.id, m.api]))
   const truth = {
     'big-pickle': 'openai-completions',
-    'ling-3.0-flash-fin-free': 'openai-completions',
+    'beam-free': 'openai-completions',
     'mimo-v2.6-flash-free': 'openai-completions',
     'nemotron-3-ultra-free': 'openai-completions',
     'nemotron-3.5-lightning-free': 'openai-completions',
-    'muse-spark-1.3-contributor-free': 'openai-responses',
+    'muse-spark-1.3': 'openai-responses',
   }
   for (const [id, expected] of Object.entries(truth)) {
     assert.equal(table.get(id), expected, `${id} is still in pi-ai's table with that channel`)
     assert.equal(channelFor({ id }, table), expected, `${id} through the table`)
   }
   // And the entries that DO declare it say the same thing the table does.
-  for (const id of ['big-pickle', 'ling-3.0-flash-fin-free', 'muse-spark-1.3-contributor-free']) {
-    assert.equal(channelFor(entryFor(id)), truth[id], `${id} through its own declaration`)
+  const declared = {
+    'big-pickle': 'openai-completions',
+    'ling-3.0-flash-fin-free': 'openai-completions',
+    'muse-spark-1.3-contributor-free': 'openai-responses',
+  }
+  for (const [id, expected] of Object.entries(declared)) {
+    assert.equal(channelFor(entryFor(id)), expected, `${id} through its own declaration`)
   }
 })
 
