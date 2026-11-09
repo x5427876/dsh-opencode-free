@@ -44,8 +44,11 @@ supports exactly one DSH version; a plugin patch does not itself justify a host 
    Verify it matches the release source and perform artifact-consumer checks
    required by R2. A passing source build alone is not package verification.
 3. For a DSH upgrade, follow the [compat run guide](compat-run.md) with explicit
-   live-request authorization. Do not commit run output (it is ignored): record the
-   exit code, per-layer outcome and official-list snapshot digest in the release
+   live-request authorization, in its
+   [default verification mode](compat-run.md#default-verification-mode) (L0 on every
+   free model, L1 and L2 on one model) unless the maintainer asks for full acceptance.
+   Do not commit run output (it is ignored): record the
+   exit code, per-layer outcome and official-list snapshot digest of each run in the release
    notes. Report incomplete results honestly; release preparation does not authorize
    quota consumption or turn an unfinished run into a pass.
 4. Commit the release changes and push the approved release branch. Confirm CI

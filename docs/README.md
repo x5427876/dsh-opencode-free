@@ -33,6 +33,7 @@ Installation and quick start live in the [project README](../README.md).
 - [0004: Official dynamic acceptance targets](adr/0004-official-dynamic-compat-targets.md)
 - [0005: Official model list as the free-model source](adr/0005-official-model-list-as-free-model-source.md)
 - [0006: OpenCode CLI v1 as the payload reference](adr/0006-opencode-v1-as-payload-reference.md)
+- [0007: Offline replay runs in CI](adr/0007-offline-replay-in-ci.md)
 
 ## Scope
 

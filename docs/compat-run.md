@@ -5,13 +5,51 @@ user-facing availability probe. Run before releasing support for a new DSH
 version. **It sends real inference requests, consumes shared anonymous quota,
 and requires explicit authorization.** It stays outside CI ([ADR-0003](adr/0003-compat-run-not-in-ci.md)).
 
+## Default verification mode
+
+Unless the maintainer asks for full acceptance, a DSH upgrade is verified by two
+runs, one after the other, each with its own `--out` directory:
+
+```sh
+pnpm compat --dsh <version> --l0-only --out .compat/<name>-l0-all
+pnpm compat --dsh <version> --model deepseek-v4.1-flash-free --tools --out .compat/<name>-l12-one
+```
+
+1. **L0 on every free model:** each official free conversational model passes the
+   availability probe.
+2. **L1 and L2 on one model:** a real DSH final reply plus the read and shell
+   tool checks. The default model is `deepseek-v4.1-flash-free`. If the official
+   list no longer calls it free, pick another free conversational model and
+   name it in the report.
+
+Pass condition: both runs exit `0`. Exit `2` is incomplete, not a pass; run again
+later. Report the two results separately and state that L1 and L2 were checked
+on one model only, so full-model acceptance was not established. Both runs need
+the same authorization as any compat run.
+
+## Offline replay (no quota)
+
+`pnpm replay --dsh <version>` runs six scenarios through the same isolated headless
+DSH, with `opencode.ai` redirected to a loopback fake. It covers the model picker,
+both wire channels, a tool loop with a follow-up turn, a context overflow,
+compaction and a free-tier refusal. No request reaches Zen, so it needs no
+authorization and consumes no anonymous quota; installing DSH still needs the npm
+registry and the `openssl` CLI. It complements the live runs and never replaces
+them: the fake cannot reproduce the real gate's admission checks. Design and
+limits: [offline replay design](offline-replay-design.md). It also runs in CI as
+the `replay` job ([ADR-0007](adr/0007-offline-replay-in-ci.md)), which is why it
+is not bound by [ADR-0003](adr/0003-compat-run-not-in-ci.md).
+
 ## Run
 
 Use Node matching `package.json` and pnpm from this clone. No global DSH or Zen
 key is required. Run through pnpm: the driver needs its `npm_execpath`.
 
+Full acceptance (L0, L1 and L2 on every free model), only when the maintainer
+asks for it:
+
 ```sh
-pnpm compat --dsh 0.2.2-alpha.2 --tools --out .compat/<unique-name>
+pnpm compat --dsh 0.2.2-rc.1 --tools --out .compat/<unique-name>
 ```
 
 | Option | Meaning |

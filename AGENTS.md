@@ -9,7 +9,7 @@ Use this guide when a user asks an Agent to install, update, verify, or remove
 ## Safety
 
 - Confirm the target DSH profile; use `web` only when it is the user's target.
-- Use the pinned `v0.5.0` release assets for a first install, never a moving branch.
+- Use the pinned `v0.6.0` release assets for a first install, never a moving branch.
 - Never print API keys, credential stores, or request bodies.
 - Do not start, stop, or restart DSH without explicit permission.
 - Preserve the DSH profile, unrelated plugins, and stored credentials.
@@ -20,7 +20,7 @@ Use this guide when a user asks an Agent to install, update, verify, or remove
 
 ## Detect the installation
 
-This plugin release supports only DeepSeek Harness `0.2.2-alpha.2`. Run
+This plugin release supports only DeepSeek Harness `0.2.2-rc.1`. Run
 `dsh --version` first and stop on any other version; do not upgrade DSH or
 ignore peer dependency warnings without explicit permission.
 
@@ -42,7 +42,7 @@ When `dsh`, Node.js, and pnpm are already available, install the pinned npm
 package directly:
 
 ```sh
-dsh plugin --profile web add dsh-opencode-free@0.5.0
+dsh plugin --profile web add dsh-opencode-free@0.6.0
 ```
 
 Update with `dsh plugin --profile web update dsh-opencode-free`.
@@ -70,7 +70,7 @@ Then, for each target profile (`desktop`, `web`):
 
 1. `pnpm pack` the plugin into a tarball (or download the pinned release tarball).
 2. Copy the tarball into `$PROFILE_DIR`.
-3. Add `"dsh-opencode-free": "file:./dsh-opencode-free-0.5.0.tgz"` to
+3. Add `"dsh-opencode-free": "file:./dsh-opencode-free-0.6.0.tgz"` to
    `$PROFILE_DIR/package.json` `dependencies` and add `dsh-opencode-free`
    to its `dsh.profile.bundles` array.
 4. Run `pnpm install` in `$PROFILE_DIR`.
@@ -139,12 +139,20 @@ plan; evaluation does not authorize a release.
 1. Update the exact peer pins and every file that names them, following the
    checklist in [`docs/release.md`](docs/release.md) (standards rule C1).
 2. Run `pnpm run check`.
-3. **Before release, the compat run is required:**
-   `pnpm compat --dsh <version> --out <dir>`. See
-   [`docs/compat-run.md`](docs/compat-run.md). It sends real anonymous requests,
-   so an Agent runs it only when the user has asked for it. It installs into a
-   temp `DSH_HOME` and never touches a user profile or a running DSH.
-4. Read the exit code. `0` means every model was verified. `1` means a
+3. **Before release, the compat run is required.** The default mode is two runs:
+   `pnpm compat --dsh <version> --l0-only --out <dir>` (L0 on every free model),
+   then `pnpm compat --dsh <version> --model deepseek-v4.1-flash-free --tools --out <dir>`
+   (L1 and L2 on one model). See
+   [`docs/compat-run.md`](docs/compat-run.md#default-verification-mode). Run
+   full acceptance (`--tools` without `--model`) only when the user asks. It
+   sends real anonymous requests, so an Agent runs it only when the user has
+   asked for it. It installs into a temp `DSH_HOME` and never touches a user
+   profile or a running DSH.
+   Also run `pnpm replay --dsh <version>`: it is offline, spends no quota and
+   needs no live-request authorization.
+4. Read the exit code of each run. `0` means every targeted model passed every
+   requested check; the default mode does not prove L1 and L2 on the other
+   models, so say so in the report. `1` means a
    `plugin-fault`, or the setup or warmup failed: fix it before release. `2`
    means the run was not broken but did not finish because models are
    rate-limited or unverified: run it again later, and do not report them as
@@ -153,7 +161,9 @@ plan; evaluation does not authorize a release.
    exit code `2`; they are not plugin faults.
 
 The compat run is not the plugin's probe, and it is not part of CI
-([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)).
+([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)). The offline replay is the
+exception: it sends no live request and runs in CI as the `replay` job
+([ADR 0007](docs/adr/0007-offline-replay-in-ci.md)).
 
 To tag and release after the upgrade, follow [`docs/release.md`](docs/release.md).
 
