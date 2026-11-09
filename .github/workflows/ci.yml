@@ -20,3 +20,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
       - run: pnpm pack --dry-run
+
+  replay:
+    # Headless DSH needs Node >= 24.9, newer than the `check` job's runtime.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/setup@v1
+        with:
+          runtime: node@24.11.0
+          cache: true
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Offline replay against the pinned DSH
+        run: pnpm replay --dsh "$(node -p "require('./package.json').peerDependencies['@deepseek-ai/dsh-llm']")"

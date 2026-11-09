@@ -162,13 +162,19 @@ failure is a compatibility signal: report it with the test name.
 
 ## 7. Run the live compat verification (only with authorization)
 
+Use the [default verification mode](compat-run.md#default-verification-mode): L0 on
+every free model, then L1 and L2 on one model.
+
 ```sh
-pnpm compat --dsh <target> --tools --out .compat/<name>
+pnpm compat --dsh <target> --l0-only --out .compat/<name>-l0-all
+pnpm compat --dsh <target> --model deepseek-v4.1-flash-free --tools --out .compat/<name>-l12-one
 ```
 
 It sends real anonymous requests and consumes shared quota, so an Agent runs it
 only when the user has asked for it ([compat run](compat-run.md)). Read the exit
-code as `AGENTS.md` defines it. Exit `2` is not a pass and not a plugin fault.
+code of each run as `AGENTS.md` defines it. Exit `2` is not a pass and not a plugin
+fault. Run full acceptance (`--tools` without `--model`) only when the maintainer
+asks.
 
 ## 8. Report the plan
 
