@@ -97,7 +97,7 @@ it. Keep fixtures small, under `tests/fixtures/replay/`, one file per scenario.
 3. **B2 harness (done):** `pnpm replay --dsh <version>` (`scripts/replay-run.mjs`,
    `replay-scenarios.mjs`, `replay-upstream.mjs`, `replay-preload.cjs`,
    `replay-env.mjs`). Six scenarios R1–R6 passed on DSH 0.2.2-alpha.3 and again on
-   0.2.2-rc.1: picker (S10),
+   0.2.3-alpha.2: picker (S10),
    plain reply on both channels (S1), tool loop and follow-up (S2), overflow (S3),
    compaction replacing old turns with the summary (S4) and a free-tier refusal (S6).
    Plugin breaks were caught by R1, R2, R4 and R6; R5 fails without the compaction

@@ -49,7 +49,7 @@ Full acceptance (L0, L1 and L2 on every free model), only when the maintainer
 asks for it:
 
 ```sh
-pnpm compat --dsh 0.2.2-rc.1 --tools --out .compat/<unique-name>
+pnpm compat --dsh 0.2.3-alpha.2 --tools --out .compat/<unique-name>
 ```
 
 | Option | Meaning |

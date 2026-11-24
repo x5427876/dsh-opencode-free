@@ -4,7 +4,7 @@
  *
  * Mirrors `pi-opencode-direct` (same Zen identity, same optional-key
  * priority, same encrypted-content retry, same compaction-prompt swap) but
- * expressed as a DSH bundle for `0.2.2-rc.1`: no OpenCode install, no
+ * expressed as a DSH bundle for `0.2.3-alpha.2`: no OpenCode install, no
  * separate server, native pi-ai transports, tools execute through DSH.
  */
 import { resolveRetryPolicy } from "@deepseek-ai/dsh-llm";
@@ -156,7 +156,7 @@ interface HostContext {
 /** The subset of `webServer.register` this plugin uses (gitbash-shell's shape). */
 interface WebServerContext {
   readonly webServer: {
-    readonly register: (options: { kind: "prefix"; path: string; handler: RouteHandler }) => () => void;
+    readonly register: (options: { kind: "prefix"; path: string; handler: RouteHandler; auth: "anonymous" }) => () => void;
   };
   readonly effect: (fn: () => (() => void) | void, label?: string) => unknown;
 }
@@ -316,10 +316,15 @@ function registerCatalogRoutes(ctx: HostContext, catalog: Catalog): void {
           void catalog.forceProbes().catch(() => undefined);
           sendJson(res, 202, catalogPayload(catalog));
         };
+        // DSH 0.2.3 changed webserver routes to `required` by default: without an
+        // explicit policy the panel's read/probe routes return 503 in a headless
+        // host with no browser cookie. These are same-origin fenced (POST) and
+        // read-only otherwise, so anonymous admission restores the pre-0.2.3
+        // behaviour without exposing write routes to other origins.
         const disposers = [
-          wctx.webServer.register({ kind: "prefix", path: CATALOG_ROUTE, handler: readHandler }),
-          wctx.webServer.register({ kind: "prefix", path: REFRESH_ROUTE, handler: refreshHandler }),
-          wctx.webServer.register({ kind: "prefix", path: PROBE_ROUTE, handler: probeHandler }),
+          wctx.webServer.register({ kind: "prefix", path: CATALOG_ROUTE, handler: readHandler, auth: "anonymous" }),
+          wctx.webServer.register({ kind: "prefix", path: REFRESH_ROUTE, handler: refreshHandler, auth: "anonymous" }),
+          wctx.webServer.register({ kind: "prefix", path: PROBE_ROUTE, handler: probeHandler, auth: "anonymous" }),
         ];
         wctx.effect(
           () => () => {
