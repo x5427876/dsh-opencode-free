@@ -59,9 +59,12 @@ test('anonymous DSH definitions use admission parameter names without losing hos
   assert.equal(shell.parameters.properties.timeout.type, 'number')
   assert.equal(shell.parameters.properties.run_in_background.type, 'boolean')
   assert.deepEqual(shell.parameters.required, ['command', 'description'])
-  assert.match(shell.description, /PowerShell/)
-  assert.match(read.description, /does not read directories, images, or PDFs/)
-  assert.doesNotMatch(read.description, /can read image files|read a file or directory/i)
+  // The gate refuses DSH's own wording: the official description, then the plugin's notes.
+  assert.match(shell.description, /^Execute a shell command and return its output\. Commands run on \w+ using PowerShell\./)
+  assert.match(read.description, /^Read the contents of a file or directory\./)
+  assert.match(read.description, /directories, images and PDFs are not supported/)
+  assert.doesNotMatch(read.description, /UTF-8 text file/)
+  assert.doesNotMatch(shell.description, /pwsh -Command/)
   assert.deepEqual(input, before)
 })
 
