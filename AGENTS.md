@@ -20,7 +20,7 @@ Use this guide when a user asks an Agent to install, update, verify, or remove
 
 ## Detect the installation
 
-This plugin release supports only DeepSeek Harness `0.2.2-rc.1`. Run
+This plugin release supports only DeepSeek Harness `0.2.2-rc.5`. Run
 `dsh --version` first and stop on any other version; do not upgrade DSH or
 ignore peer dependency warnings without explicit permission.
 

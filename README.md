@@ -41,7 +41,7 @@ Anonymous access is the default; a Zen API key is optional.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.2-rc.1` (exact) |
+| DeepSeek Harness | `0.2.2-rc.5` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each release supports exactly one DSH version. Do not ignore peer dependency
