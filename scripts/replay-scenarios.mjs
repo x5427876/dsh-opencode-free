@@ -9,6 +9,7 @@ import {
   completionsText,
   completionsTextWithUsage,
   completionsToolCall,
+  completionsToolCalls,
   officialModel,
   refusal,
   responsesText,
@@ -132,6 +133,50 @@ export const SCENARIOS = [
       const replayed = JSON.stringify(after.body.messages)
       assert.ok(replayed.includes('CHECKPOINT-SUMMARY-MARKER'), 'the summary is replayed')
       assert.ok(!replayed.includes('FIRST-TURN-UNIQUE'), 'the shadowed turn is no longer replayed')
+    },
+  },
+  {
+    id: 'R7',
+    title: 'calls in the official tool form run as DSH tools, streamed in pieces',
+    async run({ host, upstream }) {
+      await host.prepare({ models: [FREE_A] })
+      const nonce = `SHELL-${randomBytes(6).toString('hex')}`
+      const toolCalls = (result) => result.events.filter((event) => event.type === 'tool_call')
+      const outcome = (result, call) => result.events.find((event) => event.type === 'tool_result' && event.callId === call.callId)
+      upstream.use((record) => lastMessage(record.body)?.role === 'tool'
+        ? completionsText('TOOLS-DONE')
+        : completionsToolCalls([
+            { name: 'edit', args: { path: 'edit.txt', oldString: 'alpha', newString: 'omega', replaceAll: false } },
+            { name: 'webfetch', args: { url: 'https://opencode.ai/replay-fetch', format: 'text' } },
+            { name: 'shell', args: { command: `echo ${nonce}`, summary: 'Print a marker' } },
+          ]))
+      const first = await host.ask('edit, fetch and run', { model: 'replay-free-a', files: { 'edit.txt': 'alpha beta\n' } })
+      assertCompleted(first, 'TOOLS-DONE')
+      const [request] = upstream.inference()
+      assert.deepEqual(['edit', 'shell', 'webfetch'].filter((name) => toolNames(request.body).includes(name)), ['edit', 'shell', 'webfetch'], 'the official names are declared')
+      const calls = toolCalls(first)
+      assert.deepEqual(calls.map((call) => [call.tool, call.input]), [
+        ['edit', { file_path: 'edit.txt', old_string: 'alpha', new_string: 'omega', replace_all: false }],
+        ['web_fetch', { url: 'https://opencode.ai/replay-fetch' }],
+        ['bash', { command: `echo ${nonce}`, description: 'Print a marker' }],
+      ])
+      assert.equal(outcome(first, calls[0])?.status, 'completed', 'DSH applied the edit')
+      const shell = outcome(first, calls[2])
+      assert.equal(shell?.status, 'completed', 'DSH ran the command')
+      assert.ok(String(shell.result).includes(nonce), 'the command output is the tool result')
+
+      upstream.requests.length = 0
+      upstream.use((record) => lastMessage(record.body)?.role === 'tool'
+        ? completionsText('READ-DONE')
+        : completionsToolCalls([{ name: 'read', args: { path: 'edit.txt' } }]))
+      const second = await host.ask('read it back', { model: 'replay-free-a', sessionId: first.sessionId })
+      assertCompleted(second, 'READ-DONE')
+      const [read] = toolCalls(second)
+      assert.deepEqual([read.tool, read.input], ['read', { file_path: 'edit.txt' }])
+      assert.ok(String(outcome(second, read)?.result).includes('omega beta'), 'the edit reached the file')
+      const [followUp] = upstream.inference()
+      const history = JSON.stringify(followUp.body.messages)
+      assert.ok(history.includes('oldString') && !history.includes('old_string'), 'history carries the official argument names')
     },
   },
   {
