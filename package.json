@@ -29,7 +29,8 @@
     "README.md",
     "README.zh-TW.md",
     "AGENTS.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
@@ -47,7 +48,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc",
     "pretest": "pnpm run build",
     "prepack": "pnpm run build",
     "test": "tsx --test tests/*.test.mjs",
