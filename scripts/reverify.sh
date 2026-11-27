@@ -10,7 +10,7 @@ set -u
 
 BASE="https://opencode.ai/zen/v1"
 MODEL="${ZEN_MODEL:-muse-spark-1.3-contributor-free}"
-UA="opencode/latest/2.4.2/cli dsh-opencode-free/0.6.0"
+UA="opencode/latest/2.4.2/cli dsh-opencode-free/0.7.0"
 SESS="ses_$(node -e "process.stdout.write(require('crypto').randomBytes(6).toString('hex'))")AbCdEfGhIjKlMn"
 REQ="msg_abcdef123456AbCdEfGhIjKlMn"
 # 匿名層要求 stream:true，且 tools 含名為 read 與 bash 的工具（2026-09-27 重播實測），缺一即 403。

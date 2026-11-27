@@ -57,7 +57,7 @@ peer dependency 警告。舊版對應的 DSH 請看該版的
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.6.0
+dsh plugin --profile web add dsh-opencode-free@0.7.0
 ```
 
 請將 `web` 換成你的目標 profile。若已安裝，請改用下方的更新指令，不要重複新增。

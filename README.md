@@ -66,7 +66,7 @@ Check your DSH version, then install the pinned package:
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.6.0
+dsh plugin --profile web add dsh-opencode-free@0.7.0
 ```
 
 Replace `web` with your target profile. If already installed, use the update

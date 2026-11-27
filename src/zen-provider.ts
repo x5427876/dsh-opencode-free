@@ -121,7 +121,7 @@ export function freeModels(): Model<Api>[] {
  * `zen-provider` does not import `catalog` at runtime (only its type), so
  * reading it the other way round introduces no cycle.
  */
-export const PLUGIN_VERSION = "0.6.0";
+export const PLUGIN_VERSION = "0.7.0";
 
 /** The OpenCode CLI release whose request format anonymous requests follow (ADR 0008). */
 export const OPENCODE_CLI_VERSION = "2.4.2";
