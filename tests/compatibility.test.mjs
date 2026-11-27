@@ -194,7 +194,7 @@ test('registers opencode-zen-free through the PiAiAdapter seam', async () => {
   assert.ok(models.length > 0, 'expected at least one free model')
   for (const m of models) {
     assert.equal(m.provider, PROVIDER_ID)
-    assert.equal(m.baseUrl, 'https://opencode.ai/inference/v1', m.id)
+    assert.equal(m.baseUrl, 'https://opencode.ai/inference/openai/v1', m.id)
     assert.ok(
       Object.values(m.cost).every((c) => c === 0),
       m.id,
@@ -572,19 +572,19 @@ for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${
   }
   const before = structuredClone(ctx)
   const shellArgs = JSON.stringify({ timeout: 1000, command: 'Get-Date', description: 'Read the current date' })
-  const readArgs = JSON.stringify({ filePath: 'fixture.txt', offset: 2, limit: 3 })
+  const readArgs = JSON.stringify({ path: 'fixture.txt', offset: 2, limit: 3 })
   const responseEvents = [
     {
       type: 'response.output_item.added',
       output_index: 0,
-      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'bash', arguments: '' },
+      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'shell', arguments: '' },
     },
     { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_1', delta: shellArgs.slice(0, 35) },
     { type: 'response.function_call_arguments.delta', output_index: 0, item_id: 'fc_1', delta: shellArgs.slice(35) },
     {
       type: 'response.output_item.done',
       output_index: 0,
-      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'bash', arguments: shellArgs },
+      item: { type: 'function_call', id: 'fc_1', call_id: 'call_1', name: 'shell', arguments: shellArgs },
     },
     { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'fc_2', call_id: 'call_2', name: 'read', arguments: '' } },
     { type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'fc_2', delta: readArgs.slice(0, 20) },
@@ -601,7 +601,7 @@ for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${
   ]
   const completionEvents = [
     { id: 'c1', object: 'chat.completion.chunk', model: model.id, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [
-      { index: 0, id: 'call_1', type: 'function', function: { name: 'bash', arguments: shellArgs.slice(0, 35) } },
+      { index: 0, id: 'call_1', type: 'function', function: { name: 'shell', arguments: shellArgs.slice(0, 35) } },
       { index: 1, id: 'call_2', type: 'function', function: { name: 'read', arguments: readArgs.slice(0, 20) } },
     ] }, finish_reason: null }] },
     { id: 'c1', object: 'chat.completion.chunk', model: model.id, choices: [{ index: 0, delta: { tool_calls: [
@@ -636,14 +636,14 @@ for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${
   assert.ok(compat)
   for (const stream of [p.streamSimple.bind(p), compat.streamSimple.bind(compat), p.stream.bind(p), compat.stream.bind(compat)]) for (const shape of [(c) => c, normalizeContext]) {
     const anon = await run(shape(ctx), 'public', stream)
-    assert.deepEqual(names(anon.body), ['bash', 'read'])
+    assert.deepEqual(names(anon.body), ['read', 'shell'])
     const session = anon.headers.get('x-opencode-session')
     assert.equal(anon.headers.get('x-client-request-id'), session)
+    for (const name of ['x-opencode-session-id', 'x-session-id', 'x-session-affinity']) assert.equal(anon.headers.get(name), session, name)
     if (api === 'openai-responses') {
       assert.equal(anon.body.prompt_cache_key, session)
-      if (anon.headers.has('x-opencode-session-id')) assert.equal(anon.headers.get('x-opencode-session-id'), session)
     }
-    assert.ok(history(anon.body).some((i) => i.type === 'function_call' && i.name === 'bash'))
+    assert.ok(history(anon.body).some((i) => i.type === 'function_call' && i.name === 'shell'))
     assert.ok(!JSON.stringify(history(anon.body)).includes('"pwsh"'))
     assert.equal(anon.result.content.find((c) => c.type === 'toolCall').name, 'pwsh')
     const end = anon.events.find((ev) => ev.type === 'toolcall_end')
@@ -652,17 +652,17 @@ for (const api of ['openai-responses', 'openai-completions']) test(`anonymous ${
     const returnedRead = anon.result.content.find(c => c.type === 'toolCall' && c.name === 'read')
     assert.deepEqual(returnedRead.arguments, { file_path: 'fixture.txt', offset: 2, limit: 3 })
     assert.deepEqual(anon.events.find(ev => ev.type === 'toolcall_end' && ev.toolCall.name === 'read').toolCall.arguments, returnedRead.arguments)
-    const historyShell = history(anon.body).find(i => i.type === 'function_call' && i.name === 'bash')
+    const historyShell = history(anon.body).find(i => i.type === 'function_call' && i.name === 'shell')
     const historyRead = history(anon.body).find(i => i.type === 'function_call' && i.name === 'read')
     assert.equal(JSON.parse(historyShell.arguments).timeout, 1000)
-    assert.deepEqual(JSON.parse(historyRead.arguments), { filePath: 'fixture.txt', offset: 2, limit: 3 })
+    assert.deepEqual(JSON.parse(historyRead.arguments), { path: 'fixture.txt', offset: 2, limit: 3 })
     assert.deepEqual(ctx, before, 'caller context must not be mutated')
 
     const keyed = await run(shape(ctx), 'sk-test-key', stream)
     assert.deepEqual(names(keyed.body), ['pwsh', 'read'])
     assert.deepEqual(keyed.body.tools.map(t => t.function ?? t).find(t => t.name === 'pwsh').parameters, ctx.tools[1].parameters)
     assert.equal(JSON.parse(history(keyed.body).find(i => i.type === 'function_call' && i.name === 'read').arguments).file_path, 'fixture.txt')
-    assert.equal(keyed.result.content.find(c => c.type === 'toolCall' && c.name === 'bash').arguments.timeout, 1000)
+    assert.equal(keyed.result.content.find(c => c.type === 'toolCall' && c.name === 'shell').arguments.timeout, 1000)
 
     // A server ignoring tool_choice:none must still never dispatch a filler.
     await assert.rejects(run(shape({ messages: [{ role: 'user', content: 'title', timestamp: 1 }] }), 'public', stream), /unavailable admission tool/)
@@ -688,7 +688,7 @@ const okSse = [
 
 const sseReply = () => new Response(okSse, { headers: { 'Content-Type': 'text/event-stream' } })
 
-test('GUARD: the probe request carries the read+bash gate, streams, and asks for enough tokens', async () => {
+test('GUARD: the probe request carries the read+shell gate, streams, and asks for enough tokens', async () => {
   // A tool-less probe 403s on EVERY model at the anonymous tier (measured
   // 2026-09-27), so a probe that skipped the tools would report the whole
   // catalogue dead.
@@ -715,7 +715,7 @@ test('GUARD: the probe request carries the read+bash gate, streams, and asks for
     },
   })
   assert.equal(outcome.kind, 'ok')
-  assert.deepEqual(body.tools.map((t) => t.function.name).sort(), ['bash', 'read'])
+  assert.deepEqual(body.tools.map((t) => t.function.name).sort(), ['read', 'shell'])
   assert.equal(body.stream, true)
   assert.equal(body.max_tokens, PROBE_MAX_TOKENS, `the probe budget must be the one constant, not a floor`)
 
@@ -808,7 +808,7 @@ test('GUARD: the probe re-asserts its admission tools on the final payload', asy
   assert.equal(outcome.kind, 'ok', 'the probe still gets its answer')
   const names = (body.tools ?? []).map((t) => t.function?.name ?? t.name)
   assert.ok(
-    names.includes('read') && names.includes('bash'),
+    names.includes('read') && names.includes('shell'),
     `admission tools must reach the wire even when a layer drops them, got ${JSON.stringify(names)}`,
   )
 })
@@ -902,13 +902,13 @@ test("GUARD: the availability check is one cheap catalogue GET, in 9router's sha
     })
   })
   assert.equal(seen.length, 1, 'one request, and it is a GET of the catalogue')
-  assert.equal(seen[0].url, 'https://opencode.ai/inference/v1/models')
+  assert.equal(seen[0].url, 'https://opencode.ai/inference/openai/v1/models')
   assert.equal(seen[0].init.method, undefined, 'no body, no method override: a plain GET')
   const headers = readNodeHeader(seen[0].init.headers, 'authorization')
   assert.equal(headers, 'Bearer public', 'the free tier runs on the literal "public" key')
   assert.match(
     String(readNodeHeader(seen[0].init.headers, 'user-agent')),
-    /^opencode\/1\.\d+\.\d+/,
+    /^opencode\/latest\/2\.\d+\.\d+\/cli /,
     'versioned opencode UA',
   )
   assert.equal(readNodeHeader(seen[0].init.headers, 'x-opencode-client'), 'cli')
@@ -1391,7 +1391,7 @@ test('every Zen-bound path sends the same identity header names', async () => {
   // inside this file: apply() already installed it, and the pristine original is
   // stashed on globalThis.)
   const expected = new Set(ZEN_IDENTITY_HEADERS)
-  assert.equal(expected.size, 7, 'the owned list is the full identity')
+  assert.equal(expected.size, 11, 'the owned list is the full identity')
 
   // The `Headers` shape — what applyZenIdentity stamps.
   const headers = applyZenIdentity(new Headers(), {

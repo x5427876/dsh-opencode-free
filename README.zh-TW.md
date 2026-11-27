@@ -106,7 +106,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 
 實作依據來自維護者分析 OpenCode CLI 原始碼與驗證請求的結果。插件透過 DSH 的
 `PiAiAdapter` 註冊 `opencode-zen-free` provider，再以 pi-ai 傳輸層直接呼叫
-`https://opencode.ai/inference/v1`。工具仍由 DSH 執行。
+`https://opencode.ai/inference/openai/v1`。工具仍由 DSH 執行。
 
 匿名請求帶有 OpenCode CLI 身份標頭、時間編碼的 session ID、串流設定，以及具有
 實質內容的 `read` 與 `bash` 工具宣告。上游最小准入規則尚未完整驗證，也可能改變。
@@ -119,7 +119,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 | 調整 | 模型看到的差異 |
 |---|---|
 | Windows shell | DSH 的 `pwsh` 以 `bash` 呈現，回傳呼叫再還原為 `pwsh`。讀檔與 shell 參數名稱會轉換，但保留宿主限制。 |
-| 缺少工具 | 缺少 `read`／`bash` 時，補上僅供准入的宣告，不增加執行能力；不存在的工具呼叫會在交給宿主前拒絕。保留呼叫端明確指定的工具選擇。 |
+| 缺少工具 | 缺少 `read`／`shell` 時，補上僅供准入的宣告，不增加執行能力；不存在的工具呼叫會在交給宿主前拒絕。保留呼叫端明確指定的工具選擇。 |
 | 上下文壓縮 | 符合條件的無工具摘要請求改用 OpenCode 風格的摘要系統提示，承載對話的使用者訊息不變。 |
 
 工具說明與准入宣告會增加 token；上下文壓縮則取代系統提示的 token。相同工具組合的
@@ -128,7 +128,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 ## 安全與限制
 
 - **行程層級攔截：** 包裝 `globalThis.fetch` 與 `node:http(s)` 的 `request`／`get`，
-  僅限 Zen inference 的 HTTPS origin 及 `/inference/v1` 路徑與子路徑。同一行程內
+  僅限 Zen inference 的 HTTPS origin 及 `/inference/openai/v1` 路徑與子路徑。同一行程內
   其他插件呼叫該端點時，也會套用身份標頭。
 - **Profile 依賴：** 詳情頁路由需要 `webServer` 服務，內建的 `headless` profile
   不提供這項服務。

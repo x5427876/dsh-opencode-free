@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import {
   createInitialSystemMessage,
@@ -21,7 +21,7 @@ import type { Catalog } from "./catalog.js";
 import { OPENCODE_TLS_CIPHERS, needsOpenCodeCiphers } from "./zen-tls.js";
 
 export const PROVIDER_ID = "opencode-zen-free";
-export const BASE_URL = "https://opencode.ai/inference/v1";
+export const BASE_URL = "https://opencode.ai/inference/openai/v1";
 const SUPPORTED_APIS = new Set(["openai-responses", "openai-completions"]);
 
 /**
@@ -122,10 +122,13 @@ export function freeModels(): Model<Api>[] {
  */
 export const PLUGIN_VERSION = "0.6.0";
 
-/** Derived, not written out: a second hardcoded copy is a second thing to forget. */
-export const OPENCODE_USER_AGENT = `opencode/1.18.31 ai-sdk/provider-utils/4.0.40 runtime/bun/1.3.14 dsh-opencode-free/${PLUGIN_VERSION}`;
+/** The OpenCode CLI release whose request format anonymous requests follow (ADR 0008). */
+export const OPENCODE_CLI_VERSION = "2.4.2";
+/** The CLI's own form, with the plugin named at the end so upstream can tell the two apart. */
+export const OPENCODE_USER_AGENT = `opencode/latest/${OPENCODE_CLI_VERSION}/cli dsh-opencode-free/${PLUGIN_VERSION}`;
 export const OPENCODE_CLIENT = "cli";
-export const OPENCODE_PROJECT = "global";
+/** The CLI sends a 40-hex project id; a fixed one keeps the host's directories out of it. */
+export const OPENCODE_PROJECT = createHash("sha1").update("global").digest("hex");
 /** The literal credential the free tier runs on; there is no other. */
 const ANONYMOUS_KEY = "public";
 
@@ -161,17 +164,46 @@ export const ZEN_IDENTITY_HEADERS: readonly string[] = Object.freeze([
   "x-client-request-id",
   "x-opencode-client",
   "x-opencode-project",
-  "x-opencode-request",
   "x-opencode-session",
+  "x-opencode-session-id",
+  "x-session-id",
+  "x-session-affinity",
+  "traceparent",
+  "b3",
 ]);
+
+const TRACE_IDS = new Map<string, string>();
+
+/**
+ * The per-request headers derived from one `ses_` value, in the CLI's form:
+ * every session header carries the same id, and the trace id stays fixed for
+ * the session while each request gets its own span.
+ */
+export function sessionIdentity(session: string): Record<string, string> {
+  let trace = TRACE_IDS.get(session);
+  if (trace === undefined) {
+    trace = randomBytes(16).toString("hex");
+    TRACE_IDS.set(session, trace);
+  }
+  const span = randomBytes(8).toString("hex");
+  return {
+    "x-client-request-id": session,
+    "x-opencode-session": session,
+    "x-opencode-session-id": session,
+    "x-session-id": session,
+    "x-session-affinity": session,
+    traceparent: `00-${trace}-${span}-01`,
+    b3: `${trace}-${span}-1-${randomBytes(8).toString("hex")}`,
+  };
+}
 
 /**
  * Stamp the whole identity onto a `Headers`. Idempotent by construction: a
  * value already present and non-empty is kept, so a caller who genuinely set an
  * Authorization (a real Zen key) is never downgraded to the anonymous tier.
  *
- * `session` is the already-computed `ses_` value, so all three ids that must
- * agree — x-opencode-session, x-client-request-id — come from one place.
+ * `session` is the already-computed `ses_` value, so every session header
+ * that must agree comes from one place.
  */
 export function applyZenIdentity(
   headers: Headers,
@@ -181,9 +213,10 @@ export function applyZenIdentity(
   headers.set("User-Agent", OPENCODE_USER_AGENT);
   headers.set("x-opencode-client", OPENCODE_CLIENT);
   headers.set("x-opencode-project", OPENCODE_PROJECT);
-  headers.set("x-opencode-session", options.session);
-  if (!headers.get("x-opencode-request")) headers.set("x-opencode-request", requestHeader());
-  if (!headers.get("x-client-request-id")) headers.set("x-client-request-id", options.session);
+  for (const [name, value] of Object.entries(sessionIdentity(options.session))) {
+    if (name === "x-client-request-id" && headers.get(name)) continue;
+    headers.set(name, value);
+  }
   return headers;
 }
 
@@ -527,20 +560,29 @@ export function swapCompactionPrompt<T>(context: T, apiKey: unknown): T {
 }
 
 /**
- * Anonymous inference requires substantive read/bash declarations. Adapt the
- * pinned host's schemas, not its execution: PowerShell remains owned by DSH.
- * Missing tools are admission-only and can never be dispatched to the host.
- * The minimum upstream description/schema checks are not publicly specified.
+ * Anonymous inference requires substantive read/shell declarations, named as
+ * OpenCode CLI v2 names them. Adapt the pinned host's schemas, not its
+ * execution: the host shell (bash or pwsh) remains owned by DSH. Missing tools
+ * are admission-only and can never be dispatched to the host. The minimum
+ * upstream description/schema checks are not publicly specified.
  */
-const GATE_TOOLS = ["read", "bash"];
+const GATE_TOOLS = ["read", "shell"];
+/** Host shell tools, in preference order, presented as the CLI's `shell`. */
+const HOST_SHELLS = ["bash", "pwsh"];
 /**
  * The inference gate also requires the system prompt to carry OpenCode's
  * environment block with a `Working directory:` line; any value passes. The
- * value stays generic: the host's real path is not the upstream's business.
+ * fields follow the CLI's block; path values stay generic, because the host's
+ * real paths are not the upstream's business.
  */
-const ENVIRONMENT_BLOCK = "<env>\n  Working directory: (managed by the host)\n</env>";
+const ENVIRONMENT_BLOCK = [
+  "<env>",
+  "  Working directory: (managed by the host)",
+  "  Workspace root folder: (managed by the host)",
+  `  Platform: ${process.platform}`,
+  "</env>",
+].join("\n");
 const ENVIRONMENT_PATTERN = /<env>[\s\S]*Working directory:[\s\S]*<\/env>/;
-const SHELL_ALIAS = "pwsh";
 /**
  * Anonymous requests present these host tools under other names. The inference
  * gate refuses a tool set that declares them by their host names (observed
@@ -554,13 +596,13 @@ const GATE_TOOL_ALIASES: Readonly<Record<string, string>> = {
 const GATE_TOOL_ORIGINALS: Readonly<Record<string, string>> = Object.fromEntries(
   Object.entries(GATE_TOOL_ALIASES).map(([host, alias]) => [alias, host]),
 );
-// Usage adapted from OpenCode 1.19.0 read.txt / Windows shell guidance and
-// checked against DSH 0.2.1-rc.5 fs/pwsh/bash contracts. Unlike OpenCode's
-// read, DSH read is UTF-8 text only; do not advertise directory/media support.
+// Usage adapted from OpenCode read / shell guidance and checked against the
+// DSH fs/pwsh/bash contracts. Unlike OpenCode's read, DSH read is UTF-8 text
+// only; do not advertise directory/media support.
 const READ_USAGE = `Read a UTF-8 text file and return line-numbered content. If the path does not exist, an error is returned.
 
 Usage:
-- The filePath parameter identifies the file, resolved by the host filesystem backend.
+- The path parameter identifies the file, resolved by the host filesystem backend.
 - The offset parameter is the first line to return (1-indexed), defaulting to 1.
 - The limit parameter is the maximum number of lines to return. The host applies its configured default and cap; see the parameter description.
 - To read later sections, call this tool again with a larger offset.
@@ -585,10 +627,10 @@ function admissionTool(name: string) {
   return name === "read" ? {
     name, description: `${READ_USAGE}\n\nUnavailable in this request. Do not call.`,
     parameters: { type: "object", properties: {
-      filePath: { type: "string", description: "The path to the text file to read" },
+      path: { type: "string", description: "The path to the text file to read" },
       offset: { type: "integer", description: "The first line to return (1-indexed)" },
       limit: { type: "integer", description: "The maximum number of lines to return" },
-    }, required: ["filePath"] },
+    }, required: ["path"] },
   } : {
     name, description: `${SHELL_USAGE}\n\nUnavailable in this request. Do not call.`,
     parameters: { type: "object", properties: {
@@ -600,7 +642,8 @@ function admissionTool(name: string) {
 }
 
 type CallRestoration = {
-  restoreShell: boolean;
+  /** The host shell presented as `shell`, restored on returned calls. */
+  hostShell?: string;
   restoreRead?: boolean;
   restoreTimeout?: boolean;
   unavailable?: string[];
@@ -647,31 +690,31 @@ export function applyAnonymousToolGate<T>(
   // provider reads: `context.tools` is not merely ignored, it is unreachable. On rc.1
   // (pi-ai 0.85) the old shape was correct, and the two are not compatible —
   // which is why the peer pin is exact rather than a union.
-  if (key !== "public" || !Array.isArray(msgs)) return { context, restoreShell: false };
+  if (key !== "public" || !Array.isArray(msgs)) return { context };
   const current = getCurrentTools(msgs as Parameters<typeof getCurrentTools>[0]);
   const has = (name: string) => current.some((t) => t.name === name);
-  const restoreShell = !has("bash") && has(SHELL_ALIAS);
+  const hostShell = has("shell") ? undefined : HOST_SHELLS.find(has);
   const ownsParameter = (name: string, field: string) => current.some(t => {
     if (t.name !== name || !("properties" in t.parameters)) return false;
     const properties = t.parameters.properties;
     return properties !== null && typeof properties === "object" && field in properties;
   });
   const restoreRead = ownsParameter("read", "file_path");
-  const restoreTimeout = ownsParameter(restoreShell ? SHELL_ALIAS : "bash", "timeoutMs");
+  const restoreTimeout = hostShell !== undefined && ownsParameter(hostShell, "timeoutMs");
   const rename = (name: unknown) =>
-    restoreShell && name === SHELL_ALIAS ? "bash" : typeof name === "string" && Object.hasOwn(GATE_TOOL_ALIASES, name) ? GATE_TOOL_ALIASES[name] : name;
+    hostShell !== undefined && name === hostShell ? "shell" : typeof name === "string" && Object.hasOwn(GATE_TOOL_ALIASES, name) ? GATE_TOOL_ALIASES[name] : name;
   const argumentsFor = (name: unknown, args: unknown) =>
-    restoreRead && name === "read" ? renameField(args, "file_path", "filePath") :
-    restoreTimeout && name === (restoreShell ? SHELL_ALIAS : "bash") ? renameField(args, "timeoutMs", "timeout") : args;
+    restoreRead && name === "read" ? renameField(args, "file_path", "path") :
+    restoreTimeout && name === hostShell ? renameField(args, "timeoutMs", "timeout") : args;
   const renameAll = (list: unknown) => {
     if (!Array.isArray(list)) return list;
     return list.map((t: { name?: unknown; parameters?: unknown; description?: string }) => {
       if (t.parameters === undefined) return { ...t, name: rename(t.name) };
       const read = t.name === "read";
-      const shell = t.name === (restoreShell ? SHELL_ALIAS : "bash");
+      const shell = hostShell !== undefined && t.name === hostShell;
       const usage = read ? READ_USAGE : shell ? SHELL_USAGE : undefined;
       const parameters = read && restoreRead
-        ? renameParameter(t.parameters, "file_path", "filePath")
+        ? renameParameter(t.parameters, "file_path", "path")
         : shell && restoreTimeout ? renameParameter(t.parameters, "timeoutMs", "timeout") : t.parameters;
       return {
         ...t, name: rename(t.name), parameters,
@@ -695,7 +738,7 @@ export function applyAnonymousToolGate<T>(
       ),
     };
   });
-  const unavailable = GATE_TOOLS.filter((name) => !has(name) && !(restoreShell && name === "bash"));
+  const unavailable = GATE_TOOLS.filter((name) => !has(name) && !(hostShell !== undefined && name === "shell"));
   const stubs = unavailable.map(admissionTool);
   if (stubs.length) {
     // pi-ai replays removals before additions within each system delta. Add at
@@ -708,20 +751,23 @@ export function applyAnonymousToolGate<T>(
       : [createInitialSystemMessage(undefined, stubs as never) as unknown as TranscriptMessage, ...messages];
   }
   messages = withEnvironmentBlock(messages);
-  return { context: { ...(context as Record<string, unknown>), messages } as T, restoreShell, restoreRead, restoreTimeout, unavailable };
+  return { context: { ...(context as Record<string, unknown>), messages } as T, hostShell, restoreRead, restoreTimeout, unavailable };
 }
 
 /** Restore owned argument aliases in place; SSE events share their partial message. */
-function restoreAdmissionCalls(value: unknown, restoration: boolean | CallRestoration): void {
-  const flags = typeof restoration === "boolean" ? { restoreShell: restoration } : restoration;
+function restoreAdmissionCalls(value: unknown, flags: CallRestoration): void {
   const restore = (call: { name?: unknown; arguments?: unknown }) => {
     if (typeof call.name === "string" && Object.hasOwn(GATE_TOOL_ORIGINALS, call.name)) call.name = GATE_TOOL_ORIGINALS[call.name];
     if (typeof call.name === "string" && flags.unavailable?.includes(call.name)) {
       throw new Error("Upstream returned an unavailable admission tool; no host execution is permitted.");
     }
-    if (flags.restoreRead && call.name === "read") call.arguments = renameField(call.arguments, "filePath", "file_path");
-    if (flags.restoreTimeout && (call.name === "bash" || (flags.restoreShell && call.name === SHELL_ALIAS))) call.arguments = renameField(call.arguments, "timeout", "timeoutMs");
-    if (flags.restoreShell && call.name === "bash") call.name = SHELL_ALIAS;
+    if (flags.restoreRead && call.name === "read") call.arguments = renameField(call.arguments, "path", "file_path");
+    // A streamed call is restored once per event, and its arguments may only
+    // arrive after its name has already been restored to the host shell.
+    if (flags.hostShell !== undefined && (call.name === "shell" || call.name === flags.hostShell)) {
+      if (flags.restoreTimeout) call.arguments = renameField(call.arguments, "timeout", "timeoutMs");
+      call.name = flags.hostShell;
+    }
   };
   const v = value as {
     partial?: unknown;
@@ -1427,14 +1473,7 @@ function compatRequestOptions<T extends StreamOptions>(
   const headers = Object.fromEntries(
     Object.entries(options?.headers ?? {}).filter(
       ([name]) =>
-        ![
-          "authorization",
-          "user-agent",
-          "x-opencode-session",
-          "x-opencode-client",
-          "x-opencode-project",
-          "x-opencode-request",
-        ].includes(name.toLowerCase()),
+        !ZEN_IDENTITY_HEADERS.some((owned) => owned.toLowerCase() === name.toLowerCase()),
     ),
   );
   const opencodeSession = sessionHeader(options?.sessionId ?? getSessionId() ?? fallbackSession);
@@ -1483,11 +1522,9 @@ function compatRequestOptions<T extends StreamOptions>(
     headers: {
       ...headers,
       Authorization: `Bearer ${effectiveApiKey}`,
-      "x-client-request-id": opencodeSession,
-      "x-opencode-session": opencodeSession,
+      ...sessionIdentity(opencodeSession),
       "x-opencode-client": OPENCODE_CLIENT,
       "x-opencode-project": OPENCODE_PROJECT,
-      "x-opencode-request": requestHeader(),
       "User-Agent": OPENCODE_USER_AGENT,
     },
   };
@@ -1835,7 +1872,8 @@ export function applyZenHeadersToNodeHeaders(
   const session =
     existing && ZEN_SESSION_PATTERN.test(existing) ? existing : sessionHeader(getSessionId() ?? GUARD_FALLBACK_SESSION);
   // The SAME owner the fetch guard uses, driven through the node:http shape's
-  // set() helper — one list, one session id, three ids that must agree.
+  // set() helper — one list, one session id, every session header agreeing.
+  const perSession = sessionIdentity(session);
   for (const name of ZEN_IDENTITY_HEADERS) {
     const want =
       name === "Authorization"
@@ -1846,11 +1884,8 @@ export function applyZenHeadersToNodeHeaders(
             ? OPENCODE_CLIENT
             : name === "x-opencode-project"
               ? OPENCODE_PROJECT
-              : name === "x-opencode-session" || name === "x-client-request-id"
-                ? session
-                : requestHeader();
+              : perSession[name];
     if (name === "Authorization" && readNodeHeader(out, "authorization")) continue;
-    if (name === "x-opencode-request" && readNodeHeader(out, "x-opencode-request")) continue;
     set(name, want);
   }
   return out;
@@ -2056,14 +2091,14 @@ function mapEventErrorToGuidance<T>(event: T, recorder?: TransportRecorder): T {
   } as T;
 }
 
-function withGuidance<T extends object>(stream: T, restoreShell: boolean | CallRestoration = false, recorder?: TransportRecorder): T {
+function withGuidance<T extends object>(stream: T, restoration?: CallRestoration, recorder?: TransportRecorder): T {
   return new Proxy(stream, {
     get(target, prop, _receiver) {
       if (prop === "result") {
         const inner = (target as { result: () => Promise<unknown> }).result;
         return async () => {
           const result = await inner.call(target);
-          if (restoreShell) restoreAdmissionCalls(result, restoreShell);
+          if (restoration) restoreAdmissionCalls(result, restoration);
           return mapTransportErrorToGuidance(result, recorder);
         };
       }
@@ -2079,9 +2114,9 @@ function withGuidance<T extends object>(stream: T, restoreShell: boolean | CallR
         return async function* () {
           const pending: unknown[] = [];
           const incomplete = new Set<number>();
-          const unavailable = typeof restoreShell === "object" ? restoreShell.unavailable ?? [] : [];
+          const unavailable = restoration?.unavailable ?? [];
           for await (const event of inner()) {
-            if (restoreShell) restoreAdmissionCalls(event, restoreShell);
+            if (restoration) restoreAdmissionCalls(event, restoration);
             const frame = event as { type?: string; contentIndex?: number; partial?: { content?: { name?: string }[] } };
             if (frame.type?.startsWith("toolcall_") && typeof frame.contentIndex === "number") {
               const name = frame.partial?.content?.[frame.contentIndex]?.name ?? "";

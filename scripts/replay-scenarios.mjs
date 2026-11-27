@@ -55,7 +55,7 @@ export const SCENARIOS = [
         const result = await host.ask('say hi', { model })
         assertCompleted(result, 'REPLAY-OK')
         const [request] = upstream.inference()
-        assert.equal(request.url, `/inference/v1${path}`)
+        assert.equal(request.url, `/inference/openai/v1${path}`)
         assert.equal(request.headers.get('authorization'), 'Bearer public')
         assert.equal(request.headers.get('x-opencode-client'), 'cli')
         assert.match(request.headers.get('x-opencode-session') ?? '', /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/, `${model}: session identity`)

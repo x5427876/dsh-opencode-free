@@ -48,11 +48,11 @@ test('S1 a plain reply arrives as text and carries the anonymous identity', asyn
 
     const [request] = upstream.requests
     assert.equal(upstream.requests.length, 1)
-    assert.equal(request.url, `https://opencode.ai/inference/v1/${api === 'openai-responses' ? 'responses' : 'chat/completions'}`)
+    assert.equal(request.url, `https://opencode.ai/inference/openai/v1/${api === 'openai-responses' ? 'responses' : 'chat/completions'}`)
     assert.equal(request.headers.get('authorization'), 'Bearer public')
     assert.equal(request.headers.get('x-opencode-client'), 'cli')
     assert.match(request.headers.get('x-opencode-session'), SESSION)
-    assert.deepEqual(toolNames(request.body), ['bash', 'read'], 'admission tools are declared')
+    assert.deepEqual(toolNames(request.body), ['read', 'shell'], 'admission tools are declared')
   })
 })
 

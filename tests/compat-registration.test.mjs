@@ -19,7 +19,7 @@ function baseFor(api, seen) {
   }
 }
 
-const zenModel = api => ({ id: 'm', name: 'm', api, provider: 'opencode-zen-free', baseUrl: 'https://opencode.ai/inference/v1', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 })
+const zenModel = api => ({ id: 'm', name: 'm', api, provider: 'opencode-zen-free', baseUrl: 'https://opencode.ai/inference/openai/v1', reasoning: false, input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 1000, maxTokens: 100 })
 
 /** True when a Zen request through the registry entry passes the patch first. */
 function patched(api, seen) {

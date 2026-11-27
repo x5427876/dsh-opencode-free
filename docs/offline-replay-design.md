@@ -16,7 +16,7 @@ this layer complements the live runs and never substitutes for them.
 
 ## Constraints found in the code
 
-- `BASE_URL` is the constant `https://opencode.ai/inference/v1`
+- `BASE_URL` is the constant `https://opencode.ai/inference/openai/v1`
   ([`src/zen-provider.ts:24`](../src/zen-provider.ts)). The fetch guard and the
   node:http/https guard match that origin exactly.
 - The transport already has one injection point: `patchGlobalFetchForZen(getSessionId, zenTransport)`

@@ -104,13 +104,16 @@ matched it was still refused. The cause was tool names:
 
 ### The v2 line
 
-OpenCode has two release lines: v1 (npm `opencode-ai`, the default installer) and
-v2 (GitHub releases, npm `@opencode/cli`). The newest 2.2.5 sends 12 tools in the
-main request, renames `bash` to `shell` and `task` to `subagent`, drops
+OpenCode has two release lines: v1 (npm `opencode-ai`) and v2 (GitHub releases, npm
+`@opencode/cli`). Upstream's free-tier tracking issue
+([anomalyco/opencode#59387](https://github.com/anomalyco/opencode/issues/59387)) says v1
+no longer supports free models. The newest 2.2.5 at the time of the measurements above sends
+12 tools in the main request, renames `bash` to `shell` and `task` to `subagent`, drops
 `todowrite`, and adds `question`, `websearch` and `execute`. It offers the same 17
 cipher suites in the same order and keeps the `<env>` block. Replaying its 12
-tools through the plugin's transport was admitted, so the gate accepted both
-shapes at the time of measurement. Whether it will keep accepting v1 is not known.
+tools through the plugin's transport was admitted on 2026-10-31. A 2.4.2 capture on
+2026-11-27 showed the same tool names and cipher list, and sends chat requests to
+`/inference/openai/v1`.
 
 ## How far to trust this
 
@@ -146,12 +149,12 @@ system prompt by default. Check a captured request before you replay or share it
 
 ## What the plugin does about it
 
-[dsh-opencode-free](../README.md) adds the `<env>` block, declares official-shape
-`read` and `bash` tools, aliases the two refused names, and offers the CLI's cipher
+[dsh-opencode-free](../README.md) adds the `<env>` block, declares
+`read` and `shell` tools in the v2 CLI's shape, aliases the two refused names, and offers the CLI's cipher
 list under Node. Keyed requests are not rewritten. The implementation is in
 [`src/zen-provider.ts`](../src/zen-provider.ts) and [`src/zen-tls.ts`](../src/zen-tls.ts),
 the working notes in [protocol notes](protocol-notes.md) (Traditional Chinese), and
-which CLI line the plugin follows in [ADR-0006](adr/0006-opencode-v1-as-payload-reference.md).
+which CLI line the plugin follows in [ADR-0008](adr/0008-opencode-v2-as-payload-reference.md).
 
 ## Cite this
 

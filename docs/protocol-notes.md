@@ -12,7 +12,7 @@
 
 | 證據 | 能證明什麼 | 不能證明什麼 |
 |---|---|---|
-| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求；仿照依據為 v1 線（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)） | 未公開 inference 服務的完整准入規則 |
+| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求；仿照依據為 v2 線（[ADR-0008](adr/0008-opencode-v2-as-payload-reference.md)） | 未公開 inference 服務的完整准入規則 |
 | 單項差分實測 | 指定時間、模型與客戶端下，某項變更是否改變結果 | 所有模型、平台與未來版本都會相同 |
 | 本地 fixture | 插件改寫、串流還原與錯誤處理符合測試案例 | 真實 DSH 或匿名上游一定可用 |
 | 真實 DSH 相容性驗證 | 報告所列環境與模型的實際結果 | 未列入或未完成的範圍也已通過 |
@@ -46,6 +46,8 @@
 那一輪 Node 成功，不代表 Node 一律被接受；TLS 密碼套件清單也是准入訊號，見下節。
 
 ## 官方 CLI 對照：免費層看什麼
+
+以下兩節是以 v1 線（1.19.5）量測的歷史依據。v1 已不再支援免費模型，量得的三項准入訊號仍是現行實作的根據。
 
 2026-10-30、OpenCode CLI 1.19.5、台灣兩個不同出口 IP、模型 `deepseek-v4.1-flash-free`、
 乾淨的資料目錄。每格一次請求，結果可能隨時間與額度改變。
@@ -102,12 +104,12 @@
   重跑差分需換 IP，也不能把被擋歸因於單一訊號。
 - OpenCode CLI 預設會把全域 `~/.claude/CLAUDE.md` 與技能清單放進系統提示，轉發或重放它的請求前要先確認內容。
 
-### 官方 CLI v2 線的請求內容（漂移觀察，非仿照依據）
+### 官方 CLI v2 線的請求內容（仿照依據）
 
 2026-10-31、OpenCode CLI 2.2.5（GitHub 發行的 macOS arm64 二進位檔，SHA-256 已核對）、
 `opencode run --standalone`，請求導向本機擷取伺服器，沒有送到 Zen。v2 線（v2.2.0 起）在
 GitHub 發行，npm 套件為 `@opencode/cli`；`opencode-ai` 最新仍是 1.19.5（v1 線）。
-插件仍以 v1 線為仿照依據（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)），本節只記錄 v2 的差異與放行結果。
+當時插件仍以 v1 線為仿照依據，本節記錄 v2 的差異與放行結果；仿照依據已改為 v2 線（[ADR-0008](adr/0008-opencode-v2-as-payload-reference.md)）。
 
 | 項目 | 1.19.5 | 2.2.5 |
 |---|---|---|
@@ -119,7 +121,27 @@ GitHub 發行，npm 套件為 `@opencode/cli`；`opencode-ai` 最新仍是 1.19.
 同一個出口 IP 上，把 2.2.5 的 12 個工具原樣以插件的傳輸層送到 `/inference/v1`，閘門放行（`200`）。
 插件自己的 User-Agent 仍是 1.18.31 的形式，也被放行，所以這個欄位不是准入訊號。
 v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todowrite`；
-閘門目前接受新舊兩種形狀。尚未查明閘門日後是否只接受 v2 的形狀；若發生，依 ADR-0006 重新檢討仿照依據。
+當時閘門接受新舊兩種形狀。
+
+#### 2.4.2 擷取（2026-11-27）
+
+官方發行的 macOS arm64 二進位檔（SHA-256 已核對）、`opencode run --standalone`、
+模型 `deepseek-v4.1-flash-free`。設定把 `opencode` provider 的 `baseURL` 改指本機擷取伺服器，
+請求沒有送到 Zen。
+
+| 項目 | 2.4.2 | 插件現行做法 |
+|---|---|---|
+| 端點 | 官方模型清單的 `base_url`：`https://opencode.ai/inference/openai/v1`；二進位檔內沒有 `/inference/v1` | `BASE_URL` 相同 |
+| 主請求的工具 | 與 2.2.5 相同的 12 個；`read` 參數為 `path`、`offset`、`limit`；`shell` 參數為 `command`、`workdir`、`timeout`、`background` | 補位與改名為 `read`、`shell`，DSH 的 `file_path` 以 `path` 宣告 |
+| TLS 密碼套件 | 相同 17 項、相同順序 | 不變 |
+| `<env>` | `Working directory:`、`Workspace root folder:`、`Is directory a git repo:`、`Platform:`、暫存目錄說明 | 前兩項用通用值，加上 `Platform:`；不送路徑與 git 狀態 |
+| User-Agent | `opencode/latest/2.4.2/cli` | 同一形式，結尾加 `dsh-opencode-free/<版本>` |
+| session 標頭 | `x-opencode-session`、`x-opencode-session-id`、`x-session-id`、`x-session-affinity` 同值；格式同 v1 | 相同 |
+| 追蹤標頭 | `traceparent` 與 `b3`；同一 session 共用 trace id，每個請求新的 span | 相同 |
+| 其他識別 | `x-opencode-client: cli`、40 位十六進位的 `x-opencode-project`；沒有 `x-opencode-request` | 固定的 40 位十六進位值；不送 `x-opencode-request` |
+
+插件另有 pi-ai 加上的 `x-client-request-id` 與 OpenAI SDK 的 `x-stainless-*`，2.4.2 不送。
+後者在 v1 時期的差分中不影響准入；前者在 v1 時期是壓縮請求的必要親和欄位，所以保留。
 
 ### 經官方 CLI 中繼（原型，未採用）
 
@@ -138,11 +160,11 @@ v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todow
 
 ## 目前插件採取的調整
 
-- 以 OpenCode CLI 身份標頭、時間編碼 session ID 與串流發出匿名請求；
+- 以 OpenCode CLI 2.4.2 的端點、身份與追蹤標頭、時間編碼 session ID 與串流發出匿名請求；
   同一 DSH session 在行程內保留身份，沒有持久登入。
-- 匿名 Windows 請求將 `pwsh` 呈現為 `bash`，並成對轉換 schema、歷史與回傳呼叫的
-  工具名稱及 `file_path`／`filePath`、`timeoutMs`／`timeout` 參數。
-- 缺少 `read` 或 `bash` 時補上實質宣告與不可呼叫說明；這些補位工具沒有宿主執行能力。
+- 匿名請求將宿主的 `bash` 或 `pwsh` 呈現為 `shell`，並成對轉換 schema、歷史與回傳呼叫的
+  工具名稱及 `file_path`／`path`、`timeoutMs`／`timeout` 參數。
+- 缺少 `read` 或 `shell` 時補上實質宣告與不可呼叫說明；這些補位工具沒有宿主執行能力。
   呼叫不存在的工具時，在交給 DSH 前拒絕；保留呼叫端明確指定的工具選擇。
 - 工具說明配合 DSH 實際的純文字讀檔與 shell 能力，不宣告 OpenCode 的額外讀取能力。
 - 匿名請求在系統提示加入通用的 `<env>` 區塊（`Working directory:` 值不含宿主路徑），

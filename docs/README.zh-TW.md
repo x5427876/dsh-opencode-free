@@ -31,7 +31,8 @@
 - [0003：實際連線相容性驗證不進 CI](adr/0003-compat-run-not-in-ci.md)
 - [0004：官方動態驗收目標](adr/0004-official-dynamic-compat-targets.md)
 - [0005：官方模型清單是免費模型的唯一來源](adr/0005-official-model-list-as-free-model-source.md)
-- [0006：以 OpenCode CLI v1 線作為請求內容的仿照依據](adr/0006-opencode-v1-as-payload-reference.md)
+- [0006：以 OpenCode CLI v1 線作為請求內容的仿照依據](adr/0006-opencode-v1-as-payload-reference.md)（已由 0008 取代）
+- [0008：以 OpenCode CLI v2 線作為請求內容的仿照依據](adr/0008-opencode-v2-as-payload-reference.md)
 
 ## 範圍
 

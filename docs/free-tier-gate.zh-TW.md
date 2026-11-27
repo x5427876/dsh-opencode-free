@@ -93,11 +93,13 @@
 
 ### v2 線
 
-OpenCode 有兩條發行線：v1（npm `opencode-ai`，預設安裝器）與 v2（GitHub 發行，npm `@opencode/cli`）。
-最新的 2.2.5 在主請求送出 12 個工具，把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，
-移除 `todowrite`，新增 `question`、`websearch` 與 `execute`。它送出相同的 17 項密碼套件、
-順序相同，也保留 `<env>` 區塊。把它的 12 個工具以插件的傳輸層重放，通過了，
-所以量測當時閘門接受新舊兩種形狀。日後是否仍接受 v1，尚未查明。
+OpenCode 有兩條發行線：v1（npm `opencode-ai`）與 v2（GitHub 發行，npm `@opencode/cli`）。
+上游的免費層總整理（[anomalyco/opencode#59387](https://github.com/anomalyco/opencode/issues/59387)）
+表示 v1 已不再支援免費模型。上述量測當時最新的 2.2.5 在主請求送出 12 個工具，把 `bash` 改名為 `shell`、
+`task` 改名為 `subagent`，移除 `todowrite`，新增 `question`、`websearch` 與 `execute`。
+它送出相同的 17 項密碼套件、順序相同，也保留 `<env>` 區塊。把它的 12 個工具以插件的傳輸層重放，
+2026-10-31 通過。2026-11-27 擷取的 2.4.2 工具名稱與密碼套件清單相同，對話請求送往
+`/inference/openai/v1`。
 
 ## 可信度的限制
 
@@ -126,11 +128,11 @@ OpenCode 有兩條發行線：v1（npm `opencode-ai`，預設安裝器）與 v2�
 
 ## 插件怎麼處理
 
-[dsh-opencode-free](../README.zh-TW.md) 會補上 `<env>` 區塊、宣告官方形式的 `read` 與 `bash`
+[dsh-opencode-free](../README.zh-TW.md) 會補上 `<env>` 區塊、以 v2 CLI 的形式宣告 `read` 與 `shell`
 工具、替兩個被擋的名稱加別名，並在 Node 下提供官方 CLI 的密碼套件清單。帶 key 的請求不改寫。
 實作在 [`src/zen-provider.ts`](../src/zen-provider.ts) 與 [`src/zen-tls.ts`](../src/zen-tls.ts)，
 工作筆記在[協定分析](protocol-notes.md)，插件仿照哪一條 CLI 線見
-[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)。
+[ADR-0008](adr/0008-opencode-v2-as-payload-reference.md)。
 
 ## 引用
 

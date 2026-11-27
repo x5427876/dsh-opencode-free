@@ -7,7 +7,7 @@ This guide covers catalogue refresh, probes, cache recovery, and optional keys.
 
 ## Model catalogue and refresh
 
-- Zen's official model list (`/inference/v1/models`) is the only source of which
+- Zen's official model list (`/inference/openai/v1/models`) is the only source of which
   models are free and of their context limits, output limits, input modalities,
   reasoning levels and endpoint channel ([ADR-0005](adr/0005-official-model-list-as-free-model-source.md)).
   A model is free when it is a chat model and every declared price is zero.

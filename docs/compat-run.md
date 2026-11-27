@@ -67,7 +67,7 @@ recorded run, not by the driver's cross-platform implementation.
 ## Scope and isolation
 
 1. Check the requested version against both peer pins before installation.
-2. Fetch the official model list (`/inference/v1/models`) afresh each round and
+2. Fetch the official model list (`/inference/openai/v1/models`) afresh each round and
    classify free conversational targets from its price, type, transport and
    effort fields, with code independent of the plugin catalogue
    ([ADR-0005](adr/0005-official-model-list-as-free-model-source.md)).

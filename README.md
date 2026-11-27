@@ -123,7 +123,7 @@ private; never include them in issue reports.
 The implementation is based on the maintainer's analysis of the OpenCode CLI
 source code and request verification. It registers the
 `opencode-zen-free` provider through DSH's `PiAiAdapter` and uses pi-ai transports
-to call `https://opencode.ai/inference/v1` directly. Tool execution stays in DSH.
+to call `https://opencode.ai/inference/openai/v1` directly. Tool execution stays in DSH.
 
 Anonymous requests carry OpenCode CLI identity headers, a time-encoded session
 ID, streaming, and substantive `read` and `bash` tool declarations. The minimum
@@ -138,7 +138,7 @@ original tools and prompts.
 | Adaptation | Model-visible effect |
 |---|---|
 | Windows shell | DSH's `pwsh` is presented as `bash`; returned calls are restored to `pwsh`. Read/shell parameter names are mapped while preserving host constraints. |
-| Missing tools | Admission-only `read`/`bash` declarations are added when absent. They grant no execution capability; calls to missing tools are rejected before host dispatch. Explicit caller tool choices are preserved. |
+| Missing tools | Admission-only `read`/`shell` declarations are added when absent. They grant no execution capability; calls to missing tools are rejected before host dispatch. Explicit caller tool choices are preserved. |
 | Compaction | Matching tool-less context-summary requests receive an OpenCode-style summary system prompt. The user turn containing the conversation is unchanged. |
 
 Tool guidance and admission declarations add tokens; compaction replaces system
@@ -150,7 +150,7 @@ Compaction is a separate request.
 
 - **Process-wide interception:** the plugin wraps `globalThis.fetch` and
   `node:http(s)` `request`/`get`, restricted to the HTTPS Zen inference origin
-  and `/inference/v1` path or descendants. Other plugins calling that endpoint
+  and `/inference/openai/v1` path or descendants. Other plugins calling that endpoint
   in the same process also receive the identity headers.
 - **Profile dependency:** a `webServer` service is required for detail-page
   routes. The built-in `headless` profile does not provide it.
