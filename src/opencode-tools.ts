@@ -109,10 +109,16 @@ export const OPENCODE_TOOLS: Readonly<Record<string, OpenCodeTool>> = {
     },
     fields: { pattern: "pattern", path: "path", include: "include" },
     // The host takes ripgrep syntax only, so literal and case-insensitive
-    // searches are expressed in the pattern itself.
+    // searches are expressed in the pattern itself. The host searches line by
+    // line and ripgrep refuses a newline in a pattern, so literal text that
+    // spans lines matches any of its lines: every occurrence is found, along
+    // with lines that hold only part of it.
     toHost: (args) => {
       let pattern = args.pattern;
-      if (typeof pattern === "string" && args.literal === true) pattern = pattern.replace(REGEX_SPECIAL, "\\$&");
+      if (typeof pattern === "string" && args.literal === true) {
+        const lines = pattern.split(/\r?\n/).filter(line => line !== "").map(line => line.replace(REGEX_SPECIAL, "\\$&"));
+        pattern = lines.length === 0 ? "^$" : lines.join("|");
+      }
       if (typeof pattern === "string" && args.caseSensitive === false) pattern = `(?i)${pattern}`;
       return { ...without(args, "literal", "caseSensitive", "limit"), ...(pattern === undefined ? {} : { pattern }) };
     },

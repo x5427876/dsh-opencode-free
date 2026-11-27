@@ -361,6 +361,9 @@ test('anonymous requests declare host tools in the official form and restore ret
     ...call(1, 'r2', 'grep', ['{"pattern":"a.b",', '"literal":true,"caseSensitive":false,"limit":5}']),
     ...call(2, 'r3', 'webfetch', ['{"url":"https://example.org","format":"html"}']),
     ...call(3, 'r4', 'shell', ['{"summary":"Show status",', '"command":"git status"}']),
+    // The host grep searches line by line and ripgrep refuses a newline in a pattern.
+    ...call(4, 'r5', 'grep', ['{"pattern":"a.b\\n\\nc(d",', '"literal":true}']),
+    ...call(5, 'r6', 'grep', ['{"pattern":"Foo","caseSensitive":true}']),
     { id: 't', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
   ]
   const sse = () => new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
@@ -386,6 +389,8 @@ test('anonymous requests declare host tools in the official form and restore ret
     ['grep', { pattern: '(?i)a\\.b' }],
     ['web_fetch', { url: 'https://example.org' }],
     ['bash', { description: 'Show status', command: 'git status' }],
+    ['grep', { pattern: 'a\\.b|c\\(d' }],
+    ['grep', { pattern: 'Foo' }],
   ])
 })
 

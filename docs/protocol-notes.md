@@ -238,6 +238,9 @@ DSH 獨有的工具（`goal`、`job_*`、`agent_fork`、`workflow` 等）不用�
   （`web_fetch` 名為 `webfetch`），保留宿主的 `sandbox_permissions`、`justification`；
   歷史與回傳呼叫的參數成對轉換。宿主做不到的官方參數：`grep` 的 `literal`、`caseSensitive`
   改寫進 pattern，其餘（`hidden`、`limit`、`format`、`timeout`）不交給宿主。
+  宿主 grep 逐行搜尋，ripgrep 拒絕含換行的 pattern，所以跨行的 literal 改為各行的
+  「或」：每個出現處都找得到，也會多出只含其中一行的結果。只有 `caseSensitive: false`
+  才不分大小寫。
   宿主 shell 的 `description` 參數以 `summary` 宣告。
 - 匿名請求在系統提示加入通用的 `<env>` 區塊（`Working directory:` 值不含宿主路徑），
   已有此區塊的提示不重複加入。

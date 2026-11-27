@@ -149,8 +149,10 @@ export const SCENARIOS = [
             { name: 'edit', args: { path: 'edit.txt', oldString: 'alpha', newString: 'omega', replaceAll: false } },
             { name: 'webfetch', args: { url: 'https://opencode.ai/replay-fetch', format: 'text' } },
             { name: 'shell', args: { command: `echo ${nonce}`, summary: 'Print a marker' } },
+            { name: 'grep', args: { pattern: 'Head one\nhead (two)', path: 'notes.txt', literal: true } },
+            { name: 'grep', args: { pattern: 'head', path: 'notes.txt', caseSensitive: true } },
           ]))
-      const first = await host.ask('edit, fetch and run', { model: 'replay-free-a', files: { 'edit.txt': 'alpha beta\n' } })
+      const first = await host.ask('edit, fetch and run', { model: 'replay-free-a', files: { 'edit.txt': 'alpha beta\n', 'notes.txt': 'Head one\nhead (two)\nother\n' } })
       assertCompleted(first, 'TOOLS-DONE')
       const [request] = upstream.inference()
       assert.deepEqual(['edit', 'shell', 'webfetch'].filter((name) => toolNames(request.body).includes(name)), ['edit', 'shell', 'webfetch'], 'the official names are declared')
@@ -159,11 +161,19 @@ export const SCENARIOS = [
         ['edit', { file_path: 'edit.txt', old_string: 'alpha', new_string: 'omega', replace_all: false }],
         ['web_fetch', { url: 'https://opencode.ai/replay-fetch' }],
         ['bash', { command: `echo ${nonce}`, description: 'Print a marker' }],
+        ['grep', { pattern: 'Head one|head \\(two\\)', path: 'notes.txt' }],
+        ['grep', { pattern: 'head', path: 'notes.txt' }],
       ])
       assert.equal(outcome(first, calls[0])?.status, 'completed', 'DSH applied the edit')
       const shell = outcome(first, calls[2])
       assert.equal(shell?.status, 'completed', 'DSH ran the command')
       assert.ok(String(shell.result).includes(nonce), 'the command output is the tool result')
+      const literal = outcome(first, calls[3])
+      assert.equal(literal?.status, 'completed', 'ripgrep accepted the multi-line literal')
+      assert.ok(['Head one', 'head (two)'].every((line) => String(literal.result).includes(line)), String(literal.result))
+      const cased = outcome(first, calls[4])
+      assert.equal(cased?.status, 'completed', 'DSH ran the case-sensitive search')
+      assert.ok(String(cased.result).includes('head (two)') && !String(cased.result).includes('Head one'), String(cased.result))
 
       upstream.requests.length = 0
       upstream.use((record) => lastMessage(record.body)?.role === 'tool'
