@@ -47,7 +47,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc",
+    "build": "node -e \"require('node:fs').rmSync('lib',{recursive:true,force:true})\" && tsc",
     "pretest": "pnpm run build",
     "prepack": "pnpm run build",
     "test": "tsx --test tests/*.test.mjs",
