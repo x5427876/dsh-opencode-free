@@ -396,11 +396,13 @@ test('upstream failures classify to actionable guidance (recorded bodies)', () =
     ),
     'anon-gated',
   )
-  // 429 FreeUsageLimitError per opencode#42500.
+  // 429 FreeUsageLimitError is sent both for an exhausted anonymous quota and
+  // for an admission refusal (measured 2026-11-27), so it stays unresolved.
   assert.equal(
-    classifyZenFailure(429, '{"type":"error","error":{"type":"FreeUsageLimitError"}}'),
-    'quota-exhausted',
+    classifyZenFailure(429, '{"type":"error","error":{"type":"FreeUsageLimitError","message":"Free usage limit reached"}}'),
+    'unresolved-429',
   )
+  assert.equal(classifyZenFailure(429, '{"error":{"message":"rate limit exceeded"}}'), 'quota-exhausted')
   assert.equal(
     classifyZenFailure(401, '{"error":{"type":"authentication_error","message":"invalid x-api-key"}}'),
     'bad-key',
@@ -413,6 +415,14 @@ test('upstream failures classify to actionable guidance (recorded bodies)', () =
   assert.doesNotMatch(ZEN_FAILURE_GUIDANCE['anon-gated'], /非插件問題|即解|出口 IP/)
   assert.match(ZEN_FAILURE_GUIDANCE['quota-exhausted'], /OPENCODE_API_KEY/)
   assert.match(ZEN_FAILURE_GUIDANCE['bad-key'], /key/)
+  // An unresolved 429 names both causes, how to tell them apart, and what a key buys.
+  const unresolved = ZEN_FAILURE_GUIDANCE['unresolved-429']
+  assert.match(unresolved, /匿名額度用盡/)
+  assert.match(unresolved, /准入拒絕/)
+  assert.match(unresolved, /同一個 IP[\s\S]*官方 OpenCode/)
+  assert.match(unresolved, /OPENCODE_API_KEY[\s\S]*付費模型/)
+  assert.match(unresolved, /VPN/)
+  assert.doesNotMatch(ZEN_FAILURE_GUIDANCE.unknown, /reverify/)
 })
 
 test('catalogue refresh intersects live ids and survives failure', async () => {
@@ -1004,7 +1014,7 @@ test('GUARD: a gate or a quota wall is never retried on another channel', async 
   // the very quota that is already exhausted — twice over.
   for (const [status, body, expect] of [
     [403, '{"error":{"type":"FreeTierError","message":"only be used in OpenCode"}}', 'anon-gated'],
-    [429, '{"error":{"type":"FreeUsageLimitError"}}', 'quota-exhausted'],
+    [429, '{"error":{"type":"FreeUsageLimitError"}}', 'unresolved-429'],
     [401, '{"error":{"message":"Invalid API key provided"}}', 'bad-key'],
   ]) {
     const p = plugin.zenProvider(
@@ -1266,7 +1276,7 @@ test('GUARD: every inconclusive outcome carries a code and a status the card can
   )
   const model = p.getModels().find((m) => m.api === 'openai-completions')
   const run = (fetchImpl) => probeModel(model, { provider: p, apiKey: 'public', fetchImpl })
-  const CODES = new Set(['anon-gated', 'quota-exhausted', 'bad-key', 'unknown', 'timeout', 'transport'])
+  const CODES = new Set(['anon-gated', 'unresolved-429', 'quota-exhausted', 'bad-key', 'unknown', 'timeout', 'transport'])
 
   // A gated anonymous request, a quota wall, a bad key, an empty completion and
   // a thrown socket: five different situations, five different sentences.

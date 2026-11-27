@@ -835,17 +835,23 @@ function restoreAdmissionCalls(value: unknown, flags: CallRestoration): void {
 export const ZEN_API_KEY_ENV = "OPENCODE_API_KEY";
 
 /** Upstream failure classes with actionable guidance (see spec v0.2). */
-export type ZenFailureKind = "anon-gated" | "quota-exhausted" | "bad-key" | "unknown";
+export type ZenFailureKind = "anon-gated" | "unresolved-429" | "quota-exhausted" | "bad-key" | "unknown";
 
 export const ZEN_FAILURE_GUIDANCE: Record<ZenFailureKind, string> = {
   "anon-gated":
     "上游拒絕免費層請求。此錯誤不足以判定匿名額度耗盡或排除插件相容性問題。若有 Zen key，可透過插件 config.apiKey 或環境變數 " +
     ZEN_API_KEY_ENV +
     " 設定後重測；不保證能解除拒絕。",
+  "unresolved-429":
+    "上游回 429，分不出是匿名額度用盡，還是准入拒絕（上游判定請求不像官方客戶端）。" +
+    "在同一個 IP 用官方 OpenCode 送一次：也失敗就是匿名額度用盡，等重置或換網路；官方成功就是准入拒絕，請回報。" +
+    "機房或 VPN 的出口 IP 常常已經沒有匿名額度。設定 Zen key（插件 config.apiKey 或 " +
+    ZEN_API_KEY_ENV +
+    "）可以繼續，但第三方客戶端用 key 只能使用付費模型。",
   "quota-exhausted":
-    "免費額度用完。等視窗重置，或掛 Zen key（插件 config.apiKey 或 " + ZEN_API_KEY_ENV + "）繼續用。",
+    "額度或速率限制用盡。稍後重試，或掛 Zen key（插件 config.apiKey 或 " + ZEN_API_KEY_ENV + "）繼續用。",
   "bad-key": "Zen key 無效。檢查 key 是否正確、過期或被撤銷；匿名用量不受影響。",
-  unknown: "未知的上游錯誤。跑 scripts/reverify.sh 看當下閘門狀態，仍異常則回報狀態碼與報文。",
+  unknown: "未知的上游錯誤。稍後重試；仍異常請回報狀態碼與錯誤訊息（不要附上 key）。",
 };
 
 const ANON_GATED_PATTERN = /FreeTierError|MissingSessionID|only be used .*OpenCode/i;
@@ -890,7 +896,9 @@ function enforceAnonymousTools(payload: unknown): unknown {
   return { ...body, tools: [...existing, ...missing.map(stub)] };
 }
 
-const QUOTA_PATTERN = /FreeUsageLimitError|usage[\s\S]{0,40}(exceeded|limit)|rate[\s-]?limit|quota/i;
+/** Sent both for an exhausted anonymous quota and for an admission refusal. */
+const UNRESOLVED_429_PATTERN = /FreeUsageLimitError/;
+const QUOTA_PATTERN = /usage[\s\S]{0,40}(exceeded|limit)|rate[\s-]?limit|quota/i;
 const BAD_KEY_PATTERN = /invalid[\s\S]{0,60}key|unauthorized|authentication_error/i;
 
 /**
@@ -912,6 +920,7 @@ export const ZEN_TRANSPORT_GUIDANCE =
 export function classifyZenFailure(status: number, bodyText: string): ZenFailureKind {
   const body = typeof bodyText === "string" ? bodyText : "";
   if (ANON_GATED_PATTERN.test(body)) return "anon-gated";
+  if (UNRESOLVED_429_PATTERN.test(body)) return "unresolved-429";
   if (status === 429 || QUOTA_PATTERN.test(body)) return "quota-exhausted";
   if (status === 401 || BAD_KEY_PATTERN.test(body)) return "bad-key";
   return "unknown";
@@ -1279,7 +1288,12 @@ function isCallerScoped(outcome: ProbeOutcome): boolean {
   // Only a failure carries a code; an `ok` never reaches here, but the type
   // says so and the check should not pretend otherwise.
   if (outcome.kind === "ok") return false;
-  if (outcome.code === "anon-gated" || outcome.code === "quota-exhausted" || outcome.code === "bad-key")
+  if (
+    outcome.code === "anon-gated" ||
+    outcome.code === "unresolved-429" ||
+    outcome.code === "quota-exhausted" ||
+    outcome.code === "bad-key"
+  )
     return true;
   // 403/429 only when it is NOT a "this model is gone" verdict: that sentence
   // is the wrong channel talking, and it must still be retried elsewhere.
