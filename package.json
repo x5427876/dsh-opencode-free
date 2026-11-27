@@ -55,7 +55,8 @@
     "check:docs": "node scripts/check-doc-links.mjs",
     "verify:release": "node scripts/verify-release.mjs",
     "compat": "pnpm run build && node scripts/compat-run.mjs",
-    "replay": "pnpm run build && node scripts/replay-run.mjs"
+    "replay": "pnpm run build && node scripts/replay-run.mjs",
+    "dsh:latest": "node scripts/dsh-latest.mjs"
   },
   "keywords": [
     "dsh-plugin",

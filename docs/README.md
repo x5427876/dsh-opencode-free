@@ -36,6 +36,7 @@ Installation and quick start live in the [project README](../README.md).
 - [0007: Offline replay runs in CI](adr/0007-offline-replay-in-ci.md)
 - [0008: OpenCode CLI v2 as the payload reference](adr/0008-opencode-v2-as-payload-reference.md)
 - [0009: The anonymous path is best effort; a key is the stable paid alternative](adr/0009-anonymous-path-best-effort.md)
+- [0010: Exact DSH pin, tracking npm `latest` with an automated pull request](adr/0010-exact-pin-tracks-latest.md)
 
 ## Scope
 
