@@ -23,6 +23,14 @@ hand; an Agent never runs `npm publish`.
 
 ### Only when DSH compatibility changes
 
+`pnpm dsh:latest` prints `none` or `bump <version>` for npm's DSH `latest`
+([ADR-0010](adr/0010-exact-pin-tracks-latest.md)). The daily **Track DSH latest**
+workflow runs it and, on a new version, opens or updates one pull request that
+moves the pin with `scripts/dsh-bump.mjs` and reports `pnpm run check` and the
+offline replay. It needs the repository setting "Allow GitHub Actions to create
+and approve pull requests". That pull request is a candidate: the steps below,
+the pi-ai range and other peers, and the compat run still apply.
+
 Inspect the target's release notes and exact package manifests, not moving master:
 
 ```sh

@@ -8,7 +8,7 @@
 **CLI 請求格式**：
 OpenCode CLI 使用的 User-Agent、會話識別碼、專案標記與工具宣告格式。
 本插件送出這些格式的欄位，但不是官方 OpenCode CLI。
-仿照依據是 v1 線（[ADR-0006](docs/adr/0006-opencode-v1-as-payload-reference.md)）。
+仿照依據是 v2 線（[ADR-0008](docs/adr/0008-opencode-v2-as-payload-reference.md)）。
 
 **非官方匿名存取**：
 在沒有第三方存取保證的情況下，以匿名身份呼叫 Zen keyless 層；HTTP 200
@@ -17,6 +17,17 @@ OpenCode CLI 使用的 User-Agent、會話識別碼、專案標記與工具宣�
 **匿名額度**：
 Zen 按出口 IP 共用的試用 bucket（input＋output＋reasoning 合計）；同 IP 重度使用會集體耗盡。
 _Avoid_: 免費流量、免費額度（後者泛指一切不付費的量，含 key 帳戶的贈額）
+
+**匿名額度用盡**：
+這個出口 IP 的匿名額度已用完；同 IP 的官方 OpenCode 也會被拒。
+_Avoid_: 額度用完（未排除准入拒絕時）
+
+**准入拒絕**：
+上游判定請求不符合官方客戶端而拒絕；同 IP、同時間的官方 OpenCode 仍可使用。
+_Avoid_: 被限流、quota（未經官方對照時）
+
+**未判定的 429**：
+上游回 429，但還沒用官方 OpenCode 對照，分不出是匿名額度用盡還是准入拒絕。上游對兩者回同一個錯誤。
 
 **官方免費清單**：
 Zen 官方模型清單（`/inference/v1/models`）中，類型為對話且所有已宣告成本維度皆為零的項目。

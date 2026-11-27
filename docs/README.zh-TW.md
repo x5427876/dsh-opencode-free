@@ -31,7 +31,10 @@
 - [0003：實際連線相容性驗證不進 CI](adr/0003-compat-run-not-in-ci.md)
 - [0004：官方動態驗收目標](adr/0004-official-dynamic-compat-targets.md)
 - [0005：官方模型清單是免費模型的唯一來源](adr/0005-official-model-list-as-free-model-source.md)
-- [0006：以 OpenCode CLI v1 線作為請求內容的仿照依據](adr/0006-opencode-v1-as-payload-reference.md)
+- [0006：以 OpenCode CLI v1 線作為請求內容的仿照依據](adr/0006-opencode-v1-as-payload-reference.md)（已由 0008 取代）
+- [0008：以 OpenCode CLI v2 線作為請求內容的仿照依據](adr/0008-opencode-v2-as-payload-reference.md)
+- [0009：匿名路徑盡力而為，自備 key 是穩定的付費替代](adr/0009-anonymous-path-best-effort.md)
+- [0010：精確 pin DSH，以自動 PR 追蹤 npm `latest`](adr/0010-exact-pin-tracks-latest.md)
 
 ## 範圍
 

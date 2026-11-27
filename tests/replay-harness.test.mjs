@@ -23,19 +23,19 @@ test('the preload sends opencode.ai traffic to the loopback fake and nowhere els
   const env = { ...process.env, NODE_EXTRA_CA_CERTS: upstream.ca, REPLAY_FAKE_PORT: String(upstream.port), NODE_OPTIONS: `--require ${PRELOAD}` }
 
   await t.test('fetch', async () => {
-    const script = "const r = await fetch('https://opencode.ai/inference/v1/models'); console.log((await r.json()).data[0].id)"
+    const script = "const r = await fetch('https://opencode.ai/inference/openai/v1/models'); console.log((await r.json()).data[0].id)"
     const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script], { env })
     assert.equal(stdout.trim(), 'replay-free-a')
   })
 
   await t.test('node:https', async () => {
-    const script = "require('node:https').get('https://opencode.ai/inference/v1/models', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(JSON.parse(b).data[0].id)) })"
+    const script = "require('node:https').get('https://opencode.ai/inference/openai/v1/models', r => { let b=''; r.on('data', c => b += c); r.on('end', () => console.log(JSON.parse(b).data[0].id)) })"
     const { stdout } = await run(process.execPath, ['-e', script], { env })
     assert.equal(stdout.trim(), 'replay-free-a')
   })
 
   await t.test('a POST is answered by the installed handler and recorded', async () => {
-    const script = "const r = await fetch('https://opencode.ai/inference/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm' }) }); console.log((await r.text()).includes('FROM-FAKE'))"
+    const script = "const r = await fetch('https://opencode.ai/inference/openai/v1/chat/completions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm' }) }); console.log((await r.text()).includes('FROM-FAKE'))"
     const { stdout } = await run(process.execPath, ['--input-type=module', '-e', script], { env })
     assert.equal(stdout.trim(), 'true')
     assert.equal(upstream.inference().at(-1).body.model, 'm')

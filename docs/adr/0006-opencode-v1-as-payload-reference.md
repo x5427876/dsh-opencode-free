@@ -1,6 +1,6 @@
 # 以 OpenCode CLI v1 線作為請求內容的仿照依據
 
-**Status**: accepted, 2026-10-31.
+**Status**: superseded by [ADR-0008](0008-opencode-v2-as-payload-reference.md), 2026-11-27 (accepted 2026-10-31).
 
 OpenCode CLI 現在有兩條並行的發行線。v1 線（npm `opencode-ai`，最新 1.19.5）是
 預設安裝腳本與 npm `latest` 所指的版本。v2 線（GitHub 發行與 `@opencode/cli`，最新 2.2.5）

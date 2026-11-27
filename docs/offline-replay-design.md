@@ -16,7 +16,7 @@ this layer complements the live runs and never substitutes for them.
 
 ## Constraints found in the code
 
-- `BASE_URL` is the constant `https://opencode.ai/inference/v1`
+- `BASE_URL` is the constant `https://opencode.ai/inference/openai/v1`
   ([`src/zen-provider.ts:24`](../src/zen-provider.ts)). The fetch guard and the
   node:http/https guard match that origin exactly.
 - The transport already has one injection point: `patchGlobalFetchForZen(getSessionId, zenTransport)`
@@ -53,7 +53,7 @@ Each scenario is a scripted queue of upstream responses plus assertions.
 | S2 | Two-turn tool loop (`read`, then `bash`), then a follow-up turn | Tool call/result IDs pair; the second request replays the first turn's history |
 | S3 | Upstream 400 with the generic refusal over the window | Mapped error carries the overflow clause; host detector triggers compaction |
 | S4 | Compaction round trip | A summary request (final user message starts "You are now acting as a compaction engine", `max_tokens` = `headroomTokens`) precedes the main request; the main request replays fewer messages than the history |
-| S5 | 429 then 200 | Finite backoff, one retry path, no unbounded loop |
+| S5 | 429 then 200; a 429 `FreeUsageLimitError` | Finite backoff, one retry path, no unbounded loop; the unresolved 429 is sent once |
 | S6 | 401 and 403 | Verdict is a refusal, not a crash; no credential in logs |
 | S7 | Stream cut mid-event and idle timeout | Error surfaces; no hang |
 | S8 | Request carries more images than the route limit (alpha.3) | `IMAGE_OFFLOAD_REQUIRED` handling continues the conversation |
@@ -101,7 +101,8 @@ it. Keep fixtures small, under `tests/fixtures/replay/`, one file per scenario.
    plain reply on both channels (S1), tool loop and follow-up (S2), overflow (S3),
    compaction replacing old turns with the summary (S4) and a free-tier refusal (S6).
    Plugin breaks were caught by R1, R2, R4 and R6; R5 fails without the compaction
-   settings. R3 and R5 mostly exercise the host, so a plugin break is less likely to
+   settings. R7 (official-form tool calls run as DSH tools) and R8 (an unresolved
+   429 is sent once through DSH) were added later. R3 and R5 mostly exercise the host, so a plugin break is less likely to
    show there. Safety: the driver aborts before any probe unless the plugin's own
    model-list fetch reached the fake.
 4. **Docs and CI (done):** `compat-run.md`, `upgrade-evaluation.md` and

@@ -350,7 +350,7 @@ test('derived catalogue: new free entries appear, paid and unreadable ones drop 
   const requested = []
   const servingFetch = async (url) => {
     requested.push(String(url))
-    if (String(url).endsWith('/inference/v1/models')) {
+    if (String(url).endsWith('/inference/openai/v1/models')) {
       return new Response(JSON.stringify(LIST_FIXTURE), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -370,7 +370,7 @@ test('derived catalogue: new free entries appear, paid and unreadable ones drop 
     const refreshed = await callRoute(host, REFRESH_ROUTE, 'POST')
     assert.equal(refreshed.status, 200)
     assert.equal(refreshed.body.source, 'official')
-    assert.ok(requested.some((url) => url.endsWith('/inference/v1/models')), 'it read the official list')
+    assert.ok(requested.some((url) => url.endsWith('/inference/openai/v1/models')), 'it read the official list')
     assert.ok(!requested.some((url) => url.includes('models.dev')), 'and no other source')
 
     const ids = await listedIds(host)

@@ -29,7 +29,7 @@ export async function makeCertificates(dir) {
 
 /**
  * Start the fake. `handler(request)` answers each POST with a web `Response`;
- * `GET /inference/v1/models` serves the current model list.
+ * `GET /inference/openai/v1/models` serves the current model list.
  */
 export async function startUpstream({ dir, models = [] }) {
   const certs = await makeCertificates(dir)
@@ -50,7 +50,7 @@ export async function startUpstream({ dir, models = [] }) {
       requests.push(record)
       let response
       try {
-        response = req.method === 'GET' && req.url?.startsWith('/inference/v1/models')
+        response = req.method === 'GET' && req.url?.startsWith('/inference/openai/v1/models')
           ? Response.json(modelList(list))
           : req.method === 'POST' ? await handler(record) : new Response('{}', { status: 404 })
       } catch (error) {

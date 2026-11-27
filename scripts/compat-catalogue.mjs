@@ -4,7 +4,7 @@
 import { createHash } from 'node:crypto'
 import { OPENCODE_USER_AGENT } from '../lib/zen-provider.js'
 
-export const OFFICIAL_MODELS = 'https://opencode.ai/inference/v1/models'
+export const OFFICIAL_MODELS = 'https://opencode.ai/inference/openai/v1/models'
 export const OFFICIAL_DOCS = 'https://opencode.ai/v2/docs/console/models/'
 
 /** Official `api` keys the plugin can drive, mapped to its transport names. */

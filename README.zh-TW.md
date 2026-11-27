@@ -9,6 +9,15 @@
 在 DeepSeek Harness（DSH）中使用 [OpenCode Zen](https://opencode.ai/docs/providers)
 免費模型，不必安裝 OpenCode，也不必另外架設伺服器。預設匿名使用，Zen API key 為選用設定。
 
+> [!IMPORTANT]
+> **匿名路徑盡力而為，隨時可能失效。** Zen 文件寫明 *Free-tier chat models require OpenCode*
+> （[Zen 文件〈Endpoints〉](https://opencode.ai/docs/zen)），而本插件不是 OpenCode。
+> OpenCode [服務條款](https://opencode.ai/legal/terms-of-service)（2026-11-25 生效）
+> 也把使用限於 *your own internal use*，並排除 OpenCode 未合理預期的用途。請自行閱讀兩者，
+> 判斷這種用法是否適合你的情況。
+> 穩定的替代方案是 Zen API key：其他客戶端**只能用付費模型**，費用記在你的帳戶；
+> 請見〈[選用 API key](#選用-api-key)〉。
+
 - **匿名層可用：** Zen 免費層依請求內容判斷（工具宣告、`<env>` 區塊、TLS 密碼套件清單），
   不只看標頭。插件會調整匿名請求以符合這些條件；請見
   [免費層檢查什麼](docs/free-tier-gate.zh-TW.md)，內含標註日期的實測。
@@ -34,7 +43,7 @@
 
 | 項目 | 版本 |
 |---|---|
-| DeepSeek Harness | `0.2.2-rc.1`（必須完全相同） |
+| DeepSeek Harness | `0.2.2-rc.5`（必須完全相同） |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
 
 每個插件版本只支援一個 DSH 版本。四個執行期 peer 依賴都是必要的，請勿忽略
@@ -48,7 +57,7 @@ peer dependency 警告。舊版對應的 DSH 請看該版的
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.6.0
+dsh plugin --profile web add dsh-opencode-free@0.7.0
 ```
 
 請將 `web` 換成你的目標 profile。若已安裝，請改用下方的更新指令，不要重複新增。
@@ -92,6 +101,10 @@ dsh plugin --profile web remove dsh-opencode-free
 沒有登入流程，插件也不會自動切換付費模型。key 改變驗證身份與額度，不改變模型清單，
 也不保證能存取已不可用的模型。
 
+Zen 對 OpenCode 以外的客戶端只提供付費模型，費用記在 key 所屬帳戶
+（[Zen 文件〈Endpoints〉](https://opencode.ai/docs/zen)）。key 是匿名路徑的穩定付費替代，
+不是從 OpenCode 以外使用免費模型的方法。
+
 Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 shell 環境：
 
 ```yaml
@@ -107,7 +120,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 
 實作依據來自維護者分析 OpenCode CLI 原始碼與驗證請求的結果。插件透過 DSH 的
 `PiAiAdapter` 註冊 `opencode-zen-free` provider，再以 pi-ai 傳輸層直接呼叫
-`https://opencode.ai/inference/v1`。工具仍由 DSH 執行。
+`https://opencode.ai/inference/openai/v1`。工具仍由 DSH 執行。
 
 匿名請求帶有 OpenCode CLI 身份標頭、時間編碼的 session ID、串流設定，以及具有
 實質內容的 `read` 與 `bash` 工具宣告。上游最小准入規則尚未完整驗證，也可能改變。
@@ -120,7 +133,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 | 調整 | 模型看到的差異 |
 |---|---|
 | Windows shell | DSH 的 `pwsh` 以 `bash` 呈現，回傳呼叫再還原為 `pwsh`。讀檔與 shell 參數名稱會轉換，但保留宿主限制。 |
-| 缺少工具 | 缺少 `read`／`bash` 時，補上僅供准入的宣告，不增加執行能力；不存在的工具呼叫會在交給宿主前拒絕。保留呼叫端明確指定的工具選擇。 |
+| 缺少工具 | 缺少 `read`／`shell` 時，補上僅供准入的宣告，不增加執行能力；不存在的工具呼叫會在交給宿主前拒絕。保留呼叫端明確指定的工具選擇。 |
 | 上下文壓縮 | 符合條件的無工具摘要請求改用 OpenCode 風格的摘要系統提示，承載對話的使用者訊息不變。 |
 
 工具說明與准入宣告會增加 token；上下文壓縮則取代系統提示的 token。相同工具組合的
@@ -129,7 +142,7 @@ Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 sh
 ## 安全與限制
 
 - **行程層級攔截：** 包裝 `globalThis.fetch` 與 `node:http(s)` 的 `request`／`get`，
-  僅限 Zen inference 的 HTTPS origin 及 `/inference/v1` 路徑與子路徑。同一行程內
+  僅限 Zen inference 的 HTTPS origin 及 `/inference/openai/v1` 路徑與子路徑。同一行程內
   其他插件呼叫該端點時，也會套用身份標頭。
 - **Profile 依賴：** 詳情頁路由需要 `webServer` 服務，內建的 `headless` profile
   不提供這項服務。

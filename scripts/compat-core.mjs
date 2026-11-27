@@ -131,7 +131,7 @@ export async function runCompat(options, deps) {
       }
       if (asked) await deps.sleep(MODEL_SPACING_MS)
       asked = true
-      const verdict = await attempt(ask, deps.sleep, { model: id, effort, task: L1_TASK })
+      const verdict = await attempt(ask, { model: id, effort, task: L1_TASK })
       let result = { ...base, l0, l1: { pass: verdict.verdict === 'ok', verdict: verdict.verdict, reason: verdict.reason }, verdict: verdict.verdict, layer: verdict.verdict === 'ok' ? 'L1' : 'L0', reason: verdict.reason }
       if (options.tools === true && verdict.verdict === 'ok') result = { ...result, ...(await toolRoundTrip(ask, deps, { model: id, effort })) }
       // Anonymous stays the subject (it is the plugin's promise). A keyed
@@ -290,7 +290,7 @@ async function warmUp(deps, hidden) {
 
 /** The verdict an L0 probe failure stands for. */
 function l0Failure(l0) {
-  if (l0.code === 'quota-exhausted') return 'rate-limited'
+  if (l0.code === 'quota-exhausted' || l0.code === 'unresolved-429') return 'rate-limited'
   if (['anon-gated', 'bad-key'].includes(l0.code)) return 'gate-refused'
   return l0.code === 'dead' || l0.http >= 500 ? 'upstream-down' : 'unverified'
 }
@@ -320,24 +320,19 @@ function describe(error) {
 }
 
 const MODEL_SPACING_MS = 3_000
-/** Waits before each retry of a 429; one retry per entry. */
-const RATE_LIMIT_BACKOFF_MS = [30_000, 60_000]
 /** This many rate-limited models in a row means the bucket is dry: stop spending. */
 const RATE_LIMIT_STREAK = 3
+/** Appended to a 429: the report must not read it as a plain rate limit. */
+const UNRESOLVED_429 = 'unresolved 429: may be quota or an admission refusal; compare with official OpenCode from the same IP'
 
-/** One request with the 429 back-off applied; returns the final verdict and reply. */
-async function attempt(ask, sleep, request) {
-  const once = async () => {
-    const output = await ask(request)
-    return { ...classify(output), stdout: output.stdout, evidence: output.evidence, cwd: output.cwd }
-  }
-  let verdict = await once()
-  for (const wait of RATE_LIMIT_BACKOFF_MS) {
-    if (verdict.verdict !== 'rate-limited') break
-    await sleep(wait)
-    verdict = await once()
-  }
-  return verdict
+/**
+ * One request and its verdict. A 429 is not retried: upstream sends the same
+ * 429 for an exhausted anonymous quota and for an admission refusal, so a retry
+ * spends the IP's quota and still decides nothing.
+ */
+async function attempt(ask, request) {
+  const output = await ask(request)
+  return { ...classify(output), stdout: output.stdout, evidence: output.evidence, cwd: output.cwd }
 }
 
 const READ_FILE = 'compat-read.txt'
@@ -365,12 +360,12 @@ async function toolRoundTrip(ask, deps, base) {
   const command = deps.platform === 'darwin' ? SHELL_COMMANDS.darwin : SHELL_COMMANDS[tool]
   const readNonce = nonce()
   await deps.sleep(MODEL_SPACING_MS)
-  const read = await toolStep(ask, deps.sleep, { ...base, task: READ_TASK, files: { [READ_FILE]: readNonce } }, readNonce, { tool: 'read', file: READ_FILE })
+  const read = await toolStep(ask, { ...base, task: READ_TASK, files: { [READ_FILE]: readNonce } }, readNonce, { tool: 'read', file: READ_FILE })
   const shellNonce = nonce()
   const expected = createHash('sha256').update(shellNonce).digest('hex').slice(0, 16)
   const task = `Use the ${tool} tool to run this exact command, then reply with its output only: ${command}`
   await deps.sleep(MODEL_SPACING_MS)
-  const shell = { tool, ...(await toolStep(ask, deps.sleep, { ...base, task, files: { [SHELL_FILE]: shellNonce } }, expected, { tool, command })) }
+  const shell = { tool, ...(await toolStep(ask, { ...base, task, files: { [SHELL_FILE]: shellNonce } }, expected, { tool, command })) }
   const tools = { read, shell }
   if (read.pass && shell.pass) return { tools, verdict: 'ok', layer: 'L2', reason: '' }
   const failures = [
@@ -382,8 +377,8 @@ async function toolRoundTrip(ask, deps, base) {
   return { tools, verdict, layer: 'L1', reason }
 }
 
-async function toolStep(ask, sleep, request, expected, step) {
-  const result = await attempt(ask, sleep, request)
+async function toolStep(ask, request, expected, step) {
+  const result = await attempt(ask, request)
   if (result.verdict === 'rate-limited') return { pass: false, verdict: 'rate-limited', reason: result.reason }
   if (result.verdict !== 'ok') return { pass: false, verdict: result.verdict, reason: result.reason }
   const evidence = verifyToolEvidence(result.evidence, { ...step, cwd: result.cwd ?? process.cwd() }, expected)
@@ -431,7 +426,7 @@ function classify(output) {
   // upstream and tool-validation errors can echo conversations or arguments.
   const reason = line ? failureSummary(line) : `exit code ${output.exitCode} with no error line`
   const status = upstreamStatus(line)
-  if (status === 429 || /^dsh: RATE_LIMIT:/.test(line)) return { verdict: 'rate-limited', reason }
+  if (status === 429 || /^dsh: RATE_LIMIT:/.test(line)) return { verdict: 'rate-limited', reason: `${reason}; ${UNRESOLVED_429}` }
   // Before the status checks: Ling's "Endpoint is unavailable" arrives as a 400.
   if (UPSTREAM_DOWN_PATTERN.test(line) || (status !== null && status >= 500)) return { verdict: 'upstream-down', reason }
   if (status === 401 || status === 403) return { verdict: 'gate-refused', reason }
@@ -446,7 +441,7 @@ function upstreamStatus(line) {
   return match === null ? null : Number(match[1])
 }
 
-const SAFE_DSH_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'PROVIDER_ERROR', 'AUTH_FAILED', 'RATE_LIMIT', 'TIMEOUT', 'TRANSPORT', 'INVALID_INPUT'])
+const SAFE_DSH_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'PROVIDER_ERROR', 'AUTH_FAILED', 'RATE_LIMIT', 'QUOTA', 'TIMEOUT', 'TRANSPORT', 'INVALID_INPUT'])
 
 /** Allowlisted signals only; truncating or masking a key is not content redaction. */
 function failureSummary(line) {

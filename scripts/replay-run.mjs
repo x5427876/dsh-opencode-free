@@ -223,7 +223,7 @@ async function installHost({ dsh }) {
         await call('/refresh', { method: 'POST', headers: origin })
         // Safety: the probe sends real inference requests if the redirect is missing.
         // The plugin's own model-list fetch is the witness; without it, stop here.
-        const listed = () => upstream.requests.some((r) => r.method === 'GET' && r.url?.startsWith('/inference/v1/models'))
+        const listed = () => upstream.requests.some((r) => r.method === 'GET' && r.url?.startsWith('/inference/openai/v1/models'))
         for (let waited = 0; !listed() && waited < 10_000; waited += 250) await delay(250)
         if (!listed()) throw new Error('the plugin never reached the fake model list; refusing to probe')
         // The probe asks each offered model one short question; a plain reply passes it.
@@ -271,7 +271,7 @@ const probeHandler = (record) => (record.url.endsWith('/responses') ? responsesT
 /** Refuse to run scenarios unless a child's opencode.ai traffic provably reaches the fake. */
 async function preflight(host) {
   host.upstream.setModels([])
-  const script = "const r = await fetch('https://opencode.ai/inference/v1/models'); await r.text()"
+  const script = "const r = await fetch('https://opencode.ai/inference/openai/v1/models'); await r.text()"
   const run = spawn(process.execPath, ['--input-type=module', '-e', script], { env: host.replayEnv(), stdio: 'ignore' })
   const code = await new Promise((done) => run.on('close', done))
   if (code !== 0 || host.upstream.requests.length !== 1) throw new Error('preflight failed: the redirect did not reach the fake, so no scenario was run')

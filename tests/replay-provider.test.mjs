@@ -48,11 +48,11 @@ test('S1 a plain reply arrives as text and carries the anonymous identity', asyn
 
     const [request] = upstream.requests
     assert.equal(upstream.requests.length, 1)
-    assert.equal(request.url, `https://opencode.ai/inference/v1/${api === 'openai-responses' ? 'responses' : 'chat/completions'}`)
+    assert.equal(request.url, `https://opencode.ai/inference/openai/v1/${api === 'openai-responses' ? 'responses' : 'chat/completions'}`)
     assert.equal(request.headers.get('authorization'), 'Bearer public')
     assert.equal(request.headers.get('x-opencode-client'), 'cli')
     assert.match(request.headers.get('x-opencode-session'), SESSION)
-    assert.deepEqual(toolNames(request.body), ['bash', 'read'], 'admission tools are declared')
+    assert.deepEqual(toolNames(request.body), ['read', 'shell'], 'admission tools are declared')
   })
 })
 
@@ -123,8 +123,9 @@ test('S3 the same refusal without a lowered max_tokens keeps the upstream wordin
   assert.doesNotMatch(result.errorMessage, new RegExp(CONTEXT_OVERFLOW_CLAUSE))
 })
 
-test('S5 a rate limit retries a bounded number of times and then gives guidance', async t => {
-  const limited = () => refusal(429, { type: 'FreeUsageLimitError', message: 'limit' }, { 'retry-after-ms': '1' })
+test('S5 a rate limit retries a bounded number of times; an unresolved 429 is sent once', async t => {
+  const limited = () => refusal(429, { type: 'rate_limit_error', message: 'slow down' }, { 'retry-after-ms': '1' })
+  const unresolved = () => refusal(429, { type: 'FreeUsageLimitError', message: 'limit' }, { 'retry-after-ms': '1' })
 
   await t.test('recovers when a later attempt is admitted', async () => {
     const upstream = scriptedUpstream([limited(), textReply['openai-completions']('RECOVERED')])
@@ -139,7 +140,17 @@ test('S5 a rate limit retries a bounded number of times and then gives guidance'
     assert.equal(result.stopReason, 'error')
     assert.equal(upstream.requests.length, 2, 'one request plus one retry, no more')
     assert.equal(upstream.remaining(), 1)
-    assert.ok(result.errorMessage.startsWith(ZEN_FAILURE_GUIDANCE['quota-exhausted']))
+    assert.match(result.errorMessage, /HTTP 429/)
+  })
+
+  // Retrying a FreeUsageLimitError spends the shared anonymous bucket on a
+  // request that is either over quota or refused admission.
+  await t.test('an unresolved 429 is not retried, whatever the budget', async () => {
+    const upstream = scriptedUpstream([unresolved(), unresolved(), unresolved()])
+    const result = await run(upstream, { options: { maxRetries: 2 } })
+    assert.equal(result.stopReason, 'error')
+    assert.equal(upstream.requests.length, 1)
+    assert.ok(result.errorMessage.startsWith(ZEN_FAILURE_GUIDANCE['unresolved-429']))
     assert.match(result.errorMessage, /HTTP 429/)
   })
 })

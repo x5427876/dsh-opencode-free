@@ -12,7 +12,7 @@
 
 | 證據 | 能證明什麼 | 不能證明什麼 |
 |---|---|---|
-| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求；仿照依據為 v1 線（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)） | 未公開 inference 服務的完整准入規則 |
+| 官方原始碼 | 指定版本的 CLI 如何組出身份、工具與請求；仿照依據為 v2 線（[ADR-0008](adr/0008-opencode-v2-as-payload-reference.md)） | 未公開 inference 服務的完整准入規則 |
 | 單項差分實測 | 指定時間、模型與客戶端下，某項變更是否改變結果 | 所有模型、平台與未來版本都會相同 |
 | 本地 fixture | 插件改寫、串流還原與錯誤處理符合測試案例 | 真實 DSH 或匿名上游一定可用 |
 | 真實 DSH 相容性驗證 | 報告所列環境與模型的實際結果 | 未列入或未完成的範圍也已通過 |
@@ -46,6 +46,8 @@
 那一輪 Node 成功，不代表 Node 一律被接受；TLS 密碼套件清單也是准入訊號，見下節。
 
 ## 官方 CLI 對照：免費層看什麼
+
+以下兩節是以 v1 線（1.19.5）量測的歷史依據。v1 已不再支援免費模型，量得的三項准入訊號仍是現行實作的根據。
 
 2026-10-30、OpenCode CLI 1.19.5、台灣兩個不同出口 IP、模型 `deepseek-v4.1-flash-free`、
 乾淨的資料目錄。每格一次請求，結果可能隨時間與額度改變。
@@ -102,12 +104,12 @@
   重跑差分需換 IP，也不能把被擋歸因於單一訊號。
 - OpenCode CLI 預設會把全域 `~/.claude/CLAUDE.md` 與技能清單放進系統提示，轉發或重放它的請求前要先確認內容。
 
-### 官方 CLI v2 線的請求內容（漂移觀察，非仿照依據）
+### 官方 CLI v2 線的請求內容（仿照依據）
 
 2026-10-31、OpenCode CLI 2.2.5（GitHub 發行的 macOS arm64 二進位檔，SHA-256 已核對）、
 `opencode run --standalone`，請求導向本機擷取伺服器，沒有送到 Zen。v2 線（v2.2.0 起）在
 GitHub 發行，npm 套件為 `@opencode/cli`；`opencode-ai` 最新仍是 1.19.5（v1 線）。
-插件仍以 v1 線為仿照依據（[ADR-0006](adr/0006-opencode-v1-as-payload-reference.md)），本節只記錄 v2 的差異與放行結果。
+當時插件仍以 v1 線為仿照依據，本節記錄 v2 的差異與放行結果；仿照依據已改為 v2 線（[ADR-0008](adr/0008-opencode-v2-as-payload-reference.md)）。
 
 | 項目 | 1.19.5 | 2.2.5 |
 |---|---|---|
@@ -119,7 +121,93 @@ GitHub 發行，npm 套件為 `@opencode/cli`；`opencode-ai` 最新仍是 1.19.
 同一個出口 IP 上，把 2.2.5 的 12 個工具原樣以插件的傳輸層送到 `/inference/v1`，閘門放行（`200`）。
 插件自己的 User-Agent 仍是 1.18.31 的形式，也被放行，所以這個欄位不是准入訊號。
 v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todowrite`；
-閘門目前接受新舊兩種形狀。尚未查明閘門日後是否只接受 v2 的形狀；若發生，依 ADR-0006 重新檢討仿照依據。
+當時閘門接受新舊兩種形狀。
+
+#### 2.4.2 擷取（2026-11-27）
+
+官方發行的 macOS arm64 二進位檔（SHA-256 已核對）、`opencode run --standalone`、
+模型 `deepseek-v4.1-flash-free`。設定把 `opencode` provider 的 `baseURL` 改指本機擷取伺服器，
+請求沒有送到 Zen。
+
+| 項目 | 2.4.2 | 插件現行做法 |
+|---|---|---|
+| 端點 | 官方模型清單的 `base_url`：`https://opencode.ai/inference/openai/v1`；二進位檔內沒有 `/inference/v1` | `BASE_URL` 相同 |
+| 主請求的工具 | 與 2.2.5 相同的 12 個；`read` 參數為 `path`、`offset`、`limit`；`shell` 參數為 `command`、`workdir`、`timeout`、`background` | 補位與改名為 `read`、`shell`，DSH 的 `file_path` 以 `path` 宣告 |
+| TLS 密碼套件 | 相同 17 項、相同順序 | 不變 |
+| `<env>` | `Working directory:`、`Workspace root folder:`、`Is directory a git repo:`、`Platform:`、暫存目錄說明 | 前兩項用通用值，加上 `Platform:`；不送路徑與 git 狀態 |
+| User-Agent | `opencode/latest/2.4.2/cli` | 同一形式，結尾加 `dsh-opencode-free/<版本>` |
+| session 標頭 | `x-opencode-session`、`x-opencode-session-id`、`x-session-id`、`x-session-affinity` 同值；格式同 v1 | 相同 |
+| 追蹤標頭 | `traceparent` 與 `b3`；同一 session 共用 trace id，每個請求新的 span | 相同 |
+| 其他識別 | `x-opencode-client: cli`、40 位十六進位的 `x-opencode-project`；沒有 `x-opencode-request` | 固定的 40 位十六進位值；不送 `x-opencode-request` |
+
+插件另有 pi-ai 加上的 `x-client-request-id` 與 OpenAI SDK 的 `x-stainless-*`，2.4.2 不送。
+後者在 v1 時期的差分中不影響准入；前者在 v1 時期是壓縮請求的必要親和欄位，所以保留。
+
+#### 2.4.2 准入差分（2026-11-27）
+
+同一 IP、同一段時間：官方 CLI 4 次都有回覆，插件的單模型 L0 連續回 429 `FreeUsageLimitError`。
+所以這個 429 不代表 IP 額度用完。以 MITM 擷取官方送往真實 `opencode.ai` 的請求，
+內容與改指本機時相同（另有一個對 `models.opencode.ai` 的 GET 與標題請求，不影響准入）。
+以官方請求為底，每次換一項：
+
+| 送出內容 | 結果 |
+|---|---|
+| 官方請求，session ID 用隨機 12 位十六進位 | 429 |
+| 官方請求，session ID 用時間編碼（Node、只對齊密碼套件，或 Bun） | 通過 |
+| 官方請求，只留 `read`、`shell`；或換成插件的短系統提示；或改 `max_tokens`＋`reasoning_effort` | 通過 |
+| 插件 probe 的請求 | 429 |
+| 插件 probe，`read`／`shell` 換成官方定義 | 通過 |
+| 插件的描述＋官方參數 | 429 |
+| 官方描述後接一行插件文字 `Unavailable in this request. Do not call.` | 通過 |
+| 官方描述後接與插件說明同長的中性文字 | 通過 |
+| 官方描述後接 DSH 讀檔描述的第一句 `Read a UTF-8 text file …` | 429 |
+| 官方描述後接改寫過、意思相同的插件說明 | 通過 |
+
+結論：閘門讀 `read`／`shell` 的描述，帶 DSH 原文會被擋，與長度、參數、TLS 擴充順序、標頭順序無關。
+`FreeUsageLimitError` 的 429 也可能是這種拒絕。
+
+#### 2.4.2 L1 差分（2026-11-27）
+
+L0 補上述修正後通過，但 L1（DSH agent 的真實請求：23 個工具、DSH 系統提示、兩則 `<system-reminder>`
+使用者訊息）仍回 429。請求以離線 replay 擷取，再從同一 IP 逐項送出：
+
+| 送出內容 | 結果 |
+|---|---|
+| 只留 `read`、`shell`、短系統提示、無提醒訊息 | 429 |
+| 同上，`shell` 改官方參數 schema | 通過 |
+| 同上，`shell` 只拿掉 DSH 的必填 `description` 參數，或改名為 `summary` | 通過 |
+| 同上，`shell` 只拿掉 `sandbox_permissions`、`justification`（或改名），或只拿掉 `run_in_background` | 429 |
+| `shell` 修正後，加回 DSH 系統提示，或加回兩則提醒訊息 | 通過 |
+| `shell` 修正後，加回其餘 21 個工具 | 429；前後兩半各自都 429 |
+| 前半去掉 `edit` | 通過 |
+| 只加 `edit`：拿掉 `UTF-8`、只改參數名為 OpenCode 形式、只改寫參數描述，任一單項 | 429 |
+| 只加 `edit`：參數名、參數描述與工具描述全部改寫 | 通過 |
+| 後半把 `subagent`、`agent_fork` 的 `description` 參數改名 | 429 |
+
+| `shell` 修正後，`edit`、`write`、`glob`、`grep`、`skill`、`web_fetch`（改名 `webfetch`）換成官方定義，其餘 DSH 工具不變 | 通過 |
+| 同上，官方定義後接一段插件說明，`edit`／`write` 另保留 `sandbox_permissions`、`justification` | 通過 |
+| 同上，但只換 `edit`、`write`；或只換 `edit`、`write`、`glob`、`grep` | 429 |
+| 同上，六個都換，只有 `subagent` 保留 DSH 定義 | 通過 |
+
+結論：閘門看的不是少數字句，單項修改不足以通過；有官方對應的工具改用官方定義即可，
+DSH 獨有的工具（`goal`、`job_*`、`agent_fork`、`workflow` 等）不用改。系統提示與提醒訊息不是原因。
+插件依此修改後，`pnpm compat --dsh 0.2.2-rc.5 --model deepseek-v4.1-flash-free` 的 L0 與 L1 通過（exit `0`）。
+
+#### 各 DSH 工具實際呼叫（2026-11-27）
+
+以 compat 建好的 headless 環境、`deepseek-v4.1-flash-free`、匿名路徑，每個工具一個任務，
+看 headless JSON 的呼叫名稱、主機參數與 `status`，並檢查檔案或回覆內容：
+
+| 工具 | 結果 |
+| --- | --- |
+| `read`、`shell`（compat L2） | 通過 |
+| `edit`、`write`、`glob`、`grep`、`skill`、`web_fetch` | 通過；回傳呼叫還原為 DSH 名稱與參數 |
+| `read_image`、`todo_write`、`create_goal`、`get_goal`、`job_list`、`job_output`（`shell` 背景執行）、`cwd_tool`（呼叫名 `working_directory`）、`subagent`、`wait_agent` | 通過 |
+| `update_goal`、`job_kill`、`agent_fork`（呼叫名 `subagent_fork`）、`list_agents`、`send_message`、`workflow` | 通過（換 IP 後；原 IP 連官方 CLI 也回 `Free usage limit reached`） |
+| MCP 工具（stdio 測試伺服器的 `mcp__codes__lookup_code`，含 `list_mcp_resources`、`list_mcp_resource_templates`） | 通過 |
+
+`create_goal` 任務的第一輪正常完成；目標仍在進行，DSH 自行開始下一輪並中止，headless 因此回 exit `1`。
+這是 DSH 目標驅動的行為，與工具轉換無關。
 
 ### 經官方 CLI 中繼（原型，未採用）
 
@@ -138,13 +226,22 @@ v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todow
 
 ## 目前插件採取的調整
 
-- 以 OpenCode CLI 身份標頭、時間編碼 session ID 與串流發出匿名請求；
+- 以 OpenCode CLI 2.4.2 的端點、身份與追蹤標頭、時間編碼 session ID 與串流發出匿名請求；
   同一 DSH session 在行程內保留身份，沒有持久登入。
-- 匿名 Windows 請求將 `pwsh` 呈現為 `bash`，並成對轉換 schema、歷史與回傳呼叫的
-  工具名稱及 `file_path`／`filePath`、`timeoutMs`／`timeout` 參數。
-- 缺少 `read` 或 `bash` 時補上實質宣告與不可呼叫說明；這些補位工具沒有宿主執行能力。
+- 匿名請求將宿主的 `bash` 或 `pwsh` 呈現為 `shell`，並成對轉換 schema、歷史與回傳呼叫的
+  工具名稱及 `file_path`／`path`、`timeoutMs`／`timeout` 參數。
+- 缺少 `read` 或 `shell` 時補上實質宣告與不可呼叫說明；這些補位工具沒有宿主執行能力。
   呼叫不存在的工具時，在交給 DSH 前拒絕；保留呼叫端明確指定的工具選擇。
-- 工具說明配合 DSH 實際的純文字讀檔與 shell 能力，不宣告 OpenCode 的額外讀取能力。
+- 匿名請求的 `read`／`shell` 描述以 2.4.2 官方描述開頭，後接插件自己措辭的環境說明
+  （純文字讀檔、shell 由宿主執行）；不送 DSH 的原始描述。補位工具使用官方參數 schema。
+- 匿名請求把 DSH 的 `edit`、`write`、`glob`、`grep`、`skill`、`web_fetch` 以 2.4.2 官方定義宣告
+  （`web_fetch` 名為 `webfetch`），保留宿主的 `sandbox_permissions`、`justification`；
+  歷史與回傳呼叫的參數成對轉換。宿主做不到的官方參數：`grep` 的 `literal`、`caseSensitive`
+  改寫進 pattern，其餘（`hidden`、`limit`、`format`、`timeout`）不交給宿主。
+  宿主 grep 逐行搜尋，ripgrep 拒絕含換行的 pattern，所以跨行的 literal 改為各行的
+  「或」：每個出現處都找得到，也會多出只含其中一行的結果。只有 `caseSensitive: false`
+  才不分大小寫。
+  宿主 shell 的 `description` 參數以 `summary` 宣告。
 - 匿名請求在系統提示加入通用的 `<env>` 區塊（`Working directory:` 值不含宿主路徑），
   已有此區塊的提示不重複加入。
 - 匿名請求把 DSH 的 `subagent_fork`、`working_directory` 以 `agent_fork`、`cwd_tool` 之名宣告，
@@ -164,6 +261,7 @@ v2 把 `bash` 改名為 `shell`、`task` 改名為 `subagent`，並移除 `todow
 - `403 FreeTierError` 的完整判斷式；不能單憑此錯誤歸因為 IP、key 或模型下架。
 - 免費層限額的計算單位（IP、機器、身份欄位皆未證實）；下節兩項訊號的完整判斷式與其他模型。
 - 經官方 CLI 中繼的其他模型、平台與長對話行為。
+- 各工具實測只涵蓋 `deepseek-v4.1-flash-free` 與 macOS；機房或 VPN 出口 IP 常已無免費額度，官方 CLI 同樣失敗。
 
 ## 再次診斷時
 

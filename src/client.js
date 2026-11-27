@@ -96,11 +96,13 @@ window.__ModuleLoader__.load({
 			"reason.timeout": "探测超时",
 			"reason.transport": "连接失败",
 			"reason.anongated": "匿名层被拒",
+			"reason.unresolved429": "429 未判定",
 			"reason.quota": "额度用尽",
 			"reason.badkey": "key 无效",
 			"reason.unknown": "无响应",
 			"reason.error": "探测异常",
 			"advice.anongated": "上游当时拒绝了匿名层请求；挂 key 只能提高额度，不保证解除拒绝",
+			"advice.unresolved429": "可能是匿名额度用尽，也可能是准入拒绝；在同一 IP 用官方 OpenCode 试一次即可分辨",
 			"advice.quota": "额度或速率用尽，稍后重试",
 			"advice.badkey": "检查 key 是否正确",
 			"advice.keyhint": "key 只能提高额度，不能改变模型清单",
@@ -151,11 +153,13 @@ window.__ModuleLoader__.load({
 			"reason.timeout": "Timed out",
 			"reason.transport": "Connection failed",
 			"reason.anongated": "Anon tier refused",
+			"reason.unresolved429": "429, cause unknown",
 			"reason.quota": "Quota used up",
 			"reason.badkey": "Bad key",
 			"reason.unknown": "No response",
 			"reason.error": "Probe error",
 			"advice.anongated": "the upstream refused the anonymous request at the time; a key raises the quota but is not guaranteed to lift the refusal",
+			"advice.unresolved429": "either the anonymous quota is used up or the request was refused — one try with official OpenCode on the same IP tells which",
 			"advice.quota": "quota or rate limit hit — retry later",
 			"advice.badkey": "check that the key is correct",
 			"advice.keyhint": "a key raises the quota; it does not change the model list",
@@ -627,6 +631,7 @@ window.__ModuleLoader__.load({
 			"timeout": "reason.timeout",
 			"transport": "reason.transport",
 			"anon-gated": "reason.anongated",
+			"unresolved-429": "reason.unresolved429",
 			"quota-exhausted": "reason.quota",
 			"bad-key": "reason.badkey",
 			"unknown": "reason.unknown",
@@ -645,7 +650,7 @@ window.__ModuleLoader__.load({
 		 * model is bad" when the round actually learned nothing about it, which
 		 * is exactly how a working model ends up wearing a failure badge.
 		 */
-		var CALLER_CODES = { "anon-gated": true, "quota-exhausted": true, "bad-key": true };
+		var CALLER_CODES = { "anon-gated": true, "unresolved-429": true, "quota-exhausted": true, "bad-key": true };
 
 		function failureText(t, result) {
 			var key = typeof result.code === "string" && hasOwnKey(FAILURE_WORDS, result.code)
@@ -697,6 +702,7 @@ window.__ModuleLoader__.load({
 				parts.push(t(GATE_MARKERS[result.marker]));
 			}
 			if (result.code === "anon-gated") parts.push(t("advice.anongated"));
+			else if (result.code === "unresolved-429") parts.push(t("advice.unresolved429"));
 			else if (result.code === "quota-exhausted") parts.push(t("advice.quota"));
 			else if (result.code === "bad-key") parts.push(t("advice.badkey"));
 			return parts.join(" · ");

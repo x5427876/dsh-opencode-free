@@ -10,6 +10,17 @@ Use free [OpenCode Zen](https://opencode.ai/docs/providers) models in DeepSeek
 Harness (DSH), without installing OpenCode or running a separate server.
 Anonymous access is the default; a Zen API key is optional.
 
+> [!IMPORTANT]
+> **The anonymous path is best effort and may stop working at any time.**
+> Zen's documentation says *Free-tier chat models require OpenCode*
+> ([Zen docs, "Endpoints"](https://opencode.ai/docs/zen)); this plugin is not
+> OpenCode. OpenCode's [terms of service](https://opencode.ai/legal/terms-of-service)
+> (effective 2026-11-25) limit use to *your own internal use* and exclude any
+> purpose OpenCode does not reasonably intend. Read both and decide whether this
+> use fits your situation.
+> The stable alternative is a Zen API key, which other clients can use with
+> **paid models only**, billed to your account; see [Optional API key](#optional-api-key).
+
 - **Works on the anonymous tier.** Zen's free tier decides by request content
   (tool declarations, an `<env>` block, the TLS cipher list), not only by headers.
   The plugin shapes anonymous requests to match; see
@@ -41,7 +52,7 @@ Anonymous access is the default; a Zen API key is optional.
 
 | Requirement | Version |
 |---|---|
-| DeepSeek Harness | `0.2.2-rc.1` (exact) |
+| DeepSeek Harness | `0.2.2-rc.5` (exact) |
 | Node.js | `^22.19.0` or `>=24.0.0` |
 
 Each release supports exactly one DSH version. Do not ignore peer dependency
@@ -55,7 +66,7 @@ Check your DSH version, then install the pinned package:
 
 ```sh
 dsh --version
-dsh plugin --profile web add dsh-opencode-free@0.6.0
+dsh plugin --profile web add dsh-opencode-free@0.7.0
 ```
 
 Replace `web` with your target profile. If already installed, use the update
@@ -107,6 +118,11 @@ anonymous `public`. There is no login flow, and the plugin never switches to a
 paid model automatically. A key changes authentication and quota, not the model
 list; it does not guarantee access to an unavailable model.
 
+Zen serves only paid models to clients other than OpenCode, and bills them to
+the key's account ([Zen docs, "Endpoints"](https://opencode.ai/docs/zen)). A key
+is the stable, paid alternative to the anonymous path, not a way to reach the
+free models from outside OpenCode.
+
 For Desktop, configure the key in your profile's `cordis.patch.yml` rather than
 relying on a shell environment:
 
@@ -125,7 +141,7 @@ private; never include them in issue reports.
 The implementation is based on the maintainer's analysis of the OpenCode CLI
 source code and request verification. It registers the
 `opencode-zen-free` provider through DSH's `PiAiAdapter` and uses pi-ai transports
-to call `https://opencode.ai/inference/v1` directly. Tool execution stays in DSH.
+to call `https://opencode.ai/inference/openai/v1` directly. Tool execution stays in DSH.
 
 Anonymous requests carry OpenCode CLI identity headers, a time-encoded session
 ID, streaming, and substantive `read` and `bash` tool declarations. The minimum
@@ -140,7 +156,7 @@ original tools and prompts.
 | Adaptation | Model-visible effect |
 |---|---|
 | Windows shell | DSH's `pwsh` is presented as `bash`; returned calls are restored to `pwsh`. Read/shell parameter names are mapped while preserving host constraints. |
-| Missing tools | Admission-only `read`/`bash` declarations are added when absent. They grant no execution capability; calls to missing tools are rejected before host dispatch. Explicit caller tool choices are preserved. |
+| Missing tools | Admission-only `read`/`shell` declarations are added when absent. They grant no execution capability; calls to missing tools are rejected before host dispatch. Explicit caller tool choices are preserved. |
 | Compaction | Matching tool-less context-summary requests receive an OpenCode-style summary system prompt. The user turn containing the conversation is unchanged. |
 
 Tool guidance and admission declarations add tokens; compaction replaces system
@@ -152,7 +168,7 @@ Compaction is a separate request.
 
 - **Process-wide interception:** the plugin wraps `globalThis.fetch` and
   `node:http(s)` `request`/`get`, restricted to the HTTPS Zen inference origin
-  and `/inference/v1` path or descendants. Other plugins calling that endpoint
+  and `/inference/openai/v1` path or descendants. Other plugins calling that endpoint
   in the same process also receive the identity headers.
 - **Profile dependency:** a `webServer` service is required for detail-page
   routes. The built-in `headless` profile does not provide it.

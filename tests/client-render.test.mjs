@@ -576,7 +576,7 @@ test('a refused round accuses no model: grey rows, one banner, separate count', 
     results: {
       'space-bunny-free': { status: 'ok', ms: 218 },
       'big-pickle': { status: 'failed', ms: 12, code: 'anon-gated', http: 403 },
-      'muse-spark-1.3-contributor-free': { status: 'failed', ms: 9, code: 'quota-exhausted', http: 429 },
+      'muse-spark-1.3-contributor-free': { status: 'failed', ms: 9, code: 'unresolved-429', http: 429 },
     },
     startedAt: 1759146617000,
   }

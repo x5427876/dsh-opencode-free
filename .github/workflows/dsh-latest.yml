@@ -1,0 +1,96 @@
+name: Track DSH latest
+
+# Opens one pull request per new DSH `latest` (ADR-0010). Pull requests that
+# GITHUB_TOKEN opens do not trigger CI, so check and replay run here and their
+# results go into the pull request body. Requires the repository setting
+# "Allow GitHub Actions to create and approve pull requests".
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: dsh-latest
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          # Headless DSH in the offline replay needs Node >= 24.9.
+          node-version: 24.11.0
+      - run: corepack enable
+
+      - name: Compare npm latest with the pin
+        id: latest
+        run: |
+          result="$(node scripts/dsh-latest.mjs)"
+          echo "DSH latest: $result"
+          if [[ "$result" == bump\ * ]]; then echo "version=${result#bump }" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Move the pin and verify
+        if: steps.latest.outputs.version
+        id: verify
+        env:
+          VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          node scripts/dsh-bump.mjs "$VERSION"
+          set +e
+          pnpm install --no-frozen-lockfile > install.log 2>&1; echo "install=$?" >> "$GITHUB_OUTPUT"
+          pnpm run check > check.log 2>&1; echo "check=$?" >> "$GITHUB_OUTPUT"
+          pnpm replay --dsh "$VERSION" > replay.log 2>&1; echo "replay=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Open or update the pull request
+        if: steps.latest.outputs.version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.latest.outputs.version }}
+          INSTALL: ${{ steps.verify.outputs.install }}
+          CHECK: ${{ steps.verify.outputs.check }}
+          REPLAY: ${{ steps.verify.outputs.replay }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          branch="dsh/latest-$VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git switch -c "$branch"
+          git add -A -- . ':!install.log' ':!check.log' ':!replay.log' ':!.artifacts'
+          git commit -q -m "chore: move the DSH pin to $VERSION"
+          git push --force origin "$branch"
+          lamp() { [ "$1" = 0 ] && echo "通過（exit 0）" || echo "失敗（exit $1）"; }
+          {
+            echo "npm \`@deepseek-ai/dsh\` 的 \`latest\` 是 \`$VERSION\`，比目前的 pin 新。這個 PR 由 [每日追蹤]($RUN_URL) 產生。"
+            echo
+            echo "| 步驟 | 結果 |"
+            echo "| --- | --- |"
+            echo "| \`pnpm install\` | $(lamp "$INSTALL") |"
+            echo "| \`pnpm run check\` | $(lamp "$CHECK") |"
+            echo "| \`pnpm replay --dsh $VERSION\` | $(lamp "$REPLAY") |"
+            echo
+            echo "合併前仍要照 [release checklist]($REPO_URL/blob/main/docs/release.md) 讀新版的 manifest（pi-ai 範圍與其他 peer 沒有自動調整），並跑 compat run。"
+            for log in check replay; do
+              echo
+              echo "<details><summary>$log.log（最後 40 行）</summary>"
+              echo
+              echo '```'
+              tail -n 40 "$log.log"
+              echo '```'
+              echo "</details>"
+            done
+          } > body.md
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[].number')" ]; then
+            gh pr edit "$branch" --body-file body.md
+          else
+            gh pr create --base main --head "$branch" --title "chore: move the DSH pin to $VERSION" --body-file body.md
+          fi

@@ -16,7 +16,7 @@ import {
 } from '../src/zen-provider.ts'
 import { OPENCODE_TLS_CIPHERS, zenHttpsFetch } from '../src/zen-tls.ts'
 
-const endpoint = 'https://opencode.ai/inference/v1'
+const endpoint = 'https://opencode.ai/inference/openai/v1'
 const context = { messages: [{ role: 'user', content: 'OK', timestamp: 1 }] }
 // pi-ai's built-in opencode table can lack a responses-channel model; the
 // transport follows `model.api`, so a derived record exercises the same path.
@@ -51,16 +51,20 @@ test('anonymous DSH definitions use admission parameter names without losing hos
   let body
   await provider.streamSimple(model, input, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
   const read = body.tools.find(t => t.name === 'read')
-  const bash = body.tools.find(t => t.name === 'bash')
-  assert.deepEqual(read.parameters.required, ['filePath'])
-  assert.equal(read.parameters.properties.filePath.type, 'string')
+  const shell = body.tools.find(t => t.name === 'shell')
+  assert.deepEqual(body.tools.map(t => t.name).sort(), ['read', 'shell'])
+  assert.deepEqual(read.parameters.required, ['path'])
+  assert.equal(read.parameters.properties.path.type, 'string')
   assert.equal(read.parameters.properties.offset.type, 'number')
-  assert.equal(bash.parameters.properties.timeout.type, 'number')
-  assert.equal(bash.parameters.properties.run_in_background.type, 'boolean')
-  assert.deepEqual(bash.parameters.required, ['command', 'description'])
-  assert.match(bash.description, /PowerShell/)
-  assert.match(read.description, /does not read directories, images, or PDFs/)
-  assert.doesNotMatch(read.description, /can read image files|read a file or directory/i)
+  assert.equal(shell.parameters.properties.timeout.type, 'number')
+  assert.equal(shell.parameters.properties.run_in_background.type, 'boolean')
+  assert.deepEqual(shell.parameters.required, ['command', 'summary'])
+  // The gate refuses DSH's own wording: the official description, then the plugin's notes.
+  assert.match(shell.description, /^Execute a shell command and return its output\. Commands run on \w+ using PowerShell\./)
+  assert.match(read.description, /^Read the contents of a file or directory\./)
+  assert.match(read.description, /directories, images and PDFs are not supported/)
+  assert.doesNotMatch(read.description, /UTF-8 text file/)
+  assert.doesNotMatch(shell.description, /pwsh -Command/)
   assert.deepEqual(input, before)
 })
 
@@ -76,7 +80,7 @@ test('later tool removals cannot discard admission declarations or the system pr
     const model = modelFor(provider, api)
     let body
     await provider.streamSimple(model, input, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { body = JSON.parse(init.body); return refused() } }).result()
-    assert.deepEqual(body.tools.map(t => (t.function ?? t).name).sort(), ['bash', 'read'])
+    assert.deepEqual(body.tools.map(t => (t.function ?? t).name).sort(), ['read', 'shell'])
     assert.ok(JSON.stringify(body).includes('Keep this host instruction.'))
     assert.equal(body.tool_choice, undefined)
   }
@@ -93,8 +97,8 @@ test('tool-less anonymous requests keep admission declarations without an unsupp
     assert.equal(body.tool_choice, undefined)
     assert.ok(tools.every(t => Object.keys(t.parameters.properties).length > 0))
     assert.ok(tools.every(t => t.description.includes('Unavailable in this request')))
-    assert.equal(tools.find(t => t.name === 'read').parameters.properties.filePath.type, 'string')
-    assert.equal(tools.find(t => t.name === 'bash').parameters.properties.command.type, 'string')
+    assert.equal(tools.find(t => t.name === 'read').parameters.properties.path.type, 'string')
+    assert.equal(tools.find(t => t.name === 'shell').parameters.properties.command.type, 'string')
   }
 })
 
@@ -133,7 +137,7 @@ test('fetch guard handles inference Request headers and leaves other requests un
         assert.equal(headers.get('x-custom'), 'retained')
       }
     }
-    for (const url of ['https://opencode.ai/inference/v10/responses', 'https://opencode.ai/inference/v1-other', 'https://opencode.ai:444/inference/v1/responses', 'http://opencode.ai/inference/v1/responses', 'https://other.example/inference/v1/responses', 'https://opencode.ai/zen/v1/responses']) {
+    for (const url of ['https://opencode.ai/inference/openai/v10/responses', 'https://opencode.ai/inference/openai/v1-other', 'https://opencode.ai:444/inference/openai/v1/responses', 'http://opencode.ai/inference/openai/v1/responses', 'https://other.example/inference/openai/v1/responses', 'https://opencode.ai/inference/v1/responses', 'https://opencode.ai/zen/v1/responses']) {
       const init = { headers: { 'x-custom': 'unchanged' } }
       await fetch(url, init)
       assert.equal(seen.at(-1)[0], url)
@@ -143,14 +147,15 @@ test('fetch guard handles inference Request headers and leaves other requests un
 })
 
 test('Node HTTP guard targets only the exact HTTPS inference origin and path', () => {
-  assert.equal(isZenNodeRequestOptions({ protocol: 'https:', hostname: 'opencode.ai', path: '/inference/v1/responses' }), true)
-  assert.equal(isZenNodeRequestOptions({ host: 'opencode.ai:443', path: '/inference/v1?x=1' }), true)
+  assert.equal(isZenNodeRequestOptions({ protocol: 'https:', hostname: 'opencode.ai', path: '/inference/openai/v1/responses' }), true)
+  assert.equal(isZenNodeRequestOptions({ host: 'opencode.ai:443', path: '/inference/openai/v1?x=1' }), true)
   for (const options of [
-    { protocol: 'http:', hostname: 'opencode.ai', path: '/inference/v1/responses' },
-    { hostname: 'opencode.ai', port: 444, path: '/inference/v1/responses' },
-    { hostname: 'opencode.ai', path: '/inference/v10/responses' },
-    { hostname: 'opencode.ai', path: '/inference/v1-other' },
-    { hostname: 'other.example', path: '/inference/v1/responses' },
+    { protocol: 'http:', hostname: 'opencode.ai', path: '/inference/openai/v1/responses' },
+    { hostname: 'opencode.ai', port: 444, path: '/inference/openai/v1/responses' },
+    { hostname: 'opencode.ai', path: '/inference/openai/v10/responses' },
+    { hostname: 'opencode.ai', path: '/inference/openai/v1-other' },
+    { hostname: 'opencode.ai', path: '/inference/v1/responses' },
+    { hostname: 'other.example', path: '/inference/openai/v1/responses' },
   ]) assert.equal(isZenNodeRequestOptions(options), false)
 })
 
@@ -177,7 +182,7 @@ test('fragmented admission tool names never reach the host as tool-call events',
   const model = provider.getModels().find(m => m.api === 'openai-completions')
   const chunks = [
     { tool_calls: [{ index: 0, id: 'call_probe', type: 'function', function: { name: '', arguments: '' } }] },
-    { tool_calls: [{ index: 0, function: { name: 'read', arguments: '{"filePath":"private"}' } }] },
+    { tool_calls: [{ index: 0, function: { name: 'read', arguments: '{"path":"private"}' } }] },
   ].map(delta => ({ id: 'test', choices: [{ index: 0, delta, finish_reason: null }] }))
   chunks.push({ id: 'test', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
   const observed = []
@@ -247,7 +252,7 @@ test('anonymous requests carry the gate\'s environment block exactly once and ke
 
   const plain = await sent({ systemPrompt: 'Be brief.', messages: [user] }, 'public')
   assert.match(plain, /Be brief\./)
-  assert.match(plain, /<env>\s+Working directory: [^\n]+\s+<\/env>/)
+  assert.match(plain, /<env>\s+Working directory: [^\n]+\n  Workspace root folder: [^\n]+\n  Platform: [a-z0-9]+\n<\/env>/)
   assert.equal(count(plain), 1)
   assert.doesNotMatch(plain, /\/(Users|home)\//, 'the host path is not disclosed')
 
@@ -320,9 +325,94 @@ test('anonymous requests alias gate-refused host tool names and restore them on 
   const result = await provider.streamSimple(model, history, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { anonymous = JSON.parse(init.body); return sse('agent_fork') } }).result()
   await provider.streamSimple(model, history, { apiKey: 'sk-real-key', maxRetries: 0, fetch: async (_, init) => { keyed = JSON.parse(init.body); return refused() } }).result()
   const names = body => body.tools.map(t => t.function.name)
-  assert.deepEqual(names(anonymous), ['read', 'bash', 'agent_fork', 'cwd_tool'])
+  assert.deepEqual(names(anonymous), ['read', 'shell', 'agent_fork', 'cwd_tool'])
   assert.doesNotMatch(JSON.stringify(anonymous), /subagent_fork|working_directory/)
   assert.ok(JSON.stringify(anonymous.messages).includes('cwd_tool'))
   assert.deepEqual(names(keyed), ['read', 'bash', 'subagent_fork', 'working_directory'])
   assert.deepEqual(result.content.filter(c => c.type === 'toolCall').map(c => c.name), ['subagent_fork'])
+})
+
+test('anonymous requests declare host tools in the official form and restore returned calls', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const sandbox = { sandbox_permissions: { type: 'string', enum: ['workspace-write'], description: 'DSH wording.' }, justification: { type: 'string', description: 'DSH wording.' } }
+  const tools = [
+    { name: 'read', description: 'DSH read.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+    { name: 'bash', description: 'DSH bash.', parameters: { type: 'object', properties: { description: { type: 'string', description: 'DSH wording.' }, command: { type: 'string' } }, required: ['description', 'command'] } },
+    { name: 'edit', description: 'DSH edit.', parameters: { type: 'object', properties: { file_path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' }, ...sandbox }, required: ['file_path', 'old_string', 'new_string'] } },
+    { name: 'grep', description: 'DSH grep.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] } },
+    { name: 'web_fetch', description: 'DSH fetch.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+    { name: 'subagent', description: 'DSH subagent.', parameters: { type: 'object', properties: { description: { type: 'string' }, prompt: { type: 'string' } }, required: ['description', 'prompt'] } },
+  ]
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const history = { messages: [
+    { role: 'user', content: 'go', timestamp: 1 },
+    { role: 'assistant', api: model.api, provider: model.provider, model: model.id, stopReason: 'toolUse', timestamp: 2, usage, content: [
+      { type: 'toolCall', id: 'c1', name: 'edit', arguments: { file_path: 'a.txt', old_string: 'x', new_string: 'y' } },
+      { type: 'toolCall', id: 'c2', name: 'bash', arguments: { description: 'List files', command: 'ls' } },
+      { type: 'toolCall', id: 'c3', name: 'web_fetch', arguments: { url: 'https://example.com' } },
+    ] },
+    ...['c1', 'c2', 'c3'].map((id, i) => ({ role: 'toolResult', toolCallId: id, toolName: ['edit', 'bash', 'web_fetch'][i], content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: 3 })),
+  ], tools }
+  // Arguments arrive in fragments, so every event is restored on a partial call.
+  const call = (index, id, name, parts) => parts.map((part, i) => ({ id: 't', choices: [{ index: 0, delta: { tool_calls: [{ index, ...(i === 0 ? { id, type: 'function', function: { name, arguments: part } } : { function: { arguments: part } }) }] }, finish_reason: null }] }))
+  const chunks = [
+    ...call(0, 'r1', 'edit', ['{"path":"b.txt","oldString":"p",', '"newString":"q","replaceAll":true}']),
+    ...call(1, 'r2', 'grep', ['{"pattern":"a.b",', '"literal":true,"caseSensitive":false,"limit":5}']),
+    ...call(2, 'r3', 'webfetch', ['{"url":"https://example.org","format":"html"}']),
+    ...call(3, 'r4', 'shell', ['{"summary":"Show status",', '"command":"git status"}']),
+    // The host grep searches line by line and ripgrep refuses a newline in a pattern.
+    ...call(4, 'r5', 'grep', ['{"pattern":"a.b\\n\\nc(d",', '"literal":true}']),
+    ...call(5, 'r6', 'grep', ['{"pattern":"Foo","caseSensitive":true}']),
+    { id: 't', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+  ]
+  const sse = () => new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+  let anonymous, keyed
+  const result = await provider.streamSimple(model, history, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { anonymous = JSON.parse(init.body); return sse() } }).result()
+  await provider.streamSimple(model, history, { apiKey: 'sk-real-key', maxRetries: 0, fetch: async (_, init) => { keyed = JSON.parse(init.body); return refused() } }).result()
+
+  const declared = Object.fromEntries(anonymous.tools.map(t => [t.function.name, t.function]))
+  assert.deepEqual(Object.keys(declared), ['read', 'shell', 'edit', 'grep', 'webfetch', 'subagent'])
+  assert.match(declared.edit.description, /^Edit the contents of a file by finding and replacing exact text\./)
+  assert.deepEqual(Object.keys(declared.edit.parameters.properties), ['path', 'oldString', 'newString', 'replaceAll', 'sandbox_permissions', 'justification'])
+  assert.deepEqual(declared.edit.parameters.properties.sandbox_permissions.enum, ['workspace-write'])
+  assert.deepEqual(Object.keys(declared.shell.parameters.properties), ['summary', 'command'])
+  assert.equal(declared.subagent.description, 'DSH subagent.', 'tools without an official form are left as the host declares them')
+  assert.doesNotMatch(JSON.stringify([declared.edit, declared.grep, declared.webfetch]), /DSH (edit|grep|fetch|wording)/)
+  const sent = JSON.stringify(anonymous.messages)
+  assert.ok(sent.includes('\\"oldString\\":\\"x\\"') && sent.includes('\\"summary\\":\\"List files\\"') && sent.includes('"webfetch"'), 'history uses the declared names')
+  assert.deepEqual(keyed.tools.map(t => t.function.name), ['read', 'bash', 'edit', 'grep', 'web_fetch', 'subagent'])
+
+  const calls = result.content.filter(c => c.type === 'toolCall').map(c => [c.name, c.arguments])
+  assert.deepEqual(calls, [
+    ['edit', { file_path: 'b.txt', old_string: 'p', new_string: 'q', replace_all: true }],
+    ['grep', { pattern: '(?i)a\\.b' }],
+    ['web_fetch', { url: 'https://example.org' }],
+    ['bash', { description: 'Show status', command: 'git status' }],
+    ['grep', { pattern: 'a\\.b|c\\(d' }],
+    ['grep', { pattern: 'Foo' }],
+  ])
+})
+
+test('anonymous requests carry the OpenCode v2 identity headers', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const seen = []
+  for (let i = 0; i < 2; i++) {
+    await provider.streamSimple(model, context, { apiKey: 'public', sessionId: 'v2-identity', maxRetries: 0, fetch: async (_, init) => { seen.push(new Headers(init.headers)); return refused() } }).result()
+  }
+  const [first, second] = seen
+  assert.match(first.get('user-agent'), /^opencode\/latest\/2\.4\.2\/cli dsh-opencode-free\/\d+\.\d+\.\d+$/)
+  assert.equal(first.get('x-opencode-client'), 'cli')
+  assert.match(first.get('x-opencode-project'), /^[0-9a-f]{40}$/)
+  assert.equal(first.get('x-opencode-request'), null, 'v2 does not send a per-request message id')
+  const session = first.get('x-opencode-session')
+  assert.match(session, /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/)
+  for (const name of ['x-opencode-session-id', 'x-session-id', 'x-session-affinity']) assert.equal(first.get(name), session, name)
+  const trace = first.get('traceparent').match(/^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/)
+  assert.ok(trace, 'W3C traceparent')
+  assert.match(first.get('b3'), new RegExp(`^${trace[1]}-${trace[2]}-1-[0-9a-f]{16}$`), 'b3 names the same trace and span')
+  const next = second.get('traceparent').match(/^00-([0-9a-f]{32})-([0-9a-f]{16})-01$/)
+  assert.equal(next[1], trace[1], 'one trace per session')
+  assert.notEqual(next[2], trace[2], 'one span per request')
 })

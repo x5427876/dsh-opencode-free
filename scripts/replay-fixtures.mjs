@@ -38,6 +38,27 @@ export function completionsToolCall(name, args, id = 'call_replay') {
   ])
 }
 
+/**
+ * A chat-completions reply that asks for several tools at once, streamed the
+ * way upstream fragments it: the name first, then the JSON arguments in small
+ * pieces, the calls interleaved.
+ */
+export function completionsToolCalls(calls, { piece = 7 } = {}) {
+  const deltas = calls.map(({ name, args }, index) => {
+    const json = JSON.stringify(args)
+    const parts = []
+    for (let at = 0; at < json.length; at += piece) parts.push(json.slice(at, at + piece))
+    return { index, name, id: `call_replay_${index}`, parts }
+  })
+  const frames = [completionChunk({ role: 'assistant', content: '' })]
+  for (const { index, name, id } of deltas) frames.push(completionChunk({ tool_calls: [{ index, id, type: 'function', function: { name, arguments: '' } }] }))
+  for (let step = 0; deltas.some(({ parts }) => step < parts.length); step += 1) {
+    for (const { index, parts } of deltas) if (step < parts.length) frames.push(completionChunk({ tool_calls: [{ index, function: { arguments: parts[step] } }] }))
+  }
+  frames.push(completionChunk({}, 'tool_calls'), '[DONE]')
+  return sse(frames)
+}
+
 /** A responses-channel reply with one text message. */
 export function responsesText(text) {
   const item = { id: 'msg_replay', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] }

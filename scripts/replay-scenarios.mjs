@@ -9,6 +9,7 @@ import {
   completionsText,
   completionsTextWithUsage,
   completionsToolCall,
+  completionsToolCalls,
   officialModel,
   refusal,
   responsesText,
@@ -55,7 +56,7 @@ export const SCENARIOS = [
         const result = await host.ask('say hi', { model })
         assertCompleted(result, 'REPLAY-OK')
         const [request] = upstream.inference()
-        assert.equal(request.url, `/inference/v1${path}`)
+        assert.equal(request.url, `/inference/openai/v1${path}`)
         assert.equal(request.headers.get('authorization'), 'Bearer public')
         assert.equal(request.headers.get('x-opencode-client'), 'cli')
         assert.match(request.headers.get('x-opencode-session') ?? '', /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/, `${model}: session identity`)
@@ -132,6 +133,78 @@ export const SCENARIOS = [
       const replayed = JSON.stringify(after.body.messages)
       assert.ok(replayed.includes('CHECKPOINT-SUMMARY-MARKER'), 'the summary is replayed')
       assert.ok(!replayed.includes('FIRST-TURN-UNIQUE'), 'the shadowed turn is no longer replayed')
+    },
+  },
+  {
+    id: 'R7',
+    title: 'calls in the official tool form run as DSH tools, streamed in pieces',
+    async run({ host, upstream }) {
+      await host.prepare({ models: [FREE_A] })
+      const nonce = `SHELL-${randomBytes(6).toString('hex')}`
+      const toolCalls = (result) => result.events.filter((event) => event.type === 'tool_call')
+      const outcome = (result, call) => result.events.find((event) => event.type === 'tool_result' && event.callId === call.callId)
+      upstream.use((record) => lastMessage(record.body)?.role === 'tool'
+        ? completionsText('TOOLS-DONE')
+        : completionsToolCalls([
+            { name: 'edit', args: { path: 'edit.txt', oldString: 'alpha', newString: 'omega', replaceAll: false } },
+            { name: 'webfetch', args: { url: 'https://opencode.ai/replay-fetch', format: 'text' } },
+            { name: 'shell', args: { command: `echo ${nonce}`, summary: 'Print a marker' } },
+            { name: 'grep', args: { pattern: 'Head one\nhead (two)', path: 'notes.txt', literal: true } },
+            { name: 'grep', args: { pattern: 'head', path: 'notes.txt', caseSensitive: true } },
+            { name: 'grep', args: { pattern: 'HEAD (', path: 'notes.txt', literal: true, caseSensitive: false } },
+          ]))
+      const first = await host.ask('edit, fetch and run', { model: 'replay-free-a', files: { 'edit.txt': 'alpha beta\n', 'notes.txt': 'Head one\nhead (two)\nother\n' } })
+      assertCompleted(first, 'TOOLS-DONE')
+      const [request] = upstream.inference()
+      assert.deepEqual(['edit', 'shell', 'webfetch'].filter((name) => toolNames(request.body).includes(name)), ['edit', 'shell', 'webfetch'], 'the official names are declared')
+      const calls = toolCalls(first)
+      assert.deepEqual(calls.map((call) => [call.tool, call.input]), [
+        ['edit', { file_path: 'edit.txt', old_string: 'alpha', new_string: 'omega', replace_all: false }],
+        ['web_fetch', { url: 'https://opencode.ai/replay-fetch' }],
+        ['bash', { command: `echo ${nonce}`, description: 'Print a marker' }],
+        ['grep', { pattern: 'Head one|head \\(two\\)', path: 'notes.txt' }],
+        ['grep', { pattern: 'head', path: 'notes.txt' }],
+        ['grep', { pattern: '(?i)HEAD \\(', path: 'notes.txt' }],
+      ])
+      assert.equal(outcome(first, calls[0])?.status, 'completed', 'DSH applied the edit')
+      const shell = outcome(first, calls[2])
+      assert.equal(shell?.status, 'completed', 'DSH ran the command')
+      assert.ok(String(shell.result).includes(nonce), 'the command output is the tool result')
+      const literal = outcome(first, calls[3])
+      assert.equal(literal?.status, 'completed', 'ripgrep accepted the multi-line literal')
+      assert.ok(['Head one', 'head (two)'].every((line) => String(literal.result).includes(line)), String(literal.result))
+      const cased = outcome(first, calls[4])
+      assert.equal(cased?.status, 'completed', 'DSH ran the case-sensitive search')
+      assert.ok(String(cased.result).includes('head (two)') && !String(cased.result).includes('Head one'), String(cased.result))
+      const uncased = outcome(first, calls[5])
+      assert.equal(uncased?.status, 'completed', 'DSH ran the case-insensitive search')
+      assert.ok(String(uncased.result).includes('head (two)') && !String(uncased.result).includes('Head one'), String(uncased.result))
+
+      upstream.requests.length = 0
+      upstream.use((record) => lastMessage(record.body)?.role === 'tool'
+        ? completionsText('READ-DONE')
+        : completionsToolCalls([{ name: 'read', args: { path: 'edit.txt' } }]))
+      const second = await host.ask('read it back', { model: 'replay-free-a', sessionId: first.sessionId })
+      assertCompleted(second, 'READ-DONE')
+      const [read] = toolCalls(second)
+      assert.deepEqual([read.tool, read.input], ['read', { file_path: 'edit.txt' }])
+      assert.ok(String(outcome(second, read)?.result).includes('omega beta'), 'the edit reached the file')
+      const [followUp] = upstream.inference()
+      const history = JSON.stringify(followUp.body.messages)
+      assert.ok(history.includes('oldString') && !history.includes('old_string'), 'history carries the official argument names')
+    },
+  },
+  {
+    id: 'R8',
+    title: 'an unresolved 429 is sent once and reaches the user as guidance',
+    async run({ host, upstream }) {
+      await host.prepare({ models: [FREE_A] })
+      upstream.use(() => refusal(429, { type: 'FreeUsageLimitError', message: 'limit' }))
+      const result = await host.ask('hello', { model: 'replay-free-a' })
+      assert.notEqual(result.exitCode, 0)
+      assert.equal(upstream.inference().length, 1, `no retry spends the shared anonymous bucket (saw ${upstream.inference().length})`)
+      const message = result.final?.reason?.error?.message ?? ''
+      assert.ok(message.includes(ZEN_FAILURE_GUIDANCE['unresolved-429']), message)
     },
   },
   {
