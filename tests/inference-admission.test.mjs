@@ -58,7 +58,7 @@ test('anonymous DSH definitions use admission parameter names without losing hos
   assert.equal(read.parameters.properties.offset.type, 'number')
   assert.equal(shell.parameters.properties.timeout.type, 'number')
   assert.equal(shell.parameters.properties.run_in_background.type, 'boolean')
-  assert.deepEqual(shell.parameters.required, ['command', 'description'])
+  assert.deepEqual(shell.parameters.required, ['command', 'summary'])
   // The gate refuses DSH's own wording: the official description, then the plugin's notes.
   assert.match(shell.description, /^Execute a shell command and return its output\. Commands run on \w+ using PowerShell\./)
   assert.match(read.description, /^Read the contents of a file or directory\./)
@@ -330,6 +330,63 @@ test('anonymous requests alias gate-refused host tool names and restore them on 
   assert.ok(JSON.stringify(anonymous.messages).includes('cwd_tool'))
   assert.deepEqual(names(keyed), ['read', 'bash', 'subagent_fork', 'working_directory'])
   assert.deepEqual(result.content.filter(c => c.type === 'toolCall').map(c => c.name), ['subagent_fork'])
+})
+
+test('anonymous requests declare host tools in the official form and restore returned calls', async () => {
+  const provider = zenProvider()
+  const model = provider.getModels().find(m => m.api === 'openai-completions')
+  const sandbox = { sandbox_permissions: { type: 'string', enum: ['workspace-write'], description: 'DSH wording.' }, justification: { type: 'string', description: 'DSH wording.' } }
+  const tools = [
+    { name: 'read', description: 'DSH read.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
+    { name: 'bash', description: 'DSH bash.', parameters: { type: 'object', properties: { description: { type: 'string', description: 'DSH wording.' }, command: { type: 'string' } }, required: ['description', 'command'] } },
+    { name: 'edit', description: 'DSH edit.', parameters: { type: 'object', properties: { file_path: { type: 'string' }, old_string: { type: 'string' }, new_string: { type: 'string' }, replace_all: { type: 'boolean' }, ...sandbox }, required: ['file_path', 'old_string', 'new_string'] } },
+    { name: 'grep', description: 'DSH grep.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] } },
+    { name: 'web_fetch', description: 'DSH fetch.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } },
+    { name: 'subagent', description: 'DSH subagent.', parameters: { type: 'object', properties: { description: { type: 'string' }, prompt: { type: 'string' } }, required: ['description', 'prompt'] } },
+  ]
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }
+  const history = { messages: [
+    { role: 'user', content: 'go', timestamp: 1 },
+    { role: 'assistant', api: model.api, provider: model.provider, model: model.id, stopReason: 'toolUse', timestamp: 2, usage, content: [
+      { type: 'toolCall', id: 'c1', name: 'edit', arguments: { file_path: 'a.txt', old_string: 'x', new_string: 'y' } },
+      { type: 'toolCall', id: 'c2', name: 'bash', arguments: { description: 'List files', command: 'ls' } },
+      { type: 'toolCall', id: 'c3', name: 'web_fetch', arguments: { url: 'https://example.com' } },
+    ] },
+    ...['c1', 'c2', 'c3'].map((id, i) => ({ role: 'toolResult', toolCallId: id, toolName: ['edit', 'bash', 'web_fetch'][i], content: [{ type: 'text', text: 'ok' }], isError: false, timestamp: 3 })),
+  ], tools }
+  // Arguments arrive in fragments, so every event is restored on a partial call.
+  const call = (index, id, name, parts) => parts.map((part, i) => ({ id: 't', choices: [{ index: 0, delta: { tool_calls: [{ index, ...(i === 0 ? { id, type: 'function', function: { name, arguments: part } } : { function: { arguments: part } }) }] }, finish_reason: null }] }))
+  const chunks = [
+    ...call(0, 'r1', 'edit', ['{"path":"b.txt","oldString":"p",', '"newString":"q","replaceAll":true}']),
+    ...call(1, 'r2', 'grep', ['{"pattern":"a.b",', '"literal":true,"caseSensitive":false,"limit":5}']),
+    ...call(2, 'r3', 'webfetch', ['{"url":"https://example.org","format":"html"}']),
+    ...call(3, 'r4', 'shell', ['{"summary":"Show status",', '"command":"git status"}']),
+    { id: 't', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] },
+  ]
+  const sse = () => new Response(chunks.map(chunk => `data: ${JSON.stringify(chunk)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } })
+  let anonymous, keyed
+  const result = await provider.streamSimple(model, history, { apiKey: 'public', maxRetries: 0, fetch: async (_, init) => { anonymous = JSON.parse(init.body); return sse() } }).result()
+  await provider.streamSimple(model, history, { apiKey: 'sk-real-key', maxRetries: 0, fetch: async (_, init) => { keyed = JSON.parse(init.body); return refused() } }).result()
+
+  const declared = Object.fromEntries(anonymous.tools.map(t => [t.function.name, t.function]))
+  assert.deepEqual(Object.keys(declared), ['read', 'shell', 'edit', 'grep', 'webfetch', 'subagent'])
+  assert.match(declared.edit.description, /^Edit the contents of a file by finding and replacing exact text\./)
+  assert.deepEqual(Object.keys(declared.edit.parameters.properties), ['path', 'oldString', 'newString', 'replaceAll', 'sandbox_permissions', 'justification'])
+  assert.deepEqual(declared.edit.parameters.properties.sandbox_permissions.enum, ['workspace-write'])
+  assert.deepEqual(Object.keys(declared.shell.parameters.properties), ['summary', 'command'])
+  assert.equal(declared.subagent.description, 'DSH subagent.', 'tools without an official form are left as the host declares them')
+  assert.doesNotMatch(JSON.stringify([declared.edit, declared.grep, declared.webfetch]), /DSH (edit|grep|fetch|wording)/)
+  const sent = JSON.stringify(anonymous.messages)
+  assert.ok(sent.includes('\\"oldString\\":\\"x\\"') && sent.includes('\\"summary\\":\\"List files\\"') && sent.includes('"webfetch"'), 'history uses the declared names')
+  assert.deepEqual(keyed.tools.map(t => t.function.name), ['read', 'bash', 'edit', 'grep', 'web_fetch', 'subagent'])
+
+  const calls = result.content.filter(c => c.type === 'toolCall').map(c => [c.name, c.arguments])
+  assert.deepEqual(calls, [
+    ['edit', { file_path: 'b.txt', old_string: 'p', new_string: 'q', replace_all: true }],
+    ['grep', { pattern: '(?i)a\\.b' }],
+    ['web_fetch', { url: 'https://example.org' }],
+    ['bash', { description: 'Show status', command: 'git status' }],
+  ])
 })
 
 test('anonymous requests carry the OpenCode v2 identity headers', async () => {

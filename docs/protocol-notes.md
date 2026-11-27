@@ -184,8 +184,30 @@ L0 補上述修正後通過，但 L1（DSH agent 的真實請求：23 個工具�
 | 只加 `edit`：參數名、參數描述與工具描述全部改寫 | 通過 |
 | 後半把 `subagent`、`agent_fork` 的 `description` 參數改名 | 429 |
 
-結論：閘門看的不是少數字句，單項修改不足以通過，工具整體越像 OpenCode 越容易通過。
-系統提示與提醒訊息不是原因。
+| `shell` 修正後，`edit`、`write`、`glob`、`grep`、`skill`、`web_fetch`（改名 `webfetch`）換成官方定義，其餘 DSH 工具不變 | 通過 |
+| 同上，官方定義後接一段插件說明，`edit`／`write` 另保留 `sandbox_permissions`、`justification` | 通過 |
+| 同上，但只換 `edit`、`write`；或只換 `edit`、`write`、`glob`、`grep` | 429 |
+| 同上，六個都換，只有 `subagent` 保留 DSH 定義 | 通過 |
+
+結論：閘門看的不是少數字句，單項修改不足以通過；有官方對應的工具改用官方定義即可，
+DSH 獨有的工具（`goal`、`job_*`、`agent_fork`、`workflow` 等）不用改。系統提示與提醒訊息不是原因。
+插件依此修改後，`pnpm compat --dsh 0.2.2-rc.5 --model deepseek-v4.1-flash-free` 的 L0 與 L1 通過（exit `0`）。
+
+#### 各 DSH 工具實際呼叫（2026-11-27）
+
+以 compat 建好的 headless 環境、`deepseek-v4.1-flash-free`、匿名路徑，每個工具一個任務，
+看 headless JSON 的呼叫名稱、主機參數與 `status`，並檢查檔案或回覆內容：
+
+| 工具 | 結果 |
+| --- | --- |
+| `read`、`shell`（compat L2） | 通過 |
+| `edit`、`write`、`glob`、`grep`、`skill`、`web_fetch` | 通過；回傳呼叫還原為 DSH 名稱與參數 |
+| `read_image`、`todo_write`、`create_goal`、`get_goal`、`job_list`、`job_output`（`shell` 背景執行）、`cwd_tool`（呼叫名 `working_directory`）、`subagent`、`wait_agent` | 通過 |
+| `update_goal`、`job_kill`、`agent_fork`（呼叫名 `subagent_fork`）、`list_agents`、`send_message`、`workflow` | 通過（換 IP 後；原 IP 連官方 CLI 也回 `Free usage limit reached`） |
+| MCP 工具（stdio 測試伺服器的 `mcp__codes__lookup_code`，含 `list_mcp_resources`、`list_mcp_resource_templates`） | 通過 |
+
+`create_goal` 任務的第一輪正常完成；目標仍在進行，DSH 自行開始下一輪並中止，headless 因此回 exit `1`。
+這是 DSH 目標驅動的行為，與工具轉換無關。
 
 ### 經官方 CLI 中繼（原型，未採用）
 
@@ -212,6 +234,11 @@ L0 補上述修正後通過，但 L1（DSH agent 的真實請求：23 個工具�
   呼叫不存在的工具時，在交給 DSH 前拒絕；保留呼叫端明確指定的工具選擇。
 - 匿名請求的 `read`／`shell` 描述以 2.4.2 官方描述開頭，後接插件自己措辭的環境說明
   （純文字讀檔、shell 由宿主執行）；不送 DSH 的原始描述。補位工具使用官方參數 schema。
+- 匿名請求把 DSH 的 `edit`、`write`、`glob`、`grep`、`skill`、`web_fetch` 以 2.4.2 官方定義宣告
+  （`web_fetch` 名為 `webfetch`），保留宿主的 `sandbox_permissions`、`justification`；
+  歷史與回傳呼叫的參數成對轉換。宿主做不到的官方參數：`grep` 的 `literal`、`caseSensitive`
+  改寫進 pattern，其餘（`hidden`、`limit`、`format`、`timeout`）不交給宿主。
+  宿主 shell 的 `description` 參數以 `summary` 宣告。
 - 匿名請求在系統提示加入通用的 `<env>` 區塊（`Working directory:` 值不含宿主路徑），
   已有此區塊的提示不重複加入。
 - 匿名請求把 DSH 的 `subagent_fork`、`working_directory` 以 `agent_fork`、`cwd_tool` 之名宣告，
@@ -231,6 +258,7 @@ L0 補上述修正後通過，但 L1（DSH agent 的真實請求：23 個工具�
 - `403 FreeTierError` 的完整判斷式；不能單憑此錯誤歸因為 IP、key 或模型下架。
 - 免費層限額的計算單位（IP、機器、身份欄位皆未證實）；下節兩項訊號的完整判斷式與其他模型。
 - 經官方 CLI 中繼的其他模型、平台與長對話行為。
+- 各工具實測只涵蓋 `deepseek-v4.1-flash-free` 與 macOS；機房或 VPN 出口 IP 常已無免費額度，官方 CLI 同樣失敗。
 
 ## 再次診斷時
 

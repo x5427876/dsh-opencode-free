@@ -19,6 +19,7 @@ import { openAIResponsesApi } from "@earendil-works/pi-ai/api/openai-responses.l
 import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { Catalog } from "./catalog.js";
 import { OPENCODE_TLS_CIPHERS, needsOpenCodeCiphers } from "./zen-tls.js";
+import { OPENCODE_TOOLS, OPENCODE_TOOL_HOSTS, opencodeDeclaration, toHostArguments, toWireArguments } from "./opencode-tools.js";
 
 export const PROVIDER_ID = "opencode-zen-free";
 export const BASE_URL = "https://opencode.ai/inference/openai/v1";
@@ -662,14 +663,18 @@ type CallRestoration = {
   hostShell?: string;
   restoreRead?: boolean;
   restoreTimeout?: boolean;
+  /** The host shell's `description` argument is presented as `summary`. */
+  restoreSummary?: boolean;
+  /** Host tools declared in the official form (see opencode-tools.ts). */
+  disguised?: string[];
   unavailable?: string[];
 };
 
 /** Rename only an owned top-level field; leave host constraints and other arguments intact. */
 function renameField(value: unknown, from: string, to: string): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value) || !(from in value)) return value;
-  const { [from]: field, ...rest } = value as Record<string, unknown>;
-  return { ...rest, [to]: field };
+  // Keeps the field's position, so a schema keeps the host's parameter order.
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, field]) => [key === from ? to : key, field]));
 }
 
 function renameParameter(parameters: unknown, from: string, to: string): unknown {
@@ -717,22 +722,38 @@ export function applyAnonymousToolGate<T>(
   });
   const restoreRead = ownsParameter("read", "file_path");
   const restoreTimeout = hostShell !== undefined && ownsParameter(hostShell, "timeoutMs");
+  // The gate refuses a shell declaring a `description` argument (measured 2026-11-27).
+  const restoreSummary = hostShell !== undefined && ownsParameter(hostShell, "description");
+  const disguised = Object.keys(OPENCODE_TOOLS).filter(has);
+  const isDisguised = (name: unknown): name is string => typeof name === "string" && disguised.includes(name);
   const rename = (name: unknown) =>
-    hostShell !== undefined && name === hostShell ? "shell" : typeof name === "string" && Object.hasOwn(GATE_TOOL_ALIASES, name) ? GATE_TOOL_ALIASES[name] : name;
+    hostShell !== undefined && name === hostShell ? "shell"
+    : isDisguised(name) ? OPENCODE_TOOLS[name].wire
+    : typeof name === "string" && Object.hasOwn(GATE_TOOL_ALIASES, name) ? GATE_TOOL_ALIASES[name] : name;
+  const shellArguments = (args: unknown) => {
+    const timed = restoreTimeout ? renameField(args, "timeoutMs", "timeout") : args;
+    return restoreSummary ? renameField(timed, "description", "summary") : timed;
+  };
   const argumentsFor = (name: unknown, args: unknown) =>
     restoreRead && name === "read" ? renameField(args, "file_path", "path") :
-    restoreTimeout && name === hostShell ? renameField(args, "timeoutMs", "timeout") : args;
+    isDisguised(name) ? toWireArguments(name, args) :
+    hostShell !== undefined && name === hostShell ? shellArguments(args) : args;
+  const shellParameters = (parameters: unknown) => {
+    const timed = restoreTimeout ? renameParameter(parameters, "timeoutMs", "timeout") : parameters;
+    return restoreSummary ? renameParameter(timed, "description", "summary") : timed;
+  };
   const renameAll = (list: unknown) => {
     if (!Array.isArray(list)) return list;
     return list.map((t: { name?: unknown; parameters?: unknown; description?: string }) => {
       if (t.parameters === undefined) return { ...t, name: rename(t.name) };
+      if (isDisguised(t.name)) return { ...t, name: rename(t.name), ...opencodeDeclaration(t.name, t.parameters) };
       const read = t.name === "read";
       const shell = hostShell !== undefined && t.name === hostShell;
       const official = read ? OPENCODE_READ_DESCRIPTION : shell ? opencodeShellDescription(hostShell) : undefined;
       const usage = read ? READ_USAGE : shell ? SHELL_USAGE : undefined;
       const parameters = read && restoreRead
         ? renameParameter(t.parameters, "file_path", "path")
-        : shell && restoreTimeout ? renameParameter(t.parameters, "timeoutMs", "timeout") : t.parameters;
+        : shell ? shellParameters(t.parameters) : t.parameters;
       return {
         ...t, name: rename(t.name), parameters,
         ...(usage === undefined ? {} : { description: `${official}\n\n${usage}` }),
@@ -768,7 +789,7 @@ export function applyAnonymousToolGate<T>(
       : [createInitialSystemMessage(undefined, stubs as never) as unknown as TranscriptMessage, ...messages];
   }
   messages = withEnvironmentBlock(messages);
-  return { context: { ...(context as Record<string, unknown>), messages } as T, hostShell, restoreRead, restoreTimeout, unavailable };
+  return { context: { ...(context as Record<string, unknown>), messages } as T, hostShell, restoreRead, restoreTimeout, restoreSummary, disguised, unavailable };
 }
 
 /** Restore owned argument aliases in place; SSE events share their partial message. */
@@ -779,10 +800,18 @@ function restoreAdmissionCalls(value: unknown, flags: CallRestoration): void {
       throw new Error("Upstream returned an unavailable admission tool; no host execution is permitted.");
     }
     if (flags.restoreRead && call.name === "read") call.arguments = renameField(call.arguments, "path", "file_path");
+    if (typeof call.name === "string") {
+      const host = OPENCODE_TOOL_HOSTS[call.name] ?? call.name;
+      if (flags.disguised?.includes(host)) {
+        call.arguments = toHostArguments(host, call.arguments);
+        call.name = host;
+      }
+    }
     // A streamed call is restored once per event, and its arguments may only
     // arrive after its name has already been restored to the host shell.
     if (flags.hostShell !== undefined && (call.name === "shell" || call.name === flags.hostShell)) {
       if (flags.restoreTimeout) call.arguments = renameField(call.arguments, "timeout", "timeoutMs");
+      if (flags.restoreSummary) call.arguments = renameField(call.arguments, "summary", "description");
       call.name = flags.hostShell;
     }
   };
