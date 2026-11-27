@@ -10,6 +10,16 @@ Use free [OpenCode Zen](https://opencode.ai/docs/providers) models in DeepSeek
 Harness (DSH), without installing OpenCode or running a separate server.
 Anonymous access is the default; a Zen API key is optional.
 
+> [!IMPORTANT]
+> **The anonymous path is best effort and may stop working at any time.**
+> Zen's documentation says *Free-tier chat models require OpenCode*
+> ([Zen docs, "Endpoints"](https://opencode.ai/docs/zen)); this plugin is not
+> OpenCode. OpenCode's [terms of service](https://opencode.ai/legal/terms-of-service)
+> (effective 2026-11-25) also restrict automated extraction and reverse
+> engineering. Read both and decide whether this use fits your situation.
+> The stable alternative is a Zen API key, which other clients can use with
+> **paid models only**, billed to your account; see [Optional API key](#optional-api-key).
+
 - **Works on the anonymous tier.** Zen's free tier decides by request content
   (tool declarations, an `<env>` block, the TLS cipher list), not only by headers.
   The plugin shapes anonymous requests to match; see
@@ -104,6 +114,11 @@ Key priority: plugin `config.apiKey` → `OPENCODE_API_KEY` environment variable
 anonymous `public`. There is no login flow, and the plugin never switches to a
 paid model automatically. A key changes authentication and quota, not the model
 list; it does not guarantee access to an unavailable model.
+
+Zen serves only paid models to clients other than OpenCode, and bills them to
+the key's account ([Zen docs, "Endpoints"](https://opencode.ai/docs/zen)). A key
+is the stable, paid alternative to the anonymous path, not a way to reach the
+free models from outside OpenCode.
 
 For Desktop, configure the key in your profile's `cordis.patch.yml` rather than
 relying on a shell environment:

@@ -9,6 +9,14 @@
 在 DeepSeek Harness（DSH）中使用 [OpenCode Zen](https://opencode.ai/docs/providers)
 免費模型，不必安裝 OpenCode，也不必另外架設伺服器。預設匿名使用，Zen API key 為選用設定。
 
+> [!IMPORTANT]
+> **匿名路徑盡力而為，隨時可能失效。** Zen 文件寫明 *Free-tier chat models require OpenCode*
+> （[Zen 文件〈Endpoints〉](https://opencode.ai/docs/zen)），而本插件不是 OpenCode。
+> OpenCode [服務條款](https://opencode.ai/legal/terms-of-service)（2026-11-25 生效）
+> 也限制自動化擷取與反向工程。請自行閱讀兩者，判斷這種用法是否適合你的情況。
+> 穩定的替代方案是 Zen API key：其他客戶端**只能用付費模型**，費用記在你的帳戶；
+> 請見〈[選用 API key](#選用-api-key)〉。
+
 - **匿名層可用：** Zen 免費層依請求內容判斷（工具宣告、`<env>` 區塊、TLS 密碼套件清單），
   不只看標頭。插件會調整匿名請求以符合這些條件；請見
   [免費層檢查什麼](docs/free-tier-gate.zh-TW.md)，內含標註日期的實測。
@@ -90,6 +98,10 @@ dsh plugin --profile web remove dsh-opencode-free
 優先順序：插件 `config.apiKey` → 環境變數 `OPENCODE_API_KEY` → 匿名 `public`。
 沒有登入流程，插件也不會自動切換付費模型。key 改變驗證身份與額度，不改變模型清單，
 也不保證能存取已不可用的模型。
+
+Zen 對 OpenCode 以外的客戶端只提供付費模型，費用記在 key 所屬帳戶
+（[Zen 文件〈Endpoints〉](https://opencode.ai/docs/zen)）。key 是匿名路徑的穩定付費替代，
+不是從 OpenCode 以外使用免費模型的方法。
 
 Desktop 請在目標 profile 的 `cordis.patch.yml` 設定 key，不要依賴 shell 環境：
 
