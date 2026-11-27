@@ -195,6 +195,19 @@ export const SCENARIOS = [
     },
   },
   {
+    id: 'R8',
+    title: 'an unresolved 429 is sent once and reaches the user as guidance',
+    async run({ host, upstream }) {
+      await host.prepare({ models: [FREE_A] })
+      upstream.use(() => refusal(429, { type: 'FreeUsageLimitError', message: 'limit' }))
+      const result = await host.ask('hello', { model: 'replay-free-a' })
+      assert.notEqual(result.exitCode, 0)
+      assert.equal(upstream.inference().length, 1, `no retry spends the shared anonymous bucket (saw ${upstream.inference().length})`)
+      const message = result.final?.reason?.error?.message ?? ''
+      assert.ok(message.includes(ZEN_FAILURE_GUIDANCE['unresolved-429']), message)
+    },
+  },
+  {
     id: 'R6',
     title: 'a free-tier refusal reaches the user as guidance (S6)',
     async run({ host, upstream }) {

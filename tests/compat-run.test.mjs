@@ -146,6 +146,7 @@ const GATED = failed('dsh: PROVIDER_ERROR: 上游拒絕免費層請求。（上�
 for (const [label, output, verdict] of [
   ['a 429', RATE_LIMITED, 'rate-limited'],
   ['a gate 403', GATED, 'gate-refused'],
+  ['an unresolved 429 that DSH files as QUOTA', failed('dsh: QUOTA: 上游回 429。（上游 HTTP 429：usage limit reached）'), 'rate-limited'],
   ['Endpoint is unavailable', failed('dsh: PROVIDER_ERROR: 400 Upstream request failed: Endpoint is unavailable'), 'upstream-down'],
   ['Model is unavailable', failed('dsh: PROVIDER_ERROR: Model is unavailable'), 'upstream-down'],
   ['an upstream 500', failed('dsh: PROVIDER_ERROR: 未知的上游錯誤。（上游 HTTP 500）'), 'upstream-down'],
@@ -157,6 +158,7 @@ for (const [label, output, verdict] of [
     assert.equal(alpha.verdict, verdict)
     assert.equal(alpha.layer, 'L0')
     assert.notEqual(alpha.reason, '')
+    if (/^dsh: QUOTA:/.test(output.stderr ?? '')) assert.match(alpha.reason, /^dsh: QUOTA\b/)
   })
 }
 

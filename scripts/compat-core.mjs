@@ -441,7 +441,7 @@ function upstreamStatus(line) {
   return match === null ? null : Number(match[1])
 }
 
-const SAFE_DSH_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'PROVIDER_ERROR', 'AUTH_FAILED', 'RATE_LIMIT', 'TIMEOUT', 'TRANSPORT', 'INVALID_INPUT'])
+const SAFE_DSH_CODES = new Set(['NO_ADAPTER', 'UNKNOWN_MODEL', 'PROVIDER_ERROR', 'AUTH_FAILED', 'RATE_LIMIT', 'QUOTA', 'TIMEOUT', 'TRANSPORT', 'INVALID_INPUT'])
 
 /** Allowlisted signals only; truncating or masking a key is not content redaction. */
 function failureSummary(line) {

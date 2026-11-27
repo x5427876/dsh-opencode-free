@@ -333,6 +333,29 @@ export function withEncryptedContentFallback(
   }) as FetchFunction;
 }
 
+/**
+ * Marks an unresolved 429 as not worth retrying. A FreeUsageLimitError is
+ * either an exhausted anonymous bucket or an admission refusal; a retry cannot
+ * fix either and spends the bucket every caller behind the IP shares. The SDK
+ * honours `x-should-retry` before its own status-based retry policy.
+ */
+export function withoutUnresolved429Retry(inner: FetchFunction): FetchFunction {
+  return (async (url: unknown, init?: unknown) => {
+    const response = await (inner as (u: never, i: never) => Promise<Response>)(url as never, init as never);
+    if (response.status !== 429) return response;
+    let text: string;
+    try {
+      text = await response.clone().text();
+    } catch {
+      return response;
+    }
+    if (!UNRESOLVED_429_PATTERN.test(text)) return response;
+    const headers = new Headers(response.headers);
+    headers.set("x-should-retry", "false");
+    return new Response(text, { status: response.status, statusText: response.statusText, headers });
+  }) as FetchFunction;
+}
+
 type CompatApiEntry = ReturnType<typeof getApiProvider>;
 type SessionGetter = () => string | undefined;
 
@@ -1553,7 +1576,7 @@ function compatRequestOptions<T extends StreamOptions>(
     sessionId: opencodeSession,
     timeoutMs: options?.timeoutMs ?? 180_000,
     maxRetries: options?.maxRetries ?? 2,
-    fetch: withEncryptedContentFallback(options?.fetch as FetchFunction | undefined, recorder) as T["fetch"],
+    fetch: withoutUnresolved429Retry(withEncryptedContentFallback(options?.fetch as FetchFunction | undefined, recorder)) as T["fetch"],
     // "off" is offered as an explicit level (the user asked to keep it), but
     // pi-ai renders it as `reasoning: { effort: "none" }` by default and as
     // `effort: "off"` when explicitly chosen on the responses channel — two
@@ -2112,6 +2135,17 @@ function appendUnclassifiedDetail<T extends Record<string, unknown>>(
   return next === current ? withDetail : { ...withDetail, errorMessage: next };
 }
 
+/**
+ * DSH files a failure by its message, and retries a 429 as RATE_LIMIT up to
+ * five times. An unresolved 429 carries the upstream's own "usage limit
+ * reached", which DSH files as QUOTA and does not retry: a retry cannot fix an
+ * exhausted bucket or an admission refusal, and spends what the IP shares.
+ */
+function guidanceMessage(kind: Exclude<ZenFailureKind, "unknown">, status: string | undefined): string {
+  const upstream = kind === "unresolved-429" ? `上游 HTTP ${status}：usage limit reached` : `上游 HTTP ${status}`;
+  return `${ZEN_FAILURE_GUIDANCE[kind]}（${upstream}）`;
+}
+
 export function mapTransportErrorToGuidance<T>(result: T, recorder?: TransportRecorder): T {
   if (!result || typeof result !== "object") return result;
   const rec = result as Record<string, unknown>;
@@ -2120,11 +2154,7 @@ export function mapTransportErrorToGuidance<T>(result: T, recorder?: TransportRe
   if (!m) return appendUnclassifiedDetail(rec, rec.errorMessage, recorder) as T;
   const kind = classifyZenFailure(Number(m[1] ?? m[2]), m[3] ?? "");
   if (kind === "unknown") return appendUnclassifiedDetail(rec, rec.errorMessage, recorder) as T;
-  const status = m[1] ?? m[2];
-  return {
-    ...rec,
-    errorMessage: `${ZEN_FAILURE_GUIDANCE[kind]}（上游 HTTP ${status}）`,
-  } as T;
+  return { ...rec, errorMessage: guidanceMessage(kind, m[1] ?? m[2]) } as T;
 }
 
 function mapEventErrorToGuidance<T>(event: T, recorder?: TransportRecorder): T {
@@ -2141,14 +2171,7 @@ function mapEventErrorToGuidance<T>(event: T, recorder?: TransportRecorder): T {
   if (kind === "unknown") {
     return { ...rec, error: appendUnclassifiedDetail(inner, inner.errorMessage, recorder) } as T;
   }
-  const status = m[1] ?? m[2];
-  return {
-    ...rec,
-    error: {
-      ...inner,
-      errorMessage: `${ZEN_FAILURE_GUIDANCE[kind]}（上游 HTTP ${status}）`,
-    },
-  } as T;
+  return { ...rec, error: { ...inner, errorMessage: guidanceMessage(kind, m[1] ?? m[2]) } } as T;
 }
 
 function withGuidance<T extends object>(stream: T, restoration?: CallRestoration, recorder?: TransportRecorder): T {

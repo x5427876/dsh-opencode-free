@@ -153,7 +153,9 @@ opencode run --standalone -m opencode/<model> "Reply with OK only."
   ([ADR-0009](adr/0009-anonymous-path-best-effort.md)).
 
 The check costs one anonymous request; run it only when live requests are
-authorized.
+authorized. The plugin itself sends an unresolved 429 once: it tells DSH the
+upstream's "usage limit reached", which DSH files as `QUOTA` and does not retry
+(replay R8).
 
 ## Quota and keyed comparison
 
