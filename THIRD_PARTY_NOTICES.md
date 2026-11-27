@@ -1,9 +1,10 @@
 # Third-party notices
 
 `dsh-opencode-free` sends requests in the format of the official OpenCode CLI.
-Some prompt and tool-description text in those requests is copied verbatim
-from OpenCode (https://github.com/anomalyco/opencode), which is distributed
-under the following license.
+The tool descriptions and parameter schemas declared on anonymous requests, and
+the `<env>` system-prompt block, are copied verbatim from OpenCode
+(https://github.com/anomalyco/opencode), which is distributed under the
+following license.
 
 ## OpenCode
 

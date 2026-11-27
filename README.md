@@ -68,8 +68,8 @@ dsh plugin --profile web list dsh-opencode-free --depth 0
 dsh --profile web --dump-config | grep -cE '^[[:space:]]*- id: opencode-free$'
 ```
 
-The package should appear once and the count should be `1`. Pipe the dump
-through the count: the full dump prints plugin settings, including a
+The package should appear once and the count should be `1`. Never run
+`--dump-config` without the count: the full dump prints plugin settings, including a
 `config.apiKey` you set.
 Restart DSH (or wait for HMR), then choose a model under **OpenCode Zen Free**.
 
