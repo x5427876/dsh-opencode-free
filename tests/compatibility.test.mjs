@@ -1039,9 +1039,12 @@ test('GUARD: a gate or a quota wall is never retried on another channel', async 
 test('GUARD: dead is only concluded when every channel that was asked finished', async (t) => {
   // Control expiry explicitly: a real 5ms deadline can turn even the 404 or
   // socket fixture into a timeout on a busy runner before its result is read.
-  let deadline
+  // A background catalogue refresh can create its own deadline after the
+  // probe's, so expiry aborts every deadline created so far, not just the last.
+  const deadlines = []
   t.mock.method(AbortSignal, 'timeout', () => {
-    deadline = new AbortController()
+    const deadline = new AbortController()
+    deadlines.push(deadline)
     return deadline.signal
   })
 
@@ -1067,7 +1070,7 @@ test('GUARD: dead is only concluded when every channel that was asked finished',
   // checks that signal expiry, not the provider's flattened error, decides why
   // the channel could not answer, without depending on elapsed wall-clock time.
   const TIMEOUT = () => {
-    deadline.abort()
+    for (const deadline of deadlines) deadline.abort()
     return TRANSPORT()
   }
 
