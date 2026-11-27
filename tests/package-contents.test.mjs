@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 
 const repo = fileURLToPath(new URL('..', import.meta.url))
-const STATIC = ['package.json', 'cordis.patch.yml', 'README.md', 'README.zh-TW.md', 'AGENTS.md', 'LICENSE', 'src/client.js']
+const STATIC = ['package.json', 'cordis.patch.yml', 'README.md', 'README.zh-TW.md', 'AGENTS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'src/client.js']
 
 // Packs a copy of the package, so building it never races tests that load lib/.
 async function packedFiles(t, stale) {

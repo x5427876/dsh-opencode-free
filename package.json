@@ -29,7 +29,8 @@
     "README.md",
     "README.zh-TW.md",
     "AGENTS.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "dsh": {
     "bundle": {
