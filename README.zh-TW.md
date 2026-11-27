@@ -66,10 +66,11 @@ dsh plugin --profile web add dsh-opencode-free@0.7.0
 
 ```sh
 dsh plugin --profile web list dsh-opencode-free --depth 0
-dsh --profile web --dump-config
+dsh --profile web --dump-config | grep -cE '^[[:space:]]*- id: opencode-free$'
 ```
 
-套件與 `opencode-free` 插件項目應各出現一次。重啟 DSH（或等待 HMR 重載），
+套件應出現一次，計數應為 `1`。不要單獨執行 `--dump-config`：完整輸出會印出
+插件設定，包括你設定的 `config.apiKey`。重啟 DSH（或等待 HMR 重載），
 再從 **OpenCode Zen Free** 選擇模型。
 
 ### 更新或移除

@@ -90,14 +90,15 @@ For the existing CLI path, run:
 
 ```sh
 dsh plugin --profile web list dsh-opencode-free --depth 0
-dsh --profile web --dump-config
+dsh --profile web --dump-config | grep -cE '^[[:space:]]*- id: opencode-free$'
 ```
 
 Success requires:
 
 1. The requested package version appears once.
-2. `dsh --profile web --dump-config` shows `opencode-free` exactly once after
-   install or update, and absent after uninstall.
+2. The `opencode-free` count is `1` after install or update, and `0` after
+   uninstall. Never run `--dump-config` without the count: the full dump
+   prints plugin settings, including a stored `config.apiKey`.
 3. No unrelated profile or plugin changed.
 4. A running DSH process was not restarted by the operation.
 
