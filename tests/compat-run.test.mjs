@@ -169,21 +169,29 @@ test('upstream-down and gate-refused are incomplete and exit 2', async () => {
   assert.equal(exitCode, 2)
 })
 
-test('a 429 backs off 30s and is ok when the retry answers', async () => {
+test('a 429 is asked once, not retried, and reported as unresolved; the exit code is 2', async () => {
+  // Upstream sends the same 429 for an exhausted anonymous quota and for an
+  // admission refusal; retrying spends the IP's quota and decides nothing.
   const { deps, sleeps, runs } = world({ replies: { 'alpha-free': [RATE_LIMITED, ok()] } })
   const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
-  assert.equal(report.models[0].verdict, 'ok')
-  assert.deepEqual(sleeps, [30_000, 3_000])
-  assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 2)
-  assert.equal(exitCode, 0)
+  assert.equal(report.models[0].verdict, 'rate-limited')
+  assert.match(report.models[0].reason, /unresolved 429/)
+  assert.match(report.models[0].reason, /准入拒絕/)
+  assert.deepEqual(sleeps, [3_000])
+  assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 1)
+  assert.equal(exitCode, 2)
 })
 
-test('still 429 after backing off 30s then 60s is rate-limited, and the exit code is 2', async () => {
-  const { deps, sleeps, runs } = world({ replies: { 'alpha-free': [RATE_LIMITED] } })
-  const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
-  assert.equal(report.models[0].verdict, 'rate-limited')
-  assert.deepEqual(sleeps, [30_000, 60_000, 3_000])
-  assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 3)
+test('an L0-only run whose warmup probe saw an unresolved 429 is rate-limited, exit 2', async () => {
+  const { deps, runs } = world()
+  deps.driver.warmup = async () => ({
+    visible: ['alpha-free', 'beta-free'],
+    probe: { results: { 'alpha-free': { status: 'failed', code: 'unresolved-429', http: 429, ms: 5 }, 'beta-free': { status: 'ok', ms: 1 } } },
+  })
+  const { report, exitCode } = await runCompat({ dsh: PIN, l0Only: true }, deps)
+  const alpha = report.models.find((m) => m.id === 'alpha-free')
+  assert.equal(alpha.verdict, 'rate-limited')
+  assert.equal(runs().length, 0)
   assert.equal(exitCode, 2)
 })
 
@@ -565,7 +573,7 @@ test('a tool step that stays 429 is rate-limited, not a plugin-fault', async () 
   const { report, exitCode } = await runCompat({ dsh: PIN, tools: true }, deps)
   const alpha = report.models[0]
   assert.deepEqual([alpha.verdict, alpha.layer, alpha.tools.read.pass, alpha.tools.shell.pass], ['rate-limited', 'L1', true, false])
-  assert.ok(sleeps.includes(30_000) && sleeps.includes(60_000))
+  assert.equal(sleeps.some((ms) => ms > 3_000), false, 'no back-off before giving up')
   assert.equal(exitCode, 2)
 })
 

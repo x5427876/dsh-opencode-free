@@ -159,6 +159,8 @@ plan; evaluation does not authorize a release.
    passing. `3` means a precondition was refused and nothing ran.
    `upstream-down` and `gate-refused` mean verification is incomplete and return
    exit code `2`; they are not plugin faults.
+   A `rate-limited` model saw an unresolved 429: before calling it quota, follow
+   [resolving a 429 by hand](docs/compat-run.md#resolving-a-429-by-hand).
 
 The compat run is not the plugin's probe, and it is not part of CI
 ([ADR 0003](docs/adr/0003-compat-run-not-in-ci.md)). The offline replay is the

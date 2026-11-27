@@ -114,7 +114,7 @@ all reasoning levels. Full acceptance needs a nonempty complete target set,
 | Verdict | Meaning |
 |---|---|
 | `ok` | All requested checks passed, including L0. |
-| `rate-limited` | HTTP 429 remains after finite backoff. |
+| `rate-limited` | HTTP 429, asked once. It is an unresolved 429: an exhausted anonymous quota and an admission refusal look the same, so the reason says so. |
 | `gate-refused` | Upstream authentication/admission refusal (401/403). |
 | `upstream-down` | Upstream unavailability or a warmup `dead` result. |
 | `plugin-fault` | Confirmed integration/behavior failure: missing adapter/model, empty reply, hang, missing catalogue coverage, or failed tool evidence. |
@@ -127,15 +127,37 @@ all reasoning levels. Full acceptance needs a nonempty complete target set,
 | `2` | Incomplete: quota, upstream refusal/unavailability, empty targets, uncertain classifications, scope drift, or unverified evidence. Not a pass or proof of a plugin fault. |
 | `3` | Refused arguments/version/selection precondition; no installation or inference for the refused run. |
 
-Models are spaced 3 seconds apart. HTTP 429 backoff is 30 then 60 seconds; after
-three consecutive rate-limited models, stop and mark the rest unverified. No
-unbounded retries or automatic retries of unavailable admission-tool calls.
+Models are spaced 3 seconds apart. An HTTP 429 is not retried: a retry spends the
+IP's anonymous quota and cannot tell the two causes apart. After three
+consecutive rate-limited models, stop and mark the rest unverified. No automatic
+retries of unavailable admission-tool calls.
 There is no overall run time limit.
+
+## Resolving a 429 by hand
+
+compat does not run official OpenCode itself. To tell an exhausted anonymous
+quota from an admission refusal, send one request with the official v2 CLI from
+the same network soon after the run. Get and isolate the binary as
+[the upgrade evaluation](upgrade-evaluation.md) describes, without the capture
+server, then run:
+
+```sh
+opencode run --standalone -m opencode/<model> "Reply with OK only."
+```
+
+- The official CLI also fails with `Free usage limit reached`: the anonymous
+  quota is exhausted. Run compat again later or from another network. VPN and
+  data-centre exits often have no anonymous quota left.
+- The official CLI answers: it is an admission refusal of the plugin's request.
+  Treat it as a `plugin-fault` and compare the requests before release.
+
+The check costs one anonymous request; run it only when live requests are
+authorized.
 
 ## Quota and keyed comparison
 
 Warmup probes enabled targets (`--l0-only` stops there); L1 adds one request per tested model, L2 adds two,
-and channel fallback or finite retries can add more. Do not promise a fixed
+and channel fallback can add more. Do not promise a fixed
 quota cost or anonymous success.
 
 If `OPENCODE_API_KEY` is present, an anonymous `rate-limited` or `gate-refused`
