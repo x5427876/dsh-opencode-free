@@ -4,8 +4,8 @@
 
 Zen 文件〈Endpoints〉寫明 *Free-tier chat models require OpenCode*，並請其他客戶端改用付費模型或 Go
 （[Zen 文件](https://opencode.ai/docs/zen)）。OpenCode
-[服務條款](https://opencode.ai/legal/terms-of-service)（2026-11-25 生效）限制使用方式的清單中，
-第 5 項限制自動化擷取資料或輸出，第 13 項禁止反向工程。匿名 429 的 `FreeUsageLimitError`
+[服務條款](https://opencode.ai/legal/terms-of-service)（2026-11-25 生效）把使用限於
+*your own internal use*，限制使用方式的第 2 項排除 OpenCode 未合理預期的用途。匿名 429 的 `FreeUsageLimitError`
 同時涵蓋額度用盡與准入拒絕，單看回應無法分辨。
 
 ## 決策
@@ -20,8 +20,10 @@ Zen 文件〈Endpoints〉寫明 *Free-tier chat models require OpenCode*，並�
 拿掉 User-Agent 後綴、主動追蹤更多指紋，可能讓匿名路徑活得更久，但那是偽裝成官方客戶端，
 與條款和文件的方向相反，也讓上游無從分辨流量來源。保留後綴的代價是：上游可以隨時只擋本插件。
 
-把匿名路徑定為盡力而為，代表准入拒絕不算插件故障：compat run 回報為驗證未完成（結束碼 `2`），不是
-`plugin-fault`；使用者被導向 key 或官方 OpenCode。
+把匿名路徑定為盡力而為，代表 compat run 單獨看到的准入拒絕或未判定的 429 不算插件故障：
+回報為驗證未完成（結束碼 `2`），不是 `plugin-fault`；使用者被導向 key 或官方 OpenCode。
+只有同 IP 的官方 OpenCode 對照成功、確認是本插件的請求被拒時，才算觀察到的准入拒絕，
+發行前要比對請求並調整（[compat run](../compat-run.md#resolving-a-429-by-hand)）。
 
 只對已觀察到的拒絕做調整，代表插件會落後於上游的變動；這是刻意的，因為未觀察到的規則無從驗證，
 預先調整只會增加偽裝面。

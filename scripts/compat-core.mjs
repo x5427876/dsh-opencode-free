@@ -323,7 +323,7 @@ const MODEL_SPACING_MS = 3_000
 /** This many rate-limited models in a row means the bucket is dry: stop spending. */
 const RATE_LIMIT_STREAK = 3
 /** Appended to a 429: the report must not read it as a plain rate limit. */
-const UNRESOLVED_429 = 'unresolved 429: 未判定，可能是准入拒絕；同 IP 用官方 OpenCode 對照才能判定'
+const UNRESOLVED_429 = 'unresolved 429: may be quota or an admission refusal; compare with official OpenCode from the same IP'
 
 /**
  * One request and its verdict. A 429 is not retried: upstream sends the same

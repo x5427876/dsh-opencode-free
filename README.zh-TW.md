@@ -13,7 +13,8 @@
 > **匿名路徑盡力而為，隨時可能失效。** Zen 文件寫明 *Free-tier chat models require OpenCode*
 > （[Zen 文件〈Endpoints〉](https://opencode.ai/docs/zen)），而本插件不是 OpenCode。
 > OpenCode [服務條款](https://opencode.ai/legal/terms-of-service)（2026-11-25 生效）
-> 也限制自動化擷取與反向工程。請自行閱讀兩者，判斷這種用法是否適合你的情況。
+> 也把使用限於 *your own internal use*，並排除 OpenCode 未合理預期的用途。請自行閱讀兩者，
+> 判斷這種用法是否適合你的情況。
 > 穩定的替代方案是 Zen API key：其他客戶端**只能用付費模型**，費用記在你的帳戶；
 > 請見〈[選用 API key](#選用-api-key)〉。
 

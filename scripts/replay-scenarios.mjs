@@ -151,6 +151,7 @@ export const SCENARIOS = [
             { name: 'shell', args: { command: `echo ${nonce}`, summary: 'Print a marker' } },
             { name: 'grep', args: { pattern: 'Head one\nhead (two)', path: 'notes.txt', literal: true } },
             { name: 'grep', args: { pattern: 'head', path: 'notes.txt', caseSensitive: true } },
+            { name: 'grep', args: { pattern: 'HEAD (', path: 'notes.txt', literal: true, caseSensitive: false } },
           ]))
       const first = await host.ask('edit, fetch and run', { model: 'replay-free-a', files: { 'edit.txt': 'alpha beta\n', 'notes.txt': 'Head one\nhead (two)\nother\n' } })
       assertCompleted(first, 'TOOLS-DONE')
@@ -163,6 +164,7 @@ export const SCENARIOS = [
         ['bash', { command: `echo ${nonce}`, description: 'Print a marker' }],
         ['grep', { pattern: 'Head one|head \\(two\\)', path: 'notes.txt' }],
         ['grep', { pattern: 'head', path: 'notes.txt' }],
+        ['grep', { pattern: '(?i)HEAD \\(', path: 'notes.txt' }],
       ])
       assert.equal(outcome(first, calls[0])?.status, 'completed', 'DSH applied the edit')
       const shell = outcome(first, calls[2])
@@ -174,6 +176,9 @@ export const SCENARIOS = [
       const cased = outcome(first, calls[4])
       assert.equal(cased?.status, 'completed', 'DSH ran the case-sensitive search')
       assert.ok(String(cased.result).includes('head (two)') && !String(cased.result).includes('Head one'), String(cased.result))
+      const uncased = outcome(first, calls[5])
+      assert.equal(uncased?.status, 'completed', 'DSH ran the case-insensitive search')
+      assert.ok(String(uncased.result).includes('head (two)') && !String(uncased.result).includes('Head one'), String(uncased.result))
 
       upstream.requests.length = 0
       upstream.use((record) => lastMessage(record.body)?.role === 'tool'

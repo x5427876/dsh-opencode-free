@@ -148,8 +148,9 @@ opencode run --standalone -m opencode/<model> "Reply with OK only."
 - The official CLI also fails with `Free usage limit reached`: the anonymous
   quota is exhausted. Run compat again later or from another network. VPN and
   data-centre exits often have no anonymous quota left.
-- The official CLI answers: it is an admission refusal of the plugin's request.
-  Treat it as a `plugin-fault` and compare the requests before release.
+- The official CLI answers: it is an observed admission refusal of the plugin's
+  request. Compare the requests and adjust before release
+  ([ADR-0009](adr/0009-anonymous-path-best-effort.md)).
 
 The check costs one anonymous request; run it only when live requests are
 authorized.

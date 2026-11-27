@@ -176,7 +176,7 @@ test('a 429 is asked once, not retried, and reported as unresolved; the exit cod
   const { report, exitCode } = await runCompat({ dsh: PIN }, deps)
   assert.equal(report.models[0].verdict, 'rate-limited')
   assert.match(report.models[0].reason, /unresolved 429/)
-  assert.match(report.models[0].reason, /准入拒絕/)
+  assert.match(report.models[0].reason, /admission refusal/)
   assert.deepEqual(sleeps, [3_000])
   assert.equal(runs().filter((r) => r.model === 'alpha-free').length, 1)
   assert.equal(exitCode, 2)

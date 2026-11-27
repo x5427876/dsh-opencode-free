@@ -15,8 +15,9 @@ Anonymous access is the default; a Zen API key is optional.
 > Zen's documentation says *Free-tier chat models require OpenCode*
 > ([Zen docs, "Endpoints"](https://opencode.ai/docs/zen)); this plugin is not
 > OpenCode. OpenCode's [terms of service](https://opencode.ai/legal/terms-of-service)
-> (effective 2026-11-25) also restrict automated extraction and reverse
-> engineering. Read both and decide whether this use fits your situation.
+> (effective 2026-11-25) limit use to *your own internal use* and exclude any
+> purpose OpenCode does not reasonably intend. Read both and decide whether this
+> use fits your situation.
 > The stable alternative is a Zen API key, which other clients can use with
 > **paid models only**, billed to your account; see [Optional API key](#optional-api-key).
 
