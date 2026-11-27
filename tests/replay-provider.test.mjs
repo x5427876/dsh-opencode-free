@@ -139,7 +139,7 @@ test('S5 a rate limit retries a bounded number of times and then gives guidance'
     assert.equal(result.stopReason, 'error')
     assert.equal(upstream.requests.length, 2, 'one request plus one retry, no more')
     assert.equal(upstream.remaining(), 1)
-    assert.ok(result.errorMessage.startsWith(ZEN_FAILURE_GUIDANCE['quota-exhausted']))
+    assert.ok(result.errorMessage.startsWith(ZEN_FAILURE_GUIDANCE['unresolved-429']))
     assert.match(result.errorMessage, /HTTP 429/)
   })
 })
